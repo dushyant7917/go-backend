@@ -15,9 +15,14 @@ import (
 )
 
 func main() {
-	// Load environment variables
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, using environment variables")
+	// Load environment variables from appropriate file
+	env := getEnv("GO_ENV", "local")
+	envFile := ".env." + env
+	if err := godotenv.Load(envFile); err != nil {
+		// Fallback to .env if environment-specific file not found
+		if err := godotenv.Load(); err != nil {
+			log.Printf("No %s or .env file found, using environment variables", envFile)
+		}
 	}
 
 	// Database configuration
