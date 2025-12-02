@@ -1,5 +1,7 @@
 .PHONY: help dev build run docker-up docker-down migrate-up migrate-down migrate-create clean
 
+GO_ENV ?= local
+
 help: ## Display this help message
 	@echo "Available commands:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -30,15 +32,15 @@ docker-clean: ## Stop and remove PostgreSQL database with volumes
 
 migrate-up: ## Run all pending migrations
 	@echo "Running migrations..."
-	goose -dir migrations postgres "host=localhost port=5432 user=postgres password=postgres dbname=go_backend sslmode=disable" up
+	@bash -c 'set -a; if [ -f .env.$(GO_ENV) ]; then source .env.$(GO_ENV); fi; if [ -f .env ]; then source .env; fi; set +a; goose -dir migrations postgres "host=$$DB_HOST port=$$DB_PORT user=$$DB_USER password=$$DB_PASSWORD dbname=$$DB_NAME sslmode=$$DB_SSL_MODE" up'
 
 migrate-down: ## Rollback the last migration
 	@echo "Rolling back migration..."
-	goose -dir migrations postgres "host=localhost port=5432 user=postgres password=postgres dbname=go_backend sslmode=disable" down
+	@bash -c 'set -a; if [ -f .env.$(GO_ENV) ]; then source .env.$(GO_ENV); fi; if [ -f .env ]; then source .env; fi; set +a; goose -dir migrations postgres "host=$$DB_HOST port=$$DB_PORT user=$$DB_USER password=$$DB_PASSWORD dbname=$$DB_NAME sslmode=$$DB_SSL_MODE" down'
 
 migrate-status: ## Check migration status
 	@echo "Migration status..."
-	goose -dir migrations postgres "host=localhost port=5432 user=postgres password=postgres dbname=go_backend sslmode=disable" status
+	@bash -c 'set -a; if [ -f .env.$(GO_ENV) ]; then source .env.$(GO_ENV); fi; if [ -f .env ]; then source .env; fi; set +a; goose -dir migrations postgres "host=$$DB_HOST port=$$DB_PORT user=$$DB_USER password=$$DB_PASSWORD dbname=$$DB_NAME sslmode=$$DB_SSL_MODE" status'
 
 migrate-create: ## Create a new migration file (usage: make migrate-create NAME=migration_name)
 	@if [ -z "$(NAME)" ]; then \
