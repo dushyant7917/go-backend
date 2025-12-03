@@ -14,6 +14,7 @@ type SubscriptionRepository interface {
 	FindByRazorpaySubscriptionID(razorpaySubID string) (*models.Subscription, error)
 	FindByUserIDAndAppName(userID uuid.UUID, appName string) (*models.Subscription, error)
 	FindActiveByUserIDAndAppName(userID uuid.UUID, appName string) (*models.Subscription, error)
+	FindByPhoneAndAppName(phone string, appName string) (*models.Subscription, error)
 	Update(subscription *models.Subscription) error
 	UpdateStatus(id uuid.UUID, status models.SubscriptionStatus) error
 	FindAll(limit, offset int) ([]models.Subscription, int64, error)
@@ -72,6 +73,18 @@ func (r *subscriptionRepository) FindActiveByUserIDAndAppName(userID uuid.UUID, 
 	var subscription models.Subscription
 	err := r.db.Where("user_id = ? AND app_name = ? AND status = ?",
 		userID, appName, models.SubscriptionStatusActive).
+		First(&subscription).Error
+	if err != nil {
+		return nil, err
+	}
+	return &subscription, nil
+}
+
+// FindByPhoneAndAppName retrieves the latest subscription for a phone number and app
+func (r *subscriptionRepository) FindByPhoneAndAppName(phone string, appName string) (*models.Subscription, error) {
+	var subscription models.Subscription
+	err := r.db.Where("phone = ? AND app_name = ?", phone, appName).
+		Order("created_at DESC").
 		First(&subscription).Error
 	if err != nil {
 		return nil, err

@@ -15,6 +15,9 @@ func RegisterSubscriptionRoutes(router *gin.RouterGroup, handler *SubscriptionHa
 		// Webhook endpoint for Razorpay events
 		subscriptions.POST("/webhook", handler.HandleWebhook)
 
+		// Get latest subscription by phone number and app name
+		subscriptions.GET("/latest", handler.GetLatestSubscriptionByPhoneAndApp)
+
 		// Get subscription by internal ID
 		subscriptions.GET("/:id", handler.GetSubscription)
 

@@ -25,6 +25,7 @@ type SubscriptionService interface {
 	HandleWebhook(payload []byte, signature string) error
 	GetSubscriptionByID(id uuid.UUID) (*models.SubscriptionResponse, error)
 	GetSubscriptionByRazorpayID(razorpaySubID string) (*models.SubscriptionResponse, error)
+	GetLatestSubscriptionByPhoneAndApp(phone string, appName string) (*models.SubscriptionResponse, error)
 	CancelSubscription(id uuid.UUID) error
 }
 
@@ -54,21 +55,89 @@ func NewSubscriptionService(
 
 // CreateCheckoutURL creates a subscription and returns checkout URL
 func (s *subscriptionService) CreateCheckoutURL(req models.CreateSubscriptionRequest) (*models.CheckoutURLResponse, error) {
+	// Log the incoming plan_id for debugging
+	fmt.Printf("[CreateCheckoutURL] Received plan_id: '%s' (length: %d)\n", req.PlanID, len(req.PlanID))
+
+	// Trim whitespace from plan_id to avoid validation issues
+	planID := strings.TrimSpace(req.PlanID)
+	if planID == "" {
+		return nil, errors.New("plan_id is required")
+	}
+	fmt.Printf("[CreateCheckoutURL] Trimmed plan_id: '%s'\n", planID)
+
+	// Determine initial charge amount (in paise)
+	// If provided by client, honor zero; default is ₹1 only when not provided
+	initialChargeAmountPaise := 100
+	if req.InitialChargeAmount != nil {
+		if *req.InitialChargeAmount <= 0 {
+			initialChargeAmountPaise = 0
+		} else {
+			initialChargeAmountPaise = *req.InitialChargeAmount * 100 // Convert rupees to paise
+		}
+	}
+	fmt.Printf("[CreateCheckoutURL] Initial charge amount: ₹%d (paise: %d)\n", initialChargeAmountPaise/100, initialChargeAmountPaise)
+
+	// Determine first subscription charge delay (in days)
+	// Default to 1 day if not specified
+	firstChargeDelayDays := 1
+	if req.FirstChargeDelayDays != nil && *req.FirstChargeDelayDays >= 0 {
+		firstChargeDelayDays = *req.FirstChargeDelayDays
+	}
+	fmt.Printf("[CreateCheckoutURL] First charge delay: %d days\n", firstChargeDelayDays)
+
+	// If both initial_charge_amount and first_charge_delay_days are explicitly 0,
+	// use plan amount as the initial charge and set delay from plan period
+	if req.InitialChargeAmount != nil && req.FirstChargeDelayDays != nil &&
+		*req.InitialChargeAmount == 0 && *req.FirstChargeDelayDays == 0 {
+		// Fetch plan to derive amount and period
+		planInfo, err := s.razorpayClient.Plan.Fetch(planID, nil, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch plan: %w", err)
+		}
+		planItem := planInfo["item"].(map[string]interface{})
+		planAmountPaise := int(planItem["amount"].(float64))
+		planPeriod := strings.ToLower(planInfo["period"].(string))
+		// Map period to days
+		periodDays := 30
+		switch planPeriod {
+		case "daily":
+			periodDays = 1
+		case "weekly":
+			periodDays = 7
+		case "monthly":
+			periodDays = 30
+		case "yearly":
+			periodDays = 365
+		}
+		initialChargeAmountPaise = planAmountPaise
+		firstChargeDelayDays = periodDays
+		fmt.Printf("[CreateCheckoutURL] Overriding: initial charge = plan amount (₹%d), delay = %d days (from period '%s')\n",
+			initialChargeAmountPaise/100, firstChargeDelayDays, planPeriod)
+	}
+
 	// Prepare subscription data - do NOT include customer_id initially
 	// Customer will be linked automatically after authorization payment
 	subscriptionData := map[string]interface{}{
-		"plan_id":         req.PlanID,
+		"plan_id":         planID,
 		"quantity":        1,
 		"customer_notify": false,
-		"addons": []map[string]interface{}{
+	}
+
+	// Only add addon if initial charge amount is greater than 0
+	// If initial_charge_amount is 0, skip the addon entirely
+	if initialChargeAmountPaise > 0 {
+		subscriptionData["addons"] = []map[string]interface{}{
 			{
 				"item": map[string]interface{}{
 					"name":     "Initial Charge",
-					"amount":   100, // ₹1 in paise (day 0)
+					"amount":   initialChargeAmountPaise,
 					"currency": "INR",
 				},
 			},
-		},
+		}
+		fmt.Printf("[CreateCheckoutURL] Adding addon charge of ₹%d\n", initialChargeAmountPaise/100)
+	} else {
+		fmt.Printf("[CreateCheckoutURL] No addon charge - subscription will charge plan amount immediately\n")
 	}
 
 	// Set total_count - Razorpay requires either total_count or end_at
@@ -83,10 +152,24 @@ func (s *subscriptionService) CreateCheckoutURL(req models.CreateSubscriptionReq
 	expireBy := time.Now().Add(7 * 24 * time.Hour).Unix()
 	subscriptionData["expire_by"] = expireBy
 
-	// Set start_at to 1 day from now for first subscription payment (day 1)
-	// The addon (₹1) will be charged immediately on day 0
-	startAt := time.Now().Add(24 * time.Hour).Unix()
-	subscriptionData["start_at"] = startAt
+	// Set start_at based on firstChargeDelayDays
+	// If delay is 0, we want immediate first charge - but Razorpay requires start_at in future
+	// When both initial_charge_amount=0 and first_charge_delay_days=0:
+	// - No addon is added (see above)
+	// - start_at is set to minimal future time
+	// - User pays full plan amount on authorization (Razorpay's default UPI Autopay flow)
+	if firstChargeDelayDays > 0 {
+		startAt := time.Now().Add(time.Duration(firstChargeDelayDays) * 24 * time.Hour).Unix()
+		subscriptionData["start_at"] = startAt
+		fmt.Printf("[CreateCheckoutURL] First subscription charge scheduled for %d days from now\n", firstChargeDelayDays)
+	} else {
+		// For immediate charge: set start_at to minimum allowed (1 hour)
+		// Razorpay will charge the plan amount on authorization
+		// Note: With UPI Autopay, the first charge typically happens during authorization
+		startAt := time.Now().Add(1 * time.Hour).Unix()
+		subscriptionData["start_at"] = startAt
+		fmt.Printf("[CreateCheckoutURL] Immediate first charge - start_at set to minimum (1 hour)\n")
+	}
 
 	// Override with user-provided start_at if specified
 	if req.StartAt != nil {
@@ -102,12 +185,17 @@ func (s *subscriptionService) CreateCheckoutURL(req models.CreateSubscriptionReq
 	}
 
 	// Create subscription in Razorpay
-	fmt.Printf("Creating subscription with data: %+v\n", subscriptionData)
+	fmt.Printf("[CreateCheckoutURL] Creating subscription with data: %+v\n", subscriptionData)
 	razorpaySub, err := s.razorpayClient.Subscription.Create(subscriptionData, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create razorpay subscription: %w", err)
+		// Enhanced error logging to help diagnose plan_id issues
+		fmt.Printf("[CreateCheckoutURL ERROR] Failed to create Razorpay subscription\n")
+		fmt.Printf("[CreateCheckoutURL ERROR] Plan ID used: '%s'\n", planID)
+		fmt.Printf("[CreateCheckoutURL ERROR] Full subscription data: %+v\n", subscriptionData)
+		fmt.Printf("[CreateCheckoutURL ERROR] Razorpay error: %v\n", err)
+		return nil, fmt.Errorf("failed to create razorpay subscription with plan_id '%s': %w", planID, err)
 	}
-	fmt.Printf("Razorpay subscription response: %+v\n", razorpaySub)
+	fmt.Printf("[CreateCheckoutURL] Razorpay subscription created successfully: %+v\n", razorpaySub)
 
 	// Extract subscription details
 	razorpaySubID := razorpaySub["id"].(string)
@@ -121,8 +209,8 @@ func (s *subscriptionService) CreateCheckoutURL(req models.CreateSubscriptionReq
 	}
 
 	// Get plan details to extract amount
-	planID := razorpaySub["plan_id"].(string)
-	plan, err := s.razorpayClient.Plan.Fetch(planID, nil, nil)
+	razorpayPlanID := razorpaySub["plan_id"].(string)
+	plan, err := s.razorpayClient.Plan.Fetch(razorpayPlanID, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch plan: %w", err)
 	}
@@ -146,7 +234,7 @@ func (s *subscriptionService) CreateCheckoutURL(req models.CreateSubscriptionReq
 		Email:                  req.Email,
 		RazorpaySubscriptionID: razorpaySubID,
 		RazorpayCustomerID:     customerID,
-		RazorpayPlanID:         planID,
+		RazorpayPlanID:         razorpayPlanID,
 		Status:                 models.SubscriptionStatus(status),
 		Amount:                 amount,
 		Currency:               currency,
@@ -192,7 +280,22 @@ func (s *subscriptionService) VerifyPayment(req models.VerifyPaymentRequest) (*m
 	}
 
 	// Update subscription status from Razorpay
-	subscription.Status = models.SubscriptionStatus(razorpaySub["status"].(string))
+	status := razorpaySub["status"].(string)
+	// Fallback: set authenticated markers in metadata if missing and status indicates authentication
+	meta := map[string]interface{}{}
+	_ = json.Unmarshal([]byte(subscription.Metadata), &meta)
+	if auth, ok := meta["authenticated"].(bool); !ok || !auth {
+		if status == "authenticated" || status == "active" {
+			meta["authenticated"] = true
+			if _, ok := meta["authenticated_at"]; !ok {
+				meta["authenticated_at"] = time.Now().UTC().Format(time.RFC3339)
+			}
+			b, _ := json.Marshal(meta)
+			subscription.Metadata = string(b)
+		}
+	}
+	// Persist status
+	subscription.Status = models.SubscriptionStatus(status)
 	if err := s.repo.Update(subscription); err != nil {
 		return nil, err
 	}
@@ -288,6 +391,20 @@ func (s *subscriptionService) GetSubscriptionByRazorpayID(razorpaySubID string) 
 	return &response, nil
 }
 
+// GetLatestSubscriptionByPhoneAndApp retrieves the latest subscription by phone number and app name
+func (s *subscriptionService) GetLatestSubscriptionByPhoneAndApp(phone string, appName string) (*models.SubscriptionResponse, error) {
+	subscription, err := s.repo.FindByPhoneAndAppName(phone, appName)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("subscription not found")
+		}
+		return nil, err
+	}
+
+	response := subscription.ToResponse()
+	return &response, nil
+}
+
 // CancelSubscription cancels a subscription
 func (s *subscriptionService) CancelSubscription(id uuid.UUID) error {
 	subscription, err := s.repo.FindByID(id)
@@ -350,13 +467,17 @@ func (s *subscriptionService) handleSubscriptionAuthenticated(payload map[string
 		t := time.Unix(int64(chargeAt), 0)
 		subscription.NextChargeAt = &t
 	}
-	// Record authentication marker in metadata
+	// Record authentication marker in metadata (idempotent)
 	meta := map[string]interface{}{}
 	_ = json.Unmarshal([]byte(subscription.Metadata), &meta)
-	meta["authenticated"] = true
-	meta["authenticated_at"] = time.Now().UTC().Format(time.RFC3339)
-	b, _ := json.Marshal(meta)
-	subscription.Metadata = string(b)
+	if auth, ok := meta["authenticated"].(bool); !ok || !auth {
+		meta["authenticated"] = true
+		if _, ok := meta["authenticated_at"]; !ok {
+			meta["authenticated_at"] = time.Now().UTC().Format(time.RFC3339)
+		}
+		b, _ := json.Marshal(meta)
+		subscription.Metadata = string(b)
+	}
 
 	// Update status to authenticated from Razorpay webhook
 	if rzpStatus, ok := subscriptionEntity["status"].(string); ok {

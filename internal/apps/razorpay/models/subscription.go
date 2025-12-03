@@ -56,15 +56,17 @@ func (s *Subscription) BeforeCreate(tx *gorm.DB) error {
 
 // CreateSubscriptionRequest represents the request body for creating a subscription
 type CreateSubscriptionRequest struct {
-	UserID     uuid.UUID              `json:"user_id" binding:"required"`
-	AppName    string                 `json:"app_name" binding:"required,min=1,max=100"`
-	Phone      string                 `json:"phone" binding:"required,min=10,max=15"`
-	Email      string                 `json:"email" binding:"required,email"`
-	PlanID     string                 `json:"plan_id" binding:"required"`
-	TotalCount int                    `json:"total_count,omitempty"`
-	StartAt    *int64                 `json:"start_at,omitempty"` // Unix timestamp
-	Quantity   int                    `json:"quantity,omitempty"`
-	Notes      map[string]interface{} `json:"notes,omitempty"`
+	UserID               uuid.UUID              `json:"user_id" binding:"required"`
+	AppName              string                 `json:"app_name" binding:"required,min=1,max=100"`
+	Phone                string                 `json:"phone" binding:"required,min=10,max=15"`
+	Email                string                 `json:"email" binding:"required,email"`
+	PlanID               string                 `json:"plan_id" binding:"required"`
+	TotalCount           int                    `json:"total_count,omitempty"`
+	StartAt              *int64                 `json:"start_at,omitempty"` // Unix timestamp
+	Quantity             int                    `json:"quantity,omitempty"`
+	Notes                map[string]interface{} `json:"notes,omitempty"`
+	InitialChargeAmount  *int                   `json:"initial_charge_amount,omitempty"`   // Amount in rupees (will be converted to paise), default: 1
+	FirstChargeDelayDays *int                   `json:"first_charge_delay_days,omitempty"` // Days to delay first subscription charge, default: 1
 }
 
 // SubscriptionResponse represents the response for subscription operations

@@ -3,6 +3,7 @@ package handler
 import (
 	"io"
 	"net/http"
+	"strings"
 
 	"go-backend/internal/apps/razorpay/models"
 	"go-backend/internal/apps/razorpay/service"
@@ -32,7 +33,16 @@ func (h *SubscriptionHandler) CreateCheckoutURL(c *gin.Context) {
 
 	response, err := h.service.CreateCheckoutURL(req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		// Extract more specific error message if possible
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "does not exist") {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": errMsg,
+				"hint":  "Please verify: 1) The plan_id exists in your Razorpay dashboard, 2) You're using the correct mode (test/live) keys matching the plan's mode, 3) The plan_id has no extra spaces or typos",
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg})
 		return
 	}
 
@@ -131,6 +141,35 @@ func (h *SubscriptionHandler) GetSubscriptionByRazorpayID(c *gin.Context) {
 	}
 
 	subscription, err := h.service.GetSubscriptionByRazorpayID(razorpayID)
+	if err != nil {
+		if err.Error() == "subscription not found" {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": subscription})
+}
+
+// GetLatestSubscriptionByPhoneAndApp handles GET /api/v1/subscriptions/latest
+// Retrieves the latest subscription for a user by phone number and app name
+func (h *SubscriptionHandler) GetLatestSubscriptionByPhoneAndApp(c *gin.Context) {
+	phone := c.Query("phone")
+	appName := c.Query("app_name")
+
+	if phone == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "phone number is required"})
+		return
+	}
+
+	if appName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "app_name is required"})
+		return
+	}
+
+	subscription, err := h.service.GetLatestSubscriptionByPhoneAndApp(phone, appName)
 	if err != nil {
 		if err.Error() == "subscription not found" {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
