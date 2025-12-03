@@ -11,12 +11,13 @@ import (
 type SubscriptionStatus string
 
 const (
-	SubscriptionStatusCreated   SubscriptionStatus = "created"
-	SubscriptionStatusActive    SubscriptionStatus = "active"
-	SubscriptionStatusPaused    SubscriptionStatus = "paused"
-	SubscriptionStatusCancelled SubscriptionStatus = "cancelled"
-	SubscriptionStatusCompleted SubscriptionStatus = "completed"
-	SubscriptionStatusExpired   SubscriptionStatus = "expired"
+	SubscriptionStatusCreated       SubscriptionStatus = "created"
+	SubscriptionStatusAuthenticated SubscriptionStatus = "authenticated"
+	SubscriptionStatusActive        SubscriptionStatus = "active"
+	SubscriptionStatusPaused        SubscriptionStatus = "paused"
+	SubscriptionStatusCancelled     SubscriptionStatus = "cancelled"
+	SubscriptionStatusCompleted     SubscriptionStatus = "completed"
+	SubscriptionStatusExpired       SubscriptionStatus = "expired"
 )
 
 // Subscription represents a UPI Autopay subscription in the database

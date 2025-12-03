@@ -191,7 +191,7 @@ func (s *subscriptionService) VerifyPayment(req models.VerifyPaymentRequest) (*m
 		return nil, fmt.Errorf("failed to fetch razorpay subscription: %w", err)
 	}
 
-	// Update subscription status
+	// Update subscription status from Razorpay
 	subscription.Status = models.SubscriptionStatus(razorpaySub["status"].(string))
 	if err := s.repo.Update(subscription); err != nil {
 		return nil, err
@@ -358,7 +358,11 @@ func (s *subscriptionService) handleSubscriptionAuthenticated(payload map[string
 	b, _ := json.Marshal(meta)
 	subscription.Metadata = string(b)
 
-	// Keep status as created for analytics until first charge completes
+	// Update status to authenticated from Razorpay webhook
+	if rzpStatus, ok := subscriptionEntity["status"].(string); ok {
+		subscription.Status = models.SubscriptionStatus(rzpStatus)
+	}
+
 	return s.repo.Update(subscription)
 }
 
@@ -397,7 +401,7 @@ func (s *subscriptionService) handleSubscriptionCharged(payload map[string]inter
 		subscription.NextChargeAt = &t
 	}
 	// Mark active on first successful charge
-	if subscription.Status == models.SubscriptionStatusCreated {
+	if subscription.Status == models.SubscriptionStatusCreated || subscription.Status == models.SubscriptionStatusAuthenticated {
 		subscription.Status = models.SubscriptionStatusActive
 	}
 
