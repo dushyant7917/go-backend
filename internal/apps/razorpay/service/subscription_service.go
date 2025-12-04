@@ -273,29 +273,26 @@ func (s *subscriptionService) VerifyPayment(req models.VerifyPaymentRequest) (*m
 		return nil, err
 	}
 
-	// Fetch subscription details from Razorpay
-	razorpaySub, err := s.razorpayClient.Subscription.Fetch(req.RazorpaySubscriptionID, nil, nil)
+	// Fetch subscription details from Razorpay to verify it exists
+	_, err = s.razorpayClient.Subscription.Fetch(req.RazorpaySubscriptionID, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch razorpay subscription: %w", err)
 	}
 
-	// Update subscription status from Razorpay
-	status := razorpaySub["status"].(string)
-	// Fallback: set authenticated markers in metadata if missing and status indicates authentication
+	// After successful signature verification, set status to authenticated
+	subscription.Status = models.SubscriptionStatusAuthenticated
+
+	// Set authenticated markers in metadata if not already present
 	meta := map[string]interface{}{}
 	_ = json.Unmarshal([]byte(subscription.Metadata), &meta)
 	if auth, ok := meta["authenticated"].(bool); !ok || !auth {
-		if status == "authenticated" || status == "active" {
-			meta["authenticated"] = true
-			if _, ok := meta["authenticated_at"]; !ok {
-				meta["authenticated_at"] = time.Now().UTC().Format(time.RFC3339)
-			}
-			b, _ := json.Marshal(meta)
-			subscription.Metadata = string(b)
+		meta["authenticated"] = true
+		if _, ok := meta["authenticated_at"]; !ok {
+			meta["authenticated_at"] = time.Now().UTC().Format(time.RFC3339)
 		}
+		b, _ := json.Marshal(meta)
+		subscription.Metadata = string(b)
 	}
-	// Persist status
-	subscription.Status = models.SubscriptionStatus(status)
 	if err := s.repo.Update(subscription); err != nil {
 		return nil, err
 	}
@@ -453,6 +450,12 @@ func (s *subscriptionService) handleSubscriptionAuthenticated(payload map[string
 	subscription, err := s.repo.FindByRazorpaySubscriptionID(razorpaySubID)
 	if err != nil {
 		return err
+	}
+
+	// Ignore authentication event if subscription is already cancelled
+	if subscription.Status == models.SubscriptionStatusCancelled {
+		fmt.Printf("[handleSubscriptionAuthenticated] Ignoring authentication event for cancelled subscription: %s\n", razorpaySubID)
+		return nil
 	}
 
 	// Persist customer_id if present, and any timing hints
@@ -615,9 +618,4 @@ func (s *subscriptionService) handleSubscriptionResumed(payload map[string]inter
 
 	subscription.Status = models.SubscriptionStatusActive
 	return s.repo.Update(subscription)
-}
-
-// contains checks if a string contains a substring
-func contains(s, substr string) bool {
-	return strings.Contains(s, substr)
 }
