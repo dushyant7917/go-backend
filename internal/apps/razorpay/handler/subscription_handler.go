@@ -213,7 +213,9 @@ func (h *SubscriptionHandler) CheckAuthenticationStatus(c *gin.Context) {
 		return
 	}
 
-	response, err := h.service.CheckAuthenticationStatus(phone)
+	appName := c.Query("app_name")
+
+	response, err := h.service.CheckAuthenticationStatus(phone, appName)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
