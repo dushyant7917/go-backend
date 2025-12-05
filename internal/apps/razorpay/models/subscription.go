@@ -121,3 +121,9 @@ type VerifyPaymentRequest struct {
 	RazorpayPaymentID      string `json:"razorpay_payment_id" binding:"required"`
 	RazorpaySignature      string `json:"razorpay_signature" binding:"required"`
 }
+
+// CheckAuthenticationStatusResponse represents the response for authentication status check
+type CheckAuthenticationStatusResponse struct {
+	HasAuthenticated bool   `json:"has_authenticated"`
+	Phone            string `json:"phone"`
+}

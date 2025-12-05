@@ -18,6 +18,9 @@ func RegisterSubscriptionRoutes(router *gin.RouterGroup, handler *SubscriptionHa
 		// Get latest subscription by phone number and app name
 		subscriptions.GET("/latest", handler.GetLatestSubscriptionByPhoneAndApp)
 
+		// Check if phone number has ever had an authenticated subscription
+		subscriptions.GET("/check-authentication", handler.CheckAuthenticationStatus)
+
 		// Get subscription by internal ID
 		subscriptions.GET("/:id", handler.GetSubscription)
 

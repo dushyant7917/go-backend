@@ -203,3 +203,21 @@ func (h *SubscriptionHandler) CancelSubscription(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"message": "subscription cancelled successfully"})
 }
+
+// CheckAuthenticationStatus handles GET /api/v1/subscriptions/check-authentication
+// Checks if a phone number has ever had an authenticated subscription
+func (h *SubscriptionHandler) CheckAuthenticationStatus(c *gin.Context) {
+	phone := c.Query("phone")
+	if phone == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "phone number is required"})
+		return
+	}
+
+	response, err := h.service.CheckAuthenticationStatus(phone)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": response})
+}

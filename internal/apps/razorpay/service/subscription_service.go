@@ -27,6 +27,7 @@ type SubscriptionService interface {
 	GetSubscriptionByRazorpayID(razorpaySubID string) (*models.SubscriptionResponse, error)
 	GetLatestSubscriptionByPhoneAndApp(phone string, appName string) (*models.SubscriptionResponse, error)
 	CancelSubscription(id uuid.UUID) error
+	CheckAuthenticationStatus(phone string) (*models.CheckAuthenticationStatusResponse, error)
 }
 
 // subscriptionService implements SubscriptionService interface
@@ -618,4 +619,17 @@ func (s *subscriptionService) handleSubscriptionResumed(payload map[string]inter
 
 	subscription.Status = models.SubscriptionStatusActive
 	return s.repo.Update(subscription)
+}
+
+// CheckAuthenticationStatus checks if a phone number has ever had an authenticated subscription
+func (s *subscriptionService) CheckAuthenticationStatus(phone string) (*models.CheckAuthenticationStatusResponse, error) {
+	hasAuthenticated, err := s.repo.HasAuthenticatedSubscriptionByPhone(phone)
+	if err != nil {
+		return nil, err
+	}
+
+	return &models.CheckAuthenticationStatusResponse{
+		HasAuthenticated: hasAuthenticated,
+		Phone:            phone,
+	}, nil
 }

@@ -19,6 +19,7 @@ type SubscriptionRepository interface {
 	UpdateStatus(id uuid.UUID, status models.SubscriptionStatus) error
 	FindAll(limit, offset int) ([]models.Subscription, int64, error)
 	FindByAppName(appName string, limit, offset int) ([]models.Subscription, int64, error)
+	HasAuthenticatedSubscriptionByPhone(phone string) (bool, error)
 }
 
 // subscriptionRepository implements SubscriptionRepository interface
@@ -145,4 +146,16 @@ func (r *subscriptionRepository) FindByAppName(appName string, limit, offset int
 	}
 
 	return subscriptions, total, nil
+}
+
+// HasAuthenticatedSubscriptionByPhone checks if a phone number has ever had an authenticated subscription
+func (r *subscriptionRepository) HasAuthenticatedSubscriptionByPhone(phone string) (bool, error) {
+	var count int64
+	err := r.db.Model(&models.Subscription{}).
+		Where("phone = ? AND metadata::jsonb @> '{\"authenticated\": true}'", phone).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
