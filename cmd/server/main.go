@@ -4,9 +4,18 @@ import (
 	"log"
 	"os"
 
-	"go-backend/internal/apps/razorpay/handler"
-	"go-backend/internal/apps/razorpay/repository"
-	"go-backend/internal/apps/razorpay/service"
+	crushHandler "go-backend/internal/apps/crush/handler"
+	crushRepository "go-backend/internal/apps/crush/repository"
+	crushService "go-backend/internal/apps/crush/service"
+	otpHandler "go-backend/internal/apps/otp/handler"
+	otpRepository "go-backend/internal/apps/otp/repository"
+	otpService "go-backend/internal/apps/otp/service"
+	razorpayHandler "go-backend/internal/apps/razorpay/handler"
+	razorpayRepository "go-backend/internal/apps/razorpay/repository"
+	razorpayService "go-backend/internal/apps/razorpay/service"
+	userHandler "go-backend/internal/apps/user/handler"
+	userRepository "go-backend/internal/apps/user/repository"
+	userService "go-backend/internal/apps/user/service"
 	"go-backend/internal/common/database"
 	"go-backend/internal/common/middleware"
 
@@ -50,14 +59,49 @@ func main() {
 		log.Fatal("Razorpay credentials not configured")
 	}
 
-	subscriptionRepo := repository.NewSubscriptionRepository(db)
-	subscriptionService := service.NewSubscriptionService(
+	subscriptionRepo := razorpayRepository.NewSubscriptionRepository(db)
+	subscriptionService := razorpayService.NewSubscriptionService(
 		subscriptionRepo,
 		razorpayKeyID,
 		razorpayKeySecret,
 		razorpayWebhookSecret,
 	)
-	subscriptionHandler := handler.NewSubscriptionHandler(subscriptionService)
+	subscriptionHandler := razorpayHandler.NewSubscriptionHandler(subscriptionService)
+
+	// Initialize User management dependencies
+	userRepo := userRepository.NewUserRepository(db)
+	userSvc := userService.NewUserService(userRepo)
+	userH := userHandler.NewUserHandler(userSvc)
+
+	// Initialize Crush Connect dependencies
+	crushRepo := crushRepository.NewCrushRepository(db)
+	crushSvc := crushService.NewCrushService(crushRepo, userRepo)
+	crushH := crushHandler.NewCrushHandler(crushSvc)
+
+	// Initialize OTP dependencies
+	// Use AuthKey provider for production, no-op for local/dev
+	var otpProvider otpService.OTPProvider
+	if env == "prod" {
+		authKey := getEnv("AUTHKEY_API_KEY", "")
+		authKeyTemplateID := getEnv("AUTHKEY_TEMPLATE_ID", "")
+
+		if authKey == "" || authKeyTemplateID == "" {
+			log.Fatal("AUTHKEY_API_KEY and AUTHKEY_TEMPLATE_ID are required in production")
+		}
+
+		otpProvider = otpService.NewAuthKeyProvider(authKey, authKeyTemplateID)
+		log.Println("Using AuthKey SMS provider (production mode)")
+	} else {
+		otpProvider = otpService.NewNoOpProvider()
+		log.Println("Using No-Op provider - OTP will be logged only (local/dev mode)")
+	}
+
+	phoneOTPRepo := otpRepository.NewPhoneOTPRepository(db)
+	emailOTPRepo := otpRepository.NewEmailOTPRepository(db)
+	phoneOTPSvc := otpService.NewPhoneOTPService(phoneOTPRepo, otpProvider)
+	emailOTPSvc := otpService.NewEmailOTPService(emailOTPRepo)
+	phoneOTPH := otpHandler.NewPhoneOTPHandler(phoneOTPSvc)
+	emailOTPH := otpHandler.NewEmailOTPHandler(emailOTPSvc)
 
 	// Setup Gin router
 	ginMode := getEnv("GIN_MODE", "release")
@@ -80,7 +124,16 @@ func main() {
 	v1 := router.Group("/api/v1")
 	{
 		// Register Razorpay subscription routes
-		handler.RegisterSubscriptionRoutes(v1, subscriptionHandler)
+		razorpayHandler.RegisterSubscriptionRoutes(v1, subscriptionHandler)
+
+		// Register User management routes
+		userHandler.RegisterUserRoutes(v1, userH)
+
+		// Register OTP routes
+		otpHandler.RegisterOTPRoutes(v1, phoneOTPH, emailOTPH)
+
+		// Register Crush Connect routes
+		crushHandler.RegisterCrushRoutes(v1, crushH)
 
 		// Future apps can register their routes here
 		// Example: handler.RegisterUserRoutes(v1, userHandler)
