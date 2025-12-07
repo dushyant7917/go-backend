@@ -14,6 +14,7 @@ type CrushRepository interface {
 	FindByUserID(userID uuid.UUID) ([]models.Crush, error)
 	Update(crush *models.Crush) error
 	FindCrushesOnUser(countryCode, phone, instagramID, snapchatID *string) ([]models.Crush, error)
+	FindAll() ([]models.Crush, error)
 }
 
 // crushRepository implements CrushRepository
@@ -97,5 +98,14 @@ func (r *crushRepository) FindCrushesOnUser(countryCode, phone, instagramID, sna
 		return nil, err
 	}
 
+	return crushes, nil
+}
+
+// FindAll retrieves all crushes ordered by creation date descending
+func (r *crushRepository) FindAll() ([]models.Crush, error) {
+	var crushes []models.Crush
+	if err := r.db.Order("created_at DESC").Find(&crushes).Error; err != nil {
+		return nil, err
+	}
 	return crushes, nil
 }

@@ -118,3 +118,14 @@ func (c *Crush) ToMinimalResponse() CrushOnUserResponse {
 		CreatedAt: c.CreatedAt,
 	}
 }
+
+// AllCrushesResponse represents the admin view of all crushes
+type AllCrushesResponse struct {
+	UserCountryCode  *string   `json:"user_country_code,omitempty"`
+	UserPhone        *string   `json:"user_phone,omitempty"`
+	CrushCountryCode *string   `json:"crush_country_code,omitempty"`
+	CrushPhone       *string   `json:"crush_phone,omitempty"`
+	InstagramID      *string   `json:"instagram_id,omitempty"`
+	SnapchatID       *string   `json:"snapchat_id,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+}

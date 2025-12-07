@@ -20,6 +20,7 @@ type CrushService interface {
 	GetCrushByID(id uuid.UUID) (*models.CrushResponse, error)
 	ListCrushesByUserID(userID uuid.UUID) ([]models.CrushResponse, error)
 	ListCrushesOnUser(userID uuid.UUID) ([]models.CrushOnUserResponse, error)
+	ListAllCrushes() ([]models.AllCrushesResponse, error)
 }
 
 // crushService implements CrushService
@@ -260,6 +261,36 @@ func (s *crushService) ListCrushesOnUser(userID uuid.UUID) ([]models.CrushOnUser
 	responses := make([]models.CrushOnUserResponse, len(crushes))
 	for i, crush := range crushes {
 		responses[i] = crush.ToMinimalResponse()
+	}
+	return responses, nil
+}
+
+// ListAllCrushes retrieves all crushes with user and crush phone numbers
+func (s *crushService) ListAllCrushes() ([]models.AllCrushesResponse, error) {
+	crushes, err := s.repo.FindAll()
+	if err != nil {
+		return nil, err
+	}
+
+	// Build response with user phone numbers
+	responses := make([]models.AllCrushesResponse, 0, len(crushes))
+	for _, crush := range crushes {
+		// Get user details to fetch phone number
+		user, err := s.userRepo.FindByID(crush.UserID)
+		if err != nil {
+			// Skip crushes where user is not found
+			continue
+		}
+
+		responses = append(responses, models.AllCrushesResponse{
+			UserCountryCode:  user.CountryCode,
+			UserPhone:        user.Phone,
+			CrushCountryCode: crush.CountryCode,
+			CrushPhone:       crush.Phone,
+			InstagramID:      crush.InstagramID,
+			SnapchatID:       crush.SnapchatID,
+			CreatedAt:        crush.CreatedAt,
+		})
 	}
 	return responses, nil
 }

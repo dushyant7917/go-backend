@@ -134,3 +134,14 @@ func (h *CrushHandler) ListCrushesOnUser(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"data": resp})
 }
+
+// ListAllCrushes handles GET /api/v1/crushes/all
+func (h *CrushHandler) ListAllCrushes(c *gin.Context) {
+	resp, err := h.service.ListAllCrushes()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": resp})
+}
