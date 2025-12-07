@@ -7,10 +7,25 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// SetupCORS configures CORS middleware
-func SetupCORS() gin.HandlerFunc {
+// SetupCORS configures CORS middleware with environment-specific settings
+func SetupCORS(env string) gin.HandlerFunc {
+	var allowOrigins []string
+
+	if env == "prod" {
+		// Production: only allow specific domains
+		allowOrigins = []string{
+			"https://nanotv.site",
+			"https://www.nanotv.site",
+			"https://krushconnect.site",
+			"https://www.krushconnect.site",
+		}
+	} else {
+		// Development/local: allow all origins
+		allowOrigins = []string{"*"}
+	}
+
 	return cors.New(cors.Config{
-		AllowOrigins:     []string{"*"}, // In production, specify actual origins
+		AllowOrigins:     allowOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},

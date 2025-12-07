@@ -110,7 +110,7 @@ func main() {
 	router := gin.Default()
 
 	// Setup CORS middleware
-	router.Use(middleware.SetupCORS())
+	router.Use(middleware.SetupCORS(env))
 
 	// Health check endpoint
 	router.GET("/health", func(c *gin.Context) {
