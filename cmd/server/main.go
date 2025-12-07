@@ -109,16 +109,16 @@ func main() {
 
 	router := gin.Default()
 
-	// Setup CORS middleware
-	router.Use(middleware.SetupCORS(env))
-
-	// Health check endpoint
+	// Health check endpoint (before CORS middleware to allow access from any client)
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{
 			"status":  "ok",
 			"message": "Server is running",
 		})
 	})
+
+	// Setup CORS middleware
+	router.Use(middleware.SetupCORS(env))
 
 	// API v1 routes
 	v1 := router.Group("/api/v1")
