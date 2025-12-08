@@ -20,7 +20,7 @@ type CrushService interface {
 	GetCrushByID(id uuid.UUID) (*models.CrushResponse, error)
 	ListCrushesByUserID(userID uuid.UUID) ([]models.CrushResponse, error)
 	ListCrushesOnUser(userID uuid.UUID) ([]models.CrushOnUserResponse, error)
-	ListAllCrushes() ([]models.AllCrushesResponse, error)
+	ListAllCrushesPaginated(page, pageSize int) (*models.PaginatedCrushesResponse, error)
 }
 
 // crushService implements CrushService
@@ -265,9 +265,20 @@ func (s *crushService) ListCrushesOnUser(userID uuid.UUID) ([]models.CrushOnUser
 	return responses, nil
 }
 
-// ListAllCrushes retrieves all crushes with user and crush phone numbers
-func (s *crushService) ListAllCrushes() ([]models.AllCrushesResponse, error) {
-	crushes, err := s.repo.FindAll()
+// ListAllCrushesPaginated retrieves all crushes with pagination
+func (s *crushService) ListAllCrushesPaginated(page, pageSize int) (*models.PaginatedCrushesResponse, error) {
+	// Validate page and pageSize
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 10 // default page size
+	}
+	if pageSize > 100 {
+		pageSize = 100 // max page size
+	}
+
+	crushes, total, err := s.repo.FindAllPaginated(page, pageSize)
 	if err != nil {
 		return nil, err
 	}
@@ -292,5 +303,31 @@ func (s *crushService) ListAllCrushes() ([]models.AllCrushesResponse, error) {
 			CreatedAt:        crush.CreatedAt,
 		})
 	}
-	return responses, nil
+
+	// Calculate total pages
+	totalPages := int(total) / pageSize
+	if int(total)%pageSize > 0 {
+		totalPages++
+	}
+
+	// Calculate next and previous pages
+	var nextPage, prevPage *int
+	if page > 1 {
+		prev := page - 1
+		prevPage = &prev
+	}
+	if page < totalPages {
+		next := page + 1
+		nextPage = &next
+	}
+
+	return &models.PaginatedCrushesResponse{
+		Data:       responses,
+		Page:       page,
+		PageSize:   pageSize,
+		Total:      total,
+		TotalPages: totalPages,
+		NextPage:   nextPage,
+		PrevPage:   prevPage,
+	}, nil
 }

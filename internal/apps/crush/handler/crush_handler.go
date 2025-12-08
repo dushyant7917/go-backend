@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 
 	"go-backend/internal/apps/crush/models"
 	"go-backend/internal/apps/crush/service"
@@ -137,11 +138,29 @@ func (h *CrushHandler) ListCrushesOnUser(c *gin.Context) {
 
 // ListAllCrushes handles GET /api/v1/crushes/all
 func (h *CrushHandler) ListAllCrushes(c *gin.Context) {
-	resp, err := h.service.ListAllCrushes()
+	// Default pagination values
+	page := 1
+	pageSize := 10
+
+	// Parse page parameter
+	if pageStr := c.Query("page"); pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+
+	// Parse page_size parameter
+	if pageSizeStr := c.Query("page_size"); pageSizeStr != "" {
+		if ps, err := strconv.Atoi(pageSizeStr); err == nil && ps > 0 {
+			pageSize = ps
+		}
+	}
+
+	resp, err := h.service.ListAllCrushesPaginated(page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": resp})
+	c.JSON(http.StatusOK, resp)
 }

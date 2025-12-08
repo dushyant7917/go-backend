@@ -68,15 +68,17 @@ func main() {
 	)
 	subscriptionHandler := razorpayHandler.NewSubscriptionHandler(subscriptionService)
 
-	// Initialize User management dependencies
+	// Initialize repositories
 	userRepo := userRepository.NewUserRepository(db)
-	userSvc := userService.NewUserService(userRepo)
-	userH := userHandler.NewUserHandler(userSvc)
-
-	// Initialize Crush Connect dependencies
 	crushRepo := crushRepository.NewCrushRepository(db)
+
+	// Initialize services
 	crushSvc := crushService.NewCrushService(crushRepo, userRepo)
+	userSvc := userService.NewUserService(userRepo, crushRepo)
+
+	// Initialize handlers
 	crushH := crushHandler.NewCrushHandler(crushSvc)
+	userH := userHandler.NewUserHandler(userSvc)
 
 	// Initialize OTP dependencies
 	// Use AuthKey provider for production, no-op for local/dev

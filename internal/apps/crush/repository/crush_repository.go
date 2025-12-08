@@ -14,7 +14,8 @@ type CrushRepository interface {
 	FindByUserID(userID uuid.UUID) ([]models.Crush, error)
 	Update(crush *models.Crush) error
 	FindCrushesOnUser(countryCode, phone, instagramID, snapchatID *string) ([]models.Crush, error)
-	FindAll() ([]models.Crush, error)
+	FindAllPaginated(page, pageSize int) ([]models.Crush, int64, error)
+	CountByUserID(userID uuid.UUID) (int64, error)
 }
 
 // crushRepository implements CrushRepository
@@ -101,11 +102,32 @@ func (r *crushRepository) FindCrushesOnUser(countryCode, phone, instagramID, sna
 	return crushes, nil
 }
 
-// FindAll retrieves all crushes ordered by creation date descending
-func (r *crushRepository) FindAll() ([]models.Crush, error) {
+// FindAllPaginated retrieves crushes with pagination
+func (r *crushRepository) FindAllPaginated(page, pageSize int) ([]models.Crush, int64, error) {
 	var crushes []models.Crush
-	if err := r.db.Order("created_at DESC").Find(&crushes).Error; err != nil {
-		return nil, err
+	var total int64
+
+	// Get total count
+	if err := r.db.Model(&models.Crush{}).Count(&total).Error; err != nil {
+		return nil, 0, err
 	}
-	return crushes, nil
+
+	// Calculate offset
+	offset := (page - 1) * pageSize
+
+	// Get paginated results
+	if err := r.db.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&crushes).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return crushes, total, nil
+}
+
+// CountByUserID counts the number of crushes for a specific user
+func (r *crushRepository) CountByUserID(userID uuid.UUID) (int64, error) {
+	var count int64
+	if err := r.db.Model(&models.Crush{}).Where("user_id = ?", userID).Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
 }

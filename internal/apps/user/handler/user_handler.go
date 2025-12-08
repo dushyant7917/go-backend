@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 
 	"go-backend/internal/apps/user/models"
 	"go-backend/internal/apps/user/service"
@@ -126,4 +127,36 @@ func (h *UserHandler) UpdateUser(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": resp})
+}
+
+// ListAllUsers handles GET /api/v1/users/all
+func (h *UserHandler) ListAllUsers(c *gin.Context) {
+	// Default pagination values
+	page := 1
+	pageSize := 10
+
+	// Get app_name filter (optional)
+	appName := c.Query("app_name")
+
+	// Parse page parameter
+	if pageStr := c.Query("page"); pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+
+	// Parse page_size parameter
+	if pageSizeStr := c.Query("page_size"); pageSizeStr != "" {
+		if ps, err := strconv.Atoi(pageSizeStr); err == nil && ps > 0 {
+			pageSize = ps
+		}
+	}
+
+	resp, err := h.service.ListAllUsersPaginated(appName, page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
 }

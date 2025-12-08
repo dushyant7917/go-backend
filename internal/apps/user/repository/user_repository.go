@@ -14,6 +14,7 @@ type UserRepository interface {
 	FindByAppAndContact(appName, countryCode, phone string) (*models.User, error)
 	FindByAppAndEmail(appName, email string) (*models.User, error)
 	Update(user *models.User) error
+	FindAllPaginated(appName string, page, pageSize int) ([]models.User, int64, error)
 }
 
 // userRepository implements UserRepository
@@ -61,4 +62,32 @@ func (r *userRepository) FindByAppAndEmail(appName, email string) (*models.User,
 // Update updates an existing user
 func (r *userRepository) Update(user *models.User) error {
 	return r.db.Save(user).Error
+}
+
+// FindAllPaginated retrieves users with pagination and optional app_name filter
+func (r *userRepository) FindAllPaginated(appName string, page, pageSize int) ([]models.User, int64, error) {
+	var users []models.User
+	var total int64
+
+	query := r.db.Model(&models.User{})
+
+	// Apply app_name filter if provided
+	if appName != "" {
+		query = query.Where("app_name = ?", appName)
+	}
+
+	// Get total count
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// Calculate offset
+	offset := (page - 1) * pageSize
+
+	// Get paginated results
+	if err := query.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&users).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return users, total, nil
 }

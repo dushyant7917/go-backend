@@ -103,3 +103,39 @@ func (u *User) ToResponse() UserResponse {
 		UpdatedAt:   u.UpdatedAt,
 	}
 }
+
+// PaginatedUsersResponse represents paginated users response
+type PaginatedUsersResponse struct {
+	Data       []UserResponse `json:"data"`
+	Page       int            `json:"page"`
+	PageSize   int            `json:"page_size"`
+	Total      int64          `json:"total"`
+	TotalPages int            `json:"total_pages"`
+	NextPage   *int           `json:"next_page"`
+	PrevPage   *int           `json:"prev_page"`
+}
+
+// UserWithCountResponse represents user response with crushes count
+type UserWithCountResponse struct {
+	ID           uuid.UUID `json:"id"`
+	Name         *string   `json:"name,omitempty"`
+	CountryCode  *string   `json:"country_code,omitempty"`
+	Phone        *string   `json:"phone,omitempty"`
+	Email        *string   `json:"email,omitempty"`
+	AppName      string    `json:"app_name"`
+	Metadata     Metadata  `json:"metadata"`
+	CrushesCount int64     `json:"crushes_count"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// PaginatedUsersWithCountResponse represents paginated users response with crushes count
+type PaginatedUsersWithCountResponse struct {
+	Data       []UserWithCountResponse `json:"data"`
+	Page       int                     `json:"page"`
+	PageSize   int                     `json:"page_size"`
+	Total      int64                   `json:"total"`
+	TotalPages int                     `json:"total_pages"`
+	NextPage   *int                    `json:"next_page"`
+	PrevPage   *int                    `json:"prev_page"`
+}

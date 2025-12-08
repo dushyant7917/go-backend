@@ -129,3 +129,14 @@ type AllCrushesResponse struct {
 	SnapchatID       *string   `json:"snapchat_id,omitempty"`
 	CreatedAt        time.Time `json:"created_at"`
 }
+
+// PaginatedCrushesResponse represents paginated crushes response
+type PaginatedCrushesResponse struct {
+	Data       []AllCrushesResponse `json:"data"`
+	Page       int                  `json:"page"`
+	PageSize   int                  `json:"page_size"`
+	Total      int64                `json:"total"`
+	TotalPages int                  `json:"total_pages"`
+	NextPage   *int                 `json:"next_page"`
+	PrevPage   *int                 `json:"prev_page"`
+}
