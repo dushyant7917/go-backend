@@ -18,6 +18,8 @@ func SetupCORS(env string) gin.HandlerFunc {
 			"https://www.nanotv.site",
 			"https://krushconnect.site",
 			"https://www.krushconnect.site",
+			"https://jobsfeed.in",
+			"https://www.jobsfeed.in",
 		}
 	} else {
 		// Development/local: allow all origins
