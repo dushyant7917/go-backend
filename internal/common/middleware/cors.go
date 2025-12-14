@@ -20,6 +20,8 @@ func SetupCORS(env string) gin.HandlerFunc {
 			"https://www.krushconnect.site",
 			"https://jobsfeed.in",
 			"https://www.jobsfeed.in",
+			"https://ai-bestie-six.vercel.app",
+			"https://www.ai-bestie-six.vercel.app",
 		}
 	} else {
 		// Development/local: allow all origins
