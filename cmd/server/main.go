@@ -147,7 +147,7 @@ func main() {
 	}
 
 	// Start server
-	port := getEnv("PORT", "8080")
+	port := getEnv("PORT", "8082")
 	log.Printf("Server starting on port %s", port)
 	if err := router.Run(":" + port); err != nil {
 		log.Fatalf("Failed to start server: %v", err)

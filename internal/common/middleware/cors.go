@@ -1,6 +1,9 @@
 package middleware
 
 import (
+	"log"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -9,26 +12,7 @@ import (
 
 // SetupCORS configures CORS middleware with environment-specific settings
 func SetupCORS(env string) gin.HandlerFunc {
-	var allowOrigins []string
-
-	if env == "prod" {
-		// Production: only allow specific domains
-		allowOrigins = []string{
-			"https://nanotv.site",
-			"https://www.nanotv.site",
-			"https://krushconnect.site",
-			"https://www.krushconnect.site",
-			"https://jobsfeed.in",
-			"https://www.jobsfeed.in",
-			"https://ai-bestie-six.vercel.app",
-			"https://www.ai-bestie-six.vercel.app",
-			"https://womenpov.site",
-			"https://www.womenpov.site",
-		}
-	} else {
-		// Development/local: allow all origins
-		allowOrigins = []string{"*"}
-	}
+	allowOrigins := getAllowedOrigins(env)
 
 	return cors.New(cors.Config{
 		AllowOrigins:     allowOrigins,
@@ -38,4 +22,30 @@ func SetupCORS(env string) gin.HandlerFunc {
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	})
+}
+
+func getAllowedOrigins(env string) []string {
+	if originsEnv := os.Getenv("CORS_ALLOWED_ORIGINS"); originsEnv != "" {
+		return parseOrigins(originsEnv)
+	}
+
+	if env == "prod" {
+		log.Fatal("CORS_ALLOWED_ORIGINS must be set in production")
+	}
+
+	return []string{"*"}
+}
+
+func parseOrigins(origins string) []string {
+	parts := strings.Split(origins, ",")
+	var result []string
+
+	for _, p := range parts {
+		trimmed := strings.TrimSpace(p)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+
+	return result
 }
