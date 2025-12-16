@@ -8,10 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
-	"go-backend/internal/apps/razorpay/models"
-	"go-backend/internal/apps/razorpay/repository"
+	clientModels "go-backend/internal/apps/razorpay/config/models"
+	"go-backend/internal/apps/razorpay/config/repository"
+	"go-backend/internal/apps/razorpay/subscription/models"
+	razorpayRepository "go-backend/internal/apps/razorpay/subscription/repository"
+	"go-backend/pkg/utils"
 
 	"github.com/google/uuid"
 	razorpay "github.com/razorpay/razorpay-go"
@@ -32,30 +36,81 @@ type SubscriptionService interface {
 
 // subscriptionService implements SubscriptionService interface
 type subscriptionService struct {
-	repo              repository.SubscriptionRepository
-	razorpayClient    *razorpay.Client
-	razorpayKeySecret string
-	webhookSecret     string
+	repo        razorpayRepository.SubscriptionRepository
+	configRepo  repository.RazorpayConfigRepository
+	clientCache map[string]*razorpay.Client // Cache Razorpay clients by app_name:environment
+	cacheMutex  sync.RWMutex                // Protect concurrent access to cache
 }
 
 // NewSubscriptionService creates a new instance of SubscriptionService
 func NewSubscriptionService(
-	repo repository.SubscriptionRepository,
-	razorpayKeyID string,
-	razorpayKeySecret string,
-	webhookSecret string,
+	repo razorpayRepository.SubscriptionRepository,
+	configRepo repository.RazorpayConfigRepository,
 ) SubscriptionService {
-	client := razorpay.NewClient(razorpayKeyID, razorpayKeySecret)
 	return &subscriptionService{
-		repo:              repo,
-		razorpayClient:    client,
-		razorpayKeySecret: razorpayKeySecret,
-		webhookSecret:     webhookSecret,
+		repo:        repo,
+		configRepo:  configRepo,
+		clientCache: make(map[string]*razorpay.Client),
 	}
+}
+
+// getRazorpayClient returns a cached Razorpay client or creates a new one
+// This optimizes connection reuse and avoids creating clients repeatedly
+func (s *subscriptionService) getRazorpayClient(config *clientModels.RazorpayConfig) *razorpay.Client {
+	// Use app_name + environment as cache key for unique client identification
+	cacheKey := config.AppName + ":" + config.Environment
+
+	// Try to get from cache with read lock
+	s.cacheMutex.RLock()
+	cachedClient, exists := s.clientCache[cacheKey]
+	s.cacheMutex.RUnlock()
+
+	if exists {
+		return cachedClient
+	}
+
+	// Create new client with write lock
+	s.cacheMutex.Lock()
+	defer s.cacheMutex.Unlock()
+
+	// Double-check after acquiring write lock (another goroutine might have created it)
+	if cachedClient, exists := s.clientCache[cacheKey]; exists {
+		return cachedClient
+	}
+
+	// Create and cache new Razorpay client
+	newClient := razorpay.NewClient(config.RazorpayKeyID, config.RazorpayKeySecret)
+	s.clientCache[cacheKey] = newClient
+
+	fmt.Printf("[getRazorpayClient] Created and cached new Razorpay client for app: %s\n", config.AppName)
+	return newClient
 }
 
 // CreateCheckoutURL creates a subscription and returns checkout URL
 func (s *subscriptionService) CreateCheckoutURL(req models.CreateSubscriptionRequest) (*models.CheckoutURLResponse, error) {
+	// Get razorpay config based on app_name or config_id
+	var config *clientModels.RazorpayConfig
+	var err error
+
+	if req.ClientID != nil {
+		config, err = s.configRepo.FindByID(*req.ClientID)
+	} else {
+		// Use server-side environment (derived from GO_ENV)
+		env := utils.GetRazorpayEnvironment()
+		config, err = s.configRepo.FindByAppNameAndEnv(req.AppName, env)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to find razorpay config: %w", err)
+	}
+
+	if !config.IsActive {
+		return nil, errors.New("razorpay config is not active")
+	}
+
+	// Get or create cached Razorpay client for this config's credentials
+	razorpayClient := s.getRazorpayClient(config)
+
 	// Log the incoming plan_id for debugging
 	fmt.Printf("[CreateCheckoutURL] Received plan_id: '%s' (length: %d)\n", req.PlanID, len(req.PlanID))
 
@@ -91,7 +146,7 @@ func (s *subscriptionService) CreateCheckoutURL(req models.CreateSubscriptionReq
 	if req.InitialChargeAmount != nil && req.FirstChargeDelayDays != nil &&
 		*req.InitialChargeAmount == 0 && *req.FirstChargeDelayDays == 0 {
 		// Fetch plan to derive amount and period
-		planInfo, err := s.razorpayClient.Plan.Fetch(planID, nil, nil)
+		planInfo, err := razorpayClient.Plan.Fetch(planID, nil, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch plan: %w", err)
 		}
@@ -187,7 +242,7 @@ func (s *subscriptionService) CreateCheckoutURL(req models.CreateSubscriptionReq
 
 	// Create subscription in Razorpay
 	fmt.Printf("[CreateCheckoutURL] Creating subscription with data: %+v\n", subscriptionData)
-	razorpaySub, err := s.razorpayClient.Subscription.Create(subscriptionData, nil)
+	razorpaySub, err := razorpayClient.Subscription.Create(subscriptionData, nil)
 	if err != nil {
 		// Enhanced error logging to help diagnose plan_id issues
 		fmt.Printf("[CreateCheckoutURL ERROR] Failed to create Razorpay subscription\n")
@@ -211,7 +266,7 @@ func (s *subscriptionService) CreateCheckoutURL(req models.CreateSubscriptionReq
 
 	// Get plan details to extract amount
 	razorpayPlanID := razorpaySub["plan_id"].(string)
-	plan, err := s.razorpayClient.Plan.Fetch(razorpayPlanID, nil, nil)
+	plan, err := razorpayClient.Plan.Fetch(razorpayPlanID, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch plan: %w", err)
 	}
@@ -229,6 +284,7 @@ func (s *subscriptionService) CreateCheckoutURL(req models.CreateSubscriptionReq
 
 	// Save subscription to database
 	subscription := &models.Subscription{
+		RazorpayConfigID:       config.ID,
 		UserID:                 req.UserID,
 		AppName:                req.AppName,
 		Phone:                  req.Phone,
@@ -259,13 +315,7 @@ func (s *subscriptionService) CreateCheckoutURL(req models.CreateSubscriptionReq
 
 // VerifyPayment verifies the payment signature
 func (s *subscriptionService) VerifyPayment(req models.VerifyPaymentRequest) (*models.SubscriptionResponse, error) {
-	// Verify signature
-	message := req.RazorpayPaymentID + "|" + req.RazorpaySubscriptionID
-	if !s.verifySignature(message, req.RazorpaySignature) {
-		return nil, errors.New("invalid signature")
-	}
-
-	// Fetch subscription from database
+	// Fetch subscription from database first to get razorpay_config_id
 	subscription, err := s.repo.FindByRazorpaySubscriptionID(req.RazorpaySubscriptionID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -274,8 +324,23 @@ func (s *subscriptionService) VerifyPayment(req models.VerifyPaymentRequest) (*m
 		return nil, err
 	}
 
+	// Get razorpay config
+	config, err := s.configRepo.FindByID(subscription.RazorpayConfigID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find razorpay config: %w", err)
+	}
+
+	// Verify signature using config's key secret
+	message := req.RazorpayPaymentID + "|" + req.RazorpaySubscriptionID
+	if !s.verifySignature(message, req.RazorpaySignature, config.RazorpayKeySecret) {
+		return nil, errors.New("invalid signature")
+	}
+
+	// Get or create cached Razorpay client for this config's credentials
+	razorpayClient := s.getRazorpayClient(config)
+
 	// Fetch subscription details from Razorpay to verify it exists
-	_, err = s.razorpayClient.Subscription.Fetch(req.RazorpaySubscriptionID, nil, nil)
+	_, err = razorpayClient.Subscription.Fetch(req.RazorpaySubscriptionID, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch razorpay subscription: %w", err)
 	}
@@ -304,13 +369,7 @@ func (s *subscriptionService) VerifyPayment(req models.VerifyPaymentRequest) (*m
 
 // HandleWebhook handles Razorpay webhook events
 func (s *subscriptionService) HandleWebhook(payload []byte, signature string) error {
-	// Verify webhook signature
-	if !s.verifyWebhookSignature(payload, signature) {
-		fmt.Printf("Webhook signature verification failed. signature=%s\n", signature)
-		return errors.New("invalid webhook signature")
-	}
-
-	// Parse webhook payload
+	// Parse webhook payload first to extract subscription info
 	var event map[string]interface{}
 	if err := json.Unmarshal(payload, &event); err != nil {
 		return fmt.Errorf("failed to parse webhook payload: %w", err)
@@ -319,15 +378,42 @@ func (s *subscriptionService) HandleWebhook(payload []byte, signature string) er
 	eventType := event["event"].(string)
 	payloadData := event["payload"].(map[string]interface{})
 	fmt.Printf("Webhook event received: %s\n", eventType)
-	// Attempt to log subscription info if present
+
+	// Extract razorpay_subscription_id to fetch client configuration
+	var razorpaySubID string
 	if subWrap, ok := payloadData["subscription"].(map[string]interface{}); ok {
 		if entity, ok := subWrap["entity"].(map[string]interface{}); ok {
-			id, _ := entity["id"].(string)
-			status, _ := entity["status"].(string)
-			fmt.Printf("Subscription entity: id=%s status=%s\n", id, status)
+			if id, ok := entity["id"].(string); ok {
+				razorpaySubID = id
+				status, _ := entity["status"].(string)
+				fmt.Printf("Subscription entity: id=%s status=%s\n", id, status)
+			}
 		}
 	}
-	// Attempt to log payment info if present
+
+	if razorpaySubID == "" {
+		return errors.New("subscription ID not found in webhook payload")
+	}
+
+	// Fetch subscription to get razorpay_config_id
+	subscription, err := s.repo.FindByRazorpaySubscriptionID(razorpaySubID)
+	if err != nil {
+		return fmt.Errorf("failed to find subscription: %w", err)
+	}
+
+	// Get razorpay config
+	config, err := s.configRepo.FindByID(subscription.RazorpayConfigID)
+	if err != nil {
+		return fmt.Errorf("failed to find razorpay config: %w", err)
+	}
+
+	// Verify webhook signature using config's webhook secret
+	if !s.verifyWebhookSignature(payload, signature, config.RazorpayWebhookSecret) {
+		fmt.Printf("Webhook signature verification failed. signature=%s\n", signature)
+		return errors.New("invalid webhook signature")
+	}
+
+	// Log payment info if present
 	if payWrap, ok := payloadData["payment"].(map[string]interface{}); ok {
 		if entity, ok := payWrap["entity"].(map[string]interface{}); ok {
 			pid, _ := entity["id"].(string)
@@ -413,11 +499,20 @@ func (s *subscriptionService) CancelSubscription(id uuid.UUID) error {
 		return err
 	}
 
+	// Get razorpay config
+	config, err := s.configRepo.FindByID(subscription.RazorpayConfigID)
+	if err != nil {
+		return fmt.Errorf("failed to find razorpay config: %w", err)
+	}
+
+	// Get or create cached Razorpay client for this config's credentials
+	razorpayClient := s.getRazorpayClient(config)
+
 	// Cancel in Razorpay
 	cancelData := map[string]interface{}{
 		"cancel_at_cycle_end": 0,
 	}
-	_, err = s.razorpayClient.Subscription.Cancel(subscription.RazorpaySubscriptionID, cancelData, nil)
+	_, err = razorpayClient.Subscription.Cancel(subscription.RazorpaySubscriptionID, cancelData, nil)
 	if err != nil {
 		return fmt.Errorf("failed to cancel razorpay subscription: %w", err)
 	}
@@ -428,16 +523,16 @@ func (s *subscriptionService) CancelSubscription(id uuid.UUID) error {
 }
 
 // verifySignature verifies Razorpay signature
-func (s *subscriptionService) verifySignature(message, signature string) bool {
-	mac := hmac.New(sha256.New, []byte(s.razorpayKeySecret))
+func (s *subscriptionService) verifySignature(message, signature, keySecret string) bool {
+	mac := hmac.New(sha256.New, []byte(keySecret))
 	mac.Write([]byte(message))
 	expectedMAC := hex.EncodeToString(mac.Sum(nil))
 	return hmac.Equal([]byte(signature), []byte(expectedMAC))
 }
 
 // verifyWebhookSignature verifies webhook signature
-func (s *subscriptionService) verifyWebhookSignature(payload []byte, signature string) bool {
-	mac := hmac.New(sha256.New, []byte(s.webhookSecret))
+func (s *subscriptionService) verifyWebhookSignature(payload []byte, signature, webhookSecret string) bool {
+	mac := hmac.New(sha256.New, []byte(webhookSecret))
 	mac.Write(payload)
 	expectedMAC := hex.EncodeToString(mac.Sum(nil))
 	return hmac.Equal([]byte(signature), []byte(expectedMAC))

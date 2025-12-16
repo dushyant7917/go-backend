@@ -23,6 +23,7 @@ const (
 // Subscription represents a UPI Autopay subscription in the database
 type Subscription struct {
 	ID                     uuid.UUID          `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
+	RazorpayConfigID       uuid.UUID          `gorm:"type:uuid;index" json:"razorpay_config_id"`
 	UserID                 uuid.UUID          `gorm:"type:uuid;not null;index" json:"user_id" binding:"required"`
 	AppName                string             `gorm:"not null;size:100;index" json:"app_name" binding:"required"`
 	Phone                  string             `gorm:"not null;size:15" json:"phone" binding:"required"`
@@ -67,6 +68,8 @@ type CreateSubscriptionRequest struct {
 	Notes                map[string]interface{} `json:"notes,omitempty"`
 	InitialChargeAmount  *int                   `json:"initial_charge_amount,omitempty"`   // Amount in rupees (will be converted to paise), default: 1
 	FirstChargeDelayDays *int                   `json:"first_charge_delay_days,omitempty"` // Days to delay first subscription charge, default: 1
+	// ClientID is optional - if not provided, it will be derived from AppName + GO_ENV
+	ClientID *uuid.UUID `json:"client_id,omitempty"`
 }
 
 // SubscriptionResponse represents the response for subscription operations

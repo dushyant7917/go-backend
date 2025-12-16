@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	"go-backend/internal/apps/razorpay/models"
-	"go-backend/internal/apps/razorpay/service"
+	"go-backend/internal/apps/razorpay/subscription/models"
+	"go-backend/internal/apps/razorpay/subscription/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"

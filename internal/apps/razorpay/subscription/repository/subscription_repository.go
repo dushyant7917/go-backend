@@ -1,7 +1,7 @@
 package repository
 
 import (
-	"go-backend/internal/apps/razorpay/models"
+	"go-backend/internal/apps/razorpay/subscription/models"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"

@@ -10,9 +10,12 @@ import (
 	otpHandler "go-backend/internal/apps/otp/handler"
 	otpRepository "go-backend/internal/apps/otp/repository"
 	otpService "go-backend/internal/apps/otp/service"
-	razorpayHandler "go-backend/internal/apps/razorpay/handler"
-	razorpayRepository "go-backend/internal/apps/razorpay/repository"
-	razorpayService "go-backend/internal/apps/razorpay/service"
+	configHandler "go-backend/internal/apps/razorpay/config/handler"
+	configRepository "go-backend/internal/apps/razorpay/config/repository"
+	configService "go-backend/internal/apps/razorpay/config/service"
+	razorpayHandler "go-backend/internal/apps/razorpay/subscription/handler"
+	razorpayRepository "go-backend/internal/apps/razorpay/subscription/repository"
+	razorpayService "go-backend/internal/apps/razorpay/subscription/service"
 	userHandler "go-backend/internal/apps/user/handler"
 	userRepository "go-backend/internal/apps/user/repository"
 	userService "go-backend/internal/apps/user/service"
@@ -51,20 +54,16 @@ func main() {
 	}
 
 	// Initialize Razorpay dependencies
-	razorpayKeyID := getEnv("RAZORPAY_KEY_ID", "")
-	razorpayKeySecret := getEnv("RAZORPAY_KEY_SECRET", "")
-	razorpayWebhookSecret := getEnv("RAZORPAY_WEBHOOK_SECRET", "")
-
-	if razorpayKeyID == "" || razorpayKeySecret == "" {
-		log.Fatal("Razorpay credentials not configured")
-	}
+	// Note: With multi-client support, Razorpay credentials are now stored per config in the database
+	// The old environment variables are no longer used for subscription operations
+	configRepo := configRepository.NewRazorpayConfigRepository(db)
+	configSvc := configService.NewRazorpayConfigService(configRepo)
+	configH := configHandler.NewRazorpayConfigHandler(configSvc)
 
 	subscriptionRepo := razorpayRepository.NewSubscriptionRepository(db)
 	subscriptionService := razorpayService.NewSubscriptionService(
 		subscriptionRepo,
-		razorpayKeyID,
-		razorpayKeySecret,
-		razorpayWebhookSecret,
+		configRepo,
 	)
 	subscriptionHandler := razorpayHandler.NewSubscriptionHandler(subscriptionService)
 
@@ -119,12 +118,18 @@ func main() {
 		})
 	})
 
+	// Razorpay config creation endpoint (before CORS middleware for admin access)
+	router.POST("/api/v1/razorpay-configs", configH.CreateRazorpayConfig)
+
 	// Setup CORS middleware
 	router.Use(middleware.SetupCORS(env))
 
 	// API v1 routes
 	v1 := router.Group("/api/v1")
 	{
+		// Register Razorpay Config management routes
+		configHandler.RegisterRazorpayConfigRoutes(v1, configH)
+
 		// Register Razorpay subscription routes
 		razorpayHandler.RegisterSubscriptionRoutes(v1, subscriptionHandler)
 
