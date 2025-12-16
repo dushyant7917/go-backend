@@ -22,8 +22,8 @@ func SetupCORS(env string) gin.HandlerFunc {
 			"https://www.jobsfeed.in",
 			"https://ai-bestie-six.vercel.app",
 			"https://www.ai-bestie-six.vercel.app",
-			"https://women-pov.vercel.app",
-			"https://www.women-pov.vercel.app",
+			"https://womenpov.site",
+			"https://www.womenpov.site",
 		}
 	} else {
 		// Development/local: allow all origins
