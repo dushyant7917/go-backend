@@ -2,11 +2,13 @@ package service
 
 import (
 	"errors"
+	"os"
 	"strings"
 
 	crushRepository "go-backend/internal/apps/crush/repository"
 	"go-backend/internal/apps/user/models"
 	"go-backend/internal/apps/user/repository"
+	"go-backend/pkg/storage"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -26,13 +28,15 @@ type UserService interface {
 type userService struct {
 	repo      repository.UserRepository
 	crushRepo crushRepository.CrushRepository
+	r2Client  *storage.R2Client
 }
 
 // NewUserService creates a new instance of UserService
-func NewUserService(repo repository.UserRepository, crushRepo crushRepository.CrushRepository) UserService {
+func NewUserService(repo repository.UserRepository, crushRepo crushRepository.CrushRepository, r2Client *storage.R2Client) UserService {
 	return &userService{
 		repo:      repo,
 		crushRepo: crushRepo,
+		r2Client:  r2Client,
 	}
 }
 
@@ -120,6 +124,104 @@ func (s *userService) UpdateUser(id uuid.UUID, req models.UpdateUserRequest) (*m
 		return nil, err
 	}
 
+	// Check if we need to delete old profile picture
+	var oldProfilePictureKey string
+	var needsFileDeletion bool
+	if req.Metadata != nil {
+		if newKey, exists := req.Metadata["profile_picture_key"]; exists {
+			// Extract old profile picture key from current metadata
+			if user.Metadata != nil {
+				if oldKey, ok := user.Metadata["profile_picture_key"].(string); ok && oldKey != "" {
+					// Only delete if keys are different
+					if newKey != oldKey {
+						oldProfilePictureKey = oldKey
+						needsFileDeletion = true
+					}
+				}
+			}
+		}
+	}
+
+	// If profile picture deletion is needed, use atomic transaction
+	if needsFileDeletion {
+		// Get bucket name based on app_name
+		bucketName := s.getBucketNameForApp(user.AppName)
+		if bucketName == "" {
+			return nil, errors.New("bucket configuration not found for app: " + user.AppName)
+		}
+
+		// Perform atomic transaction: update DB first, then delete file
+		err = s.repo.UpdateWithTransaction(func(txRepo repository.UserRepository) error {
+			// Apply all updates to user object
+			if err := applyUserUpdates(user, req); err != nil {
+				return err
+			}
+
+			// Validate rule after updates
+			if err := validateContactRule(user.CountryCode, user.Phone, user.Email); err != nil {
+				return err
+			}
+
+			// Step 1: Update user in DB within transaction
+			if err := txRepo.Update(user); err != nil {
+				return err // DB update failed, transaction will auto-rollback
+			}
+
+			// Step 2: DB update succeeded, now delete old file from R2
+			if err := s.r2Client.DeleteFile(bucketName, oldProfilePictureKey); err != nil {
+				// R2 deletion failed, return error to trigger transaction rollback
+				return errors.New("failed to delete old profile picture: " + err.Error())
+			}
+
+			// Both operations succeeded, commit transaction
+			return nil
+		})
+
+		if err != nil {
+			return nil, err
+		}
+
+		resp := user.ToResponse()
+		return &resp, nil
+	}
+
+	// Normal update without profile picture deletion
+	if err := applyUserUpdates(user, req); err != nil {
+		return nil, err
+	}
+
+	// Validate rule after updates
+	if err := validateContactRule(user.CountryCode, user.Phone, user.Email); err != nil {
+		return nil, err
+	}
+
+	if err := s.repo.Update(user); err != nil {
+		return nil, err
+	}
+	resp := user.ToResponse()
+	return &resp, nil
+}
+
+// getBucketNameForApp returns the appropriate R2 bucket name based on app_name
+func (s *userService) getBucketNameForApp(appName string) string {
+	// Normalize app name to lowercase for comparison
+	normalizedAppName := strings.ToLower(appName)
+
+	switch normalizedAppName {
+	case "dailystory", "dailystoryapp":
+		// Return the existing users bucket for DailyStory app
+		return os.Getenv("R2_DS_USERS_BUCKET_NAME")
+	case "crushconnect", "crushconnectapp":
+		// Return the bucket name for CrushConnect app if needed
+		return os.Getenv("R2_CC_USERS_BUCKET_NAME")
+	default:
+		// Return empty string for unknown apps (no deletion will occur)
+		return ""
+	}
+}
+
+// applyUserUpdates applies the update request fields to the user model
+func applyUserUpdates(user *models.User, req models.UpdateUserRequest) error {
 	// Apply updates if provided
 	if req.Name != nil {
 		user.Name = req.Name
@@ -136,7 +238,7 @@ func (s *userService) UpdateUser(id uuid.UUID, req models.UpdateUserRequest) (*m
 	if req.AppName != nil {
 		trimmed := strings.TrimSpace(*req.AppName)
 		if trimmed == "" {
-			return nil, errors.New("app_name cannot be empty")
+			return errors.New("app_name cannot be empty")
 		}
 		user.AppName = trimmed
 	}
@@ -149,17 +251,7 @@ func (s *userService) UpdateUser(id uuid.UUID, req models.UpdateUserRequest) (*m
 			user.Metadata[key] = value
 		}
 	}
-
-	// Validate rule after updates
-	if err := validateContactRule(user.CountryCode, user.Phone, user.Email); err != nil {
-		return nil, err
-	}
-
-	if err := s.repo.Update(user); err != nil {
-		return nil, err
-	}
-	resp := user.ToResponse()
-	return &resp, nil
+	return nil
 }
 
 // ListAllUsersPaginated retrieves all users with pagination and optional app_name filter

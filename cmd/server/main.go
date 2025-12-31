@@ -7,6 +7,9 @@ import (
 	crushHandler "go-backend/internal/apps/crush/handler"
 	crushRepository "go-backend/internal/apps/crush/repository"
 	crushService "go-backend/internal/apps/crush/service"
+	dailystoryHandler "go-backend/internal/apps/dailystory/handler"
+	dailystoryRepository "go-backend/internal/apps/dailystory/repository"
+	dailystoryService "go-backend/internal/apps/dailystory/service"
 	otpHandler "go-backend/internal/apps/otp/handler"
 	otpRepository "go-backend/internal/apps/otp/repository"
 	otpService "go-backend/internal/apps/otp/service"
@@ -21,6 +24,7 @@ import (
 	userService "go-backend/internal/apps/user/service"
 	"go-backend/internal/common/database"
 	"go-backend/internal/common/middleware"
+	"go-backend/pkg/storage"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -71,9 +75,16 @@ func main() {
 	userRepo := userRepository.NewUserRepository(db)
 	crushRepo := crushRepository.NewCrushRepository(db)
 
+	// Initialize R2 client (reusable across all requests)
+	r2Client, err := storage.NewR2ClientFromEnv()
+	if err != nil {
+		log.Fatalf("Failed to initialize R2 client: %v", err)
+	}
+	log.Println("R2 client initialized successfully")
+
 	// Initialize services
 	crushSvc := crushService.NewCrushService(crushRepo, userRepo)
-	userSvc := userService.NewUserService(userRepo, crushRepo)
+	userSvc := userService.NewUserService(userRepo, crushRepo, r2Client)
 
 	// Initialize handlers
 	crushH := crushHandler.NewCrushHandler(crushSvc)
@@ -103,6 +114,19 @@ func main() {
 	emailOTPSvc := otpService.NewEmailOTPService(emailOTPRepo)
 	phoneOTPH := otpHandler.NewPhoneOTPHandler(phoneOTPSvc)
 	emailOTPH := otpHandler.NewEmailOTPHandler(emailOTPSvc)
+
+	// Initialize DailyStory dependencies
+	imageTemplateRepo := dailystoryRepository.NewImageTemplateRepository(db)
+	imageTemplateSvc := dailystoryService.NewImageTemplateService(imageTemplateRepo)
+	imageTemplateH := dailystoryHandler.NewImageTemplateHandler(imageTemplateSvc, r2Client)
+
+	// Initialize DailyStory Profile Picture handler
+	profilePictureH := dailystoryHandler.NewProfilePictureHandler(r2Client)
+
+	// Initialize DailyStory Image Poster dependencies
+	imagePosterRepo := dailystoryRepository.NewImagePosterRepository(db)
+	imagePosterSvc := dailystoryService.NewImagePosterService(imagePosterRepo, imageTemplateRepo, userRepo, r2Client)
+	imagePosterH := dailystoryHandler.NewImagePosterHandler(imagePosterSvc)
 
 	// Setup Gin router
 	ginMode := getEnv("GIN_MODE", "release")
@@ -141,6 +165,11 @@ func main() {
 
 		// Register Crush Connect routes
 		crushHandler.RegisterCrushRoutes(v1, crushH)
+
+		// Register DailyStory routes
+		dailystoryHandler.RegisterImageTemplateRoutes(v1, imageTemplateH)
+		dailystoryHandler.RegisterProfilePictureRoutes(v1, profilePictureH)
+		dailystoryHandler.RegisterImagePosterRoutes(v1, imagePosterH)
 
 		// Future apps can register their routes here
 		// Example: handler.RegisterUserRoutes(v1, userHandler)

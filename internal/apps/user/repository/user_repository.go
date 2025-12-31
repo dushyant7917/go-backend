@@ -15,6 +15,7 @@ type UserRepository interface {
 	FindByAppAndEmail(appName, email string) (*models.User, error)
 	Update(user *models.User) error
 	FindAllPaginated(appName string, page, pageSize int) ([]models.User, int64, error)
+	UpdateWithTransaction(fn func(txRepo UserRepository) error) error
 }
 
 // userRepository implements UserRepository
@@ -90,4 +91,12 @@ func (r *userRepository) FindAllPaginated(appName string, page, pageSize int) ([
 	}
 
 	return users, total, nil
+}
+
+// UpdateWithTransaction executes a function within a database transaction
+func (r *userRepository) UpdateWithTransaction(fn func(txRepo UserRepository) error) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		txRepo := &userRepository{db: tx}
+		return fn(txRepo)
+	})
 }
