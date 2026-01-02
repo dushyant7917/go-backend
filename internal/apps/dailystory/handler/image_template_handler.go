@@ -107,6 +107,7 @@ func (h *ImageTemplateHandler) GetImageTemplates(c *gin.Context) {
 	category := c.Query("category")
 	subCategory := c.Query("sub_category")
 	authorIDStr := c.Query("author_id")
+	statusStr := c.Query("status")
 
 	var authorID *uuid.UUID
 	if authorIDStr != "" {
@@ -116,6 +117,16 @@ func (h *ImageTemplateHandler) GetImageTemplates(c *gin.Context) {
 			return
 		}
 		authorID = &parsed
+	}
+
+	var status *string
+	if statusStr != "" {
+		// Validate status values
+		if statusStr != "published" && statusStr != "approved" && statusStr != "rejected" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "status must be 'published', 'approved', or 'rejected'"})
+			return
+		}
+		status = &statusStr
 	}
 
 	// Parse page parameter
@@ -132,7 +143,7 @@ func (h *ImageTemplateHandler) GetImageTemplates(c *gin.Context) {
 		}
 	}
 
-	resp, err := h.service.GetImageTemplatesWithFilters(category, subCategory, authorID, page, pageSize)
+	resp, err := h.service.GetImageTemplatesWithFilters(category, subCategory, authorID, status, page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -240,4 +251,15 @@ func (h *ImageTemplateHandler) GetImageTemplateViewURL(c *gin.Context) {
 		"view_url": publicURL,
 		"file_key": resp.FileKey,
 	})
+}
+
+// GetDesignerStats handles GET /api/v1/dailystory/image-templates/designer-stats
+func (h *ImageTemplateHandler) GetDesignerStats(c *gin.Context) {
+	resp, err := h.service.GetDesignerStats()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": resp})
 }

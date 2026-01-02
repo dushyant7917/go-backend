@@ -12,7 +12,8 @@ type ImageTemplateRepository interface {
 	Create(template *models.ImageTemplate) error
 	FindByID(id uuid.UUID) (*models.ImageTemplate, error)
 	Update(template *models.ImageTemplate) error
-	FindWithFilters(category, subCategory string, authorID *uuid.UUID, page, pageSize int) ([]models.ImageTemplate, int64, error)
+	FindWithFilters(category, subCategory string, authorID *uuid.UUID, status *string, page, pageSize int) ([]models.ImageTemplate, int64, error)
+	GetDesignerStats() ([]models.DesignerStatsResponse, error)
 }
 
 // imageTemplateRepository implements ImageTemplateRepository
@@ -45,7 +46,7 @@ func (r *imageTemplateRepository) Update(template *models.ImageTemplate) error {
 }
 
 // FindWithFilters retrieves image templates with optional filters and pagination
-func (r *imageTemplateRepository) FindWithFilters(category, subCategory string, authorID *uuid.UUID, page, pageSize int) ([]models.ImageTemplate, int64, error) {
+func (r *imageTemplateRepository) FindWithFilters(category, subCategory string, authorID *uuid.UUID, status *string, page, pageSize int) ([]models.ImageTemplate, int64, error) {
 	var templates []models.ImageTemplate
 	var total int64
 
@@ -60,6 +61,10 @@ func (r *imageTemplateRepository) FindWithFilters(category, subCategory string, 
 	}
 	if authorID != nil {
 		query = query.Where("author_id = ?", *authorID)
+	}
+	if status != nil {
+		// Filter by status field in metadata (published, approved, or rejected)
+		query = query.Where("metadata @> ?", `{"status":"`+*status+`"}`)
 	}
 
 	// Get total count
@@ -76,4 +81,32 @@ func (r *imageTemplateRepository) FindWithFilters(category, subCategory string, 
 	}
 
 	return templates, total, nil
+}
+
+// GetDesignerStats retrieves template creation statistics for designers (users with app_name='TemplateDesigner')
+func (r *imageTemplateRepository) GetDesignerStats() ([]models.DesignerStatsResponse, error) {
+	var results []models.DesignerStatsResponse
+
+	// Use GORM query builder with joins and aggregations
+	err := r.db.Table("users u").
+		Select(`
+			u.id as user_id,
+			u.name as user_name,
+			COUNT(CASE WHEN it.created_at >= CURRENT_DATE THEN 1 END) as templates_created_today,
+			COUNT(CASE WHEN it.created_at >= date_trunc('week', CURRENT_DATE) THEN 1 END) as templates_created_this_week,
+			COUNT(CASE WHEN it.created_at >= date_trunc('month', CURRENT_DATE) THEN 1 END) as templates_created_this_month,
+			COUNT(it.id) as templates_created_total,
+			COUNT(CASE WHEN it.metadata->>'status' = 'published' THEN 1 END) as templates_pending_approval
+		`).
+		Joins("LEFT JOIN image_templates it ON u.id = it.author_id").
+		Where("u.app_name = ? AND u.deleted_at IS NULL", "TemplateDesigner").
+		Group("u.id, u.name").
+		Order("templates_created_total DESC, u.created_at DESC").
+		Scan(&results).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return results, nil
 }

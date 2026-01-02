@@ -14,7 +14,8 @@ type ImageTemplateService interface {
 	CreateImageTemplate(req models.CreateImageTemplateRequest) (*models.ImageTemplateResponse, error)
 	UpdateImageTemplate(id uuid.UUID, req models.UpdateImageTemplateRequest) (*models.ImageTemplateResponse, error)
 	GetImageTemplateByID(id uuid.UUID) (*models.ImageTemplateResponse, error)
-	GetImageTemplatesWithFilters(category, subCategory string, authorID *uuid.UUID, page, pageSize int) (*models.PaginatedImageTemplatesResponse, error)
+	GetImageTemplatesWithFilters(category, subCategory string, authorID *uuid.UUID, status *string, page, pageSize int) (*models.PaginatedImageTemplatesResponse, error)
+	GetDesignerStats() ([]models.DesignerStatsResponse, error)
 }
 
 // imageTemplateService implements ImageTemplateService
@@ -105,7 +106,7 @@ func (s *imageTemplateService) UpdateImageTemplate(id uuid.UUID, req models.Upda
 }
 
 // GetImageTemplatesWithFilters retrieves image templates with optional filters and pagination
-func (s *imageTemplateService) GetImageTemplatesWithFilters(category, subCategory string, authorID *uuid.UUID, page, pageSize int) (*models.PaginatedImageTemplatesResponse, error) {
+func (s *imageTemplateService) GetImageTemplatesWithFilters(category, subCategory string, authorID *uuid.UUID, status *string, page, pageSize int) (*models.PaginatedImageTemplatesResponse, error) {
 	// Validate page and pageSize
 	if page < 1 {
 		page = 1
@@ -117,7 +118,7 @@ func (s *imageTemplateService) GetImageTemplatesWithFilters(category, subCategor
 		pageSize = 100 // max page size
 	}
 
-	templates, total, err := s.repo.FindWithFilters(category, subCategory, authorID, page, pageSize)
+	templates, total, err := s.repo.FindWithFilters(category, subCategory, authorID, status, page, pageSize)
 	if err != nil {
 		return nil, err
 	}
@@ -154,4 +155,9 @@ func (s *imageTemplateService) GetImageTemplatesWithFilters(category, subCategor
 		NextPage:   nextPage,
 		PrevPage:   prevPage,
 	}, nil
+}
+
+// GetDesignerStats retrieves template creation statistics for designers
+func (s *imageTemplateService) GetDesignerStats() ([]models.DesignerStatsResponse, error) {
+	return s.repo.GetDesignerStats()
 }

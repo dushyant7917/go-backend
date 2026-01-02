@@ -151,3 +151,14 @@ type PaginatedImageTemplatesResponse struct {
 	NextPage   *int                    `json:"next_page"`
 	PrevPage   *int                    `json:"prev_page"`
 }
+
+// DesignerStatsResponse represents template statistics for a designer
+type DesignerStatsResponse struct {
+	UserID                    uuid.UUID `json:"user_id"`
+	UserName                  *string   `json:"user_name,omitempty"`
+	TemplatesCreatedToday     int64     `json:"templates_created_today"`
+	TemplatesCreatedThisWeek  int64     `json:"templates_created_this_week"`
+	TemplatesCreatedThisMonth int64     `json:"templates_created_this_month"`
+	TemplatesCreatedTotal     int64     `json:"templates_created_total"`
+	TemplatesPendingApproval  int64     `json:"templates_pending_approval"`
+}

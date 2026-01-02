@@ -1429,7 +1429,7 @@ curl -X PUT {backend_url}/dailystory/image-templates/111e2222-e33b-44d5-a666-777
 **Request:**
 
 ```bash
-curl -X GET "{backend_url}/dailystory/image-templates?category=birthday&sub_category=cake&page=1&page_size=10"
+curl -X GET "{backend_url}/dailystory/image-templates?category=birthday&sub_category=cake&status=published&page=1&page_size=10"
 ```
 
 **Query Parameters:**
@@ -1438,6 +1438,7 @@ curl -X GET "{backend_url}/dailystory/image-templates?category=birthday&sub_cate
 | category | string | No | Filter by category |
 | sub_category | string | No | Filter by sub-category |
 | author_id | UUID | No | Filter by author ID |
+| status | string | No | Filter by status ('published', 'approved', or 'rejected') |
 | page | integer | No | Page number (default: 1) |
 | page_size | integer | No | Items per page (default: 10) |
 
@@ -1527,6 +1528,56 @@ curl -X GET {backend_url}/dailystory/image-templates/111e2222-e33b-44d5-a666-777
   "file_key": "images/template_1735560000.png"
 }
 ```
+
+### 7. Get Designer Stats
+
+**Endpoint:** `GET {backend_url}/dailystory/image-templates/designer-stats`
+
+**Description:** Retrieves template creation statistics for all designers.
+
+**Request:**
+
+```bash
+curl -X GET {backend_url}/dailystory/image-templates/designer-stats
+```
+
+**Response:**
+
+```json
+{
+  "data": [
+    {
+      "user_id": "123e4567-e89b-12d3-a456-426614174000",
+      "user_name": "John Doe",
+      "templates_created_today": 5,
+      "templates_created_this_week": 23,
+      "templates_created_this_month": 87,
+      "templates_created_total": 150,
+      "templates_pending_approval": 3
+    },
+    {
+      "user_id": "987fcdeb-51a2-43c1-b678-123456789abc",
+      "user_name": "Jane Smith",
+      "templates_created_today": 2,
+      "templates_created_this_week": 15,
+      "templates_created_this_month": 45,
+      "templates_created_total": 98,
+      "templates_pending_approval": 1
+    }
+  ]
+}
+```
+
+**Response Fields:**
+| Field | Type | Description |
+|-------|------|-------------|
+| user_id | UUID | Designer's user ID |
+| user_name | string | Designer's name (may be null) |
+| templates_created_today | integer | Number of templates created today |
+| templates_created_this_week | integer | Number of templates created this week |
+| templates_created_this_month | integer | Number of templates created this month |
+| templates_created_total | integer | Total number of templates created |
+| templates_pending_approval | integer | Number of templates awaiting approval |
 
 ---
 
