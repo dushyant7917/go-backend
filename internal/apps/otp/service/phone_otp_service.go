@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"os"
 	"time"
 
 	"go-backend/internal/apps/otp/models"
@@ -39,17 +40,31 @@ func generateOTP() string {
 
 // CreateOrUpdateOTP creates or overrides OTP for a phone number and sets expiry to 10 minutes from now
 func (s *phoneOTPService) CreateOrUpdateOTP(req models.CreatePhoneOTPRequest) (*models.PhoneOTPResponse, error) {
-	// Generate random 4-digit OTP
-	otpValue := generateOTP()
+	// Generate OTP - use fixed OTP for test phone number
+	testCountryCode := os.Getenv("TEST_OTP_COUNTRY_CODE")
+	testPhone := os.Getenv("TEST_OTP_PHONE")
+	testOTP := os.Getenv("TEST_OTP_VALUE")
+
+	var otpValue string
+	isTestNumber := testCountryCode != "" && testPhone != "" && testOTP != "" &&
+		req.CountryCode == testCountryCode && req.Phone == testPhone
+
+	if isTestNumber {
+		otpValue = testOTP
+	} else {
+		otpValue = generateOTP()
+	}
 	expiresAt := time.Now().Add(10 * time.Minute)
 
 	if err := s.repo.Upsert(req.AppName, req.CountryCode, req.Phone, otpValue, expiresAt); err != nil {
 		return nil, err
 	}
 
-	// Send OTP via provider - fail if sending fails
-	if err := s.otpProvider.SendOTP(req.CountryCode, req.Phone, req.AppName, otpValue); err != nil {
-		return nil, fmt.Errorf("failed to send OTP: %w", err)
+	// Send OTP via provider - skip for test phone number, fail if sending fails for others
+	if !isTestNumber {
+		if err := s.otpProvider.SendOTP(req.CountryCode, req.Phone, req.AppName, otpValue); err != nil {
+			return nil, fmt.Errorf("failed to send OTP: %w", err)
+		}
 	}
 
 	return &models.PhoneOTPResponse{
@@ -68,7 +83,18 @@ func (s *phoneOTPService) VerifyOTP(req models.VerifyPhoneOTPRequest) (*models.V
 	}
 
 	now := time.Now()
-	valid := (req.Value == otp.Value) && (now.Before(otp.ExpiresAt) || now.Equal(otp.ExpiresAt))
+	// Skip expiry check for test phone number
+	testCountryCode := os.Getenv("TEST_OTP_COUNTRY_CODE")
+	testPhone := os.Getenv("TEST_OTP_PHONE")
+	isTestNumber := testCountryCode != "" && testPhone != "" &&
+		req.CountryCode == testCountryCode && req.Phone == testPhone
+
+	var valid bool
+	if isTestNumber {
+		valid = req.Value == otp.Value
+	} else {
+		valid = (req.Value == otp.Value) && (now.Before(otp.ExpiresAt) || now.Equal(otp.ExpiresAt))
+	}
 
 	message := "OTP verified successfully"
 	if !valid {
