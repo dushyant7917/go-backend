@@ -12,10 +12,12 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"sync"
 	"time"
 
 	"go-backend/internal/apps/dailystory/models"
 	"go-backend/internal/apps/dailystory/repository"
+	userModels "go-backend/internal/apps/user/models"
 	userRepository "go-backend/internal/apps/user/repository"
 	"go-backend/pkg/storage"
 
@@ -25,6 +27,18 @@ import (
 	"golang.org/x/image/font/gofont/goregular"
 	"gorm.io/gorm"
 )
+
+// Shared HTTP client with connection pooling for optimal performance
+var sharedHTTPClient = &http.Client{
+	Timeout: 30 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+		DisableCompression:  false,
+		ForceAttemptHTTP2:   true,
+	},
+}
 
 // ImagePosterService defines the interface for image poster business logic
 type ImagePosterService interface {
@@ -56,13 +70,39 @@ func NewImagePosterService(
 
 // GeneratePoster generates a poster for the given template and user
 func (s *imagePosterService) GeneratePoster(templateID, userID uuid.UUID) (*models.GeneratePosterResponse, error) {
-	// Step 1: Extract user name and profile picture key using user ID
-	user, err := s.userRepo.FindByID(userID)
-	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+	// Step 1: Fetch user and template in parallel
+	var user *userModels.User
+	var template *models.ImageTemplate
+	var userErr, templateErr error
+	var wg sync.WaitGroup
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		user, userErr = s.userRepo.FindByID(userID)
+	}()
+
+	go func() {
+		defer wg.Done()
+		template, templateErr = s.templateRepo.FindByID(templateID)
+	}()
+
+	wg.Wait()
+
+	// Check user fetch result
+	if userErr != nil {
+		if userErr == gorm.ErrRecordNotFound {
 			return nil, fmt.Errorf("user not found")
 		}
-		return nil, fmt.Errorf("failed to fetch user: %w", err)
+		return nil, fmt.Errorf("failed to fetch user: %w", userErr)
+	}
+
+	// Check template fetch result
+	if templateErr != nil {
+		if templateErr == gorm.ErrRecordNotFound {
+			return nil, fmt.Errorf("template not found")
+		}
+		return nil, fmt.Errorf("failed to fetch template: %w", templateErr)
 	}
 
 	// Extract name from user
@@ -101,16 +141,7 @@ func (s *imagePosterService) GeneratePoster(templateID, userID uuid.UUID) (*mode
 		}, nil
 	}
 
-	// Step 3: Fetch template
-	template, err := s.templateRepo.FindByID(templateID)
-	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return nil, fmt.Errorf("template not found")
-		}
-		return nil, fmt.Errorf("failed to fetch template: %w", err)
-	}
-
-	// Validate template has config
+	// Step 3: Validate template has config
 	if template.Config == nil || template.Config.Face == nil || template.Config.Name == nil {
 		return nil, fmt.Errorf("template does not have complete configuration")
 	}
@@ -222,16 +253,30 @@ func (s *imagePosterService) createPosterImage(
 	templateURL, profilePictureURL, userName string,
 	config *models.TemplateConfig,
 ) ([]byte, string, error) {
-	// Download template image
-	templateImg, err := downloadImage(templateURL)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to download template: %w", err)
-	}
+	// Download template and profile picture in parallel
+	var templateImg, profileImg image.Image
+	var templateErr, profileErr error
+	var wg sync.WaitGroup
 
-	// Download profile picture
-	profileImg, err := downloadImage(profilePictureURL)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to download profile picture: %w", err)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		templateImg, templateErr = downloadImage(templateURL)
+	}()
+
+	go func() {
+		defer wg.Done()
+		profileImg, profileErr = downloadImage(profilePictureURL)
+	}()
+
+	wg.Wait()
+
+	// Check download results
+	if templateErr != nil {
+		return nil, "", fmt.Errorf("failed to download template: %w", templateErr)
+	}
+	if profileErr != nil {
+		return nil, "", fmt.Errorf("failed to download profile picture: %w", profileErr)
 	}
 
 	// Get template dimensions
@@ -306,8 +351,7 @@ func (s *imagePosterService) createPosterImage(
 
 	// Encode to PNG
 	var buf bytes.Buffer
-	err = png.Encode(&buf, dc.Image())
-	if err != nil {
+	if err := png.Encode(&buf, dc.Image()); err != nil {
 		return nil, "", fmt.Errorf("failed to encode image: %w", err)
 	}
 
@@ -316,7 +360,7 @@ func (s *imagePosterService) createPosterImage(
 
 // downloadImage downloads an image from a URL and returns it as image.Image
 func downloadImage(url string) (image.Image, error) {
-	resp, err := http.Get(url)
+	resp, err := sharedHTTPClient.Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -417,8 +461,7 @@ func uploadImageToR2(presignedURL string, imageData []byte, contentType string) 
 
 	req.Header.Set("Content-Type", contentType)
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := sharedHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
