@@ -16,6 +16,7 @@ type UserRepository interface {
 	Update(user *models.User) error
 	FindAllPaginated(appName string, page, pageSize int) ([]models.User, int64, error)
 	UpdateWithTransaction(fn func(txRepo UserRepository) error) error
+	FindByAppWithPushToken(appName string) ([]models.User, error)
 }
 
 // userRepository implements UserRepository
@@ -99,4 +100,14 @@ func (r *userRepository) UpdateWithTransaction(fn func(txRepo UserRepository) er
 		txRepo := &userRepository{db: tx}
 		return fn(txRepo)
 	})
+}
+
+// FindByAppWithPushToken retrieves users by app_name who have push_notification_token in metadata
+func (r *userRepository) FindByAppWithPushToken(appName string) ([]models.User, error) {
+	var users []models.User
+	// Query users with app_name match and check if metadata contains push_notification_token
+	if err := r.db.Where("app_name = ? AND metadata ? 'push_notification_token'", appName).Find(&users).Error; err != nil {
+		return nil, err
+	}
+	return users, nil
 }

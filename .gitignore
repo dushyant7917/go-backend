@@ -46,3 +46,6 @@ logs/
 # Temporary files
 tmp/
 temp/
+
+# Cron job binaries
+cron-jobs/push_notifier
