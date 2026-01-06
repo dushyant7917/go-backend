@@ -22,6 +22,7 @@ type UserService interface {
 	GetUserByAppAndContact(appName, countryCode, phone string) (*models.UserResponse, error)
 	GetUserByAppAndEmail(appName, email string) (*models.UserResponse, error)
 	ListAllUsersPaginated(appName string, page, pageSize int) (*models.PaginatedUsersWithCountResponse, error)
+	GetUserCountByDay(appName string, days, page, pageSize int) (*models.PaginatedUserDailyCountResponse, error)
 }
 
 // userService implements UserService
@@ -315,6 +316,59 @@ func (s *userService) ListAllUsersPaginated(appName string, page, pageSize int) 
 
 	return &models.PaginatedUsersWithCountResponse{
 		Data:       responses,
+		Page:       page,
+		PageSize:   pageSize,
+		Total:      total,
+		TotalPages: totalPages,
+		NextPage:   nextPage,
+		PrevPage:   prevPage,
+	}, nil
+}
+
+// GetUserCountByDay retrieves user count grouped by day for the last n days with pagination
+func (s *userService) GetUserCountByDay(appName string, days, page, pageSize int) (*models.PaginatedUserDailyCountResponse, error) {
+	if strings.TrimSpace(appName) == "" {
+		return nil, errors.New("app_name is required")
+	}
+	if days < 1 {
+		return nil, errors.New("days must be at least 1")
+	}
+
+	// Validate page and pageSize
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 10 // default page size
+	}
+	if pageSize > 100 {
+		pageSize = 100 // max page size
+	}
+
+	results, total, err := s.repo.GetUserCountByDay(appName, days, page, pageSize)
+	if err != nil {
+		return nil, err
+	}
+
+	// Calculate pagination metadata
+	totalPages := int(total) / pageSize
+	if int(total)%pageSize > 0 {
+		totalPages++
+	}
+
+	var nextPage *int
+	var prevPage *int
+	if page < totalPages {
+		next := page + 1
+		nextPage = &next
+	}
+	if page > 1 {
+		prev := page - 1
+		prevPage = &prev
+	}
+
+	return &models.PaginatedUserDailyCountResponse{
+		Data:       results,
 		Page:       page,
 		PageSize:   pageSize,
 		Total:      total,

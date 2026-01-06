@@ -160,3 +160,47 @@ func (h *UserHandler) ListAllUsers(c *gin.Context) {
 
 	c.JSON(http.StatusOK, resp)
 }
+
+// GetUserCountByDay handles GET /api/v1/users/count-by-day
+func (h *UserHandler) GetUserCountByDay(c *gin.Context) {
+	// Default values
+	page := 1
+	pageSize := 10
+	days := 7 // default to last 7 days
+
+	// Parse app_name (required)
+	appName := c.Query("app_name")
+	if appName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "app_name is required"})
+		return
+	}
+
+	// Parse days parameter (optional, defaults to 7)
+	if daysStr := c.Query("days"); daysStr != "" {
+		if d, err := strconv.Atoi(daysStr); err == nil && d > 0 {
+			days = d
+		}
+	}
+
+	// Parse page parameter
+	if pageStr := c.Query("page"); pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+
+	// Parse page_size parameter
+	if pageSizeStr := c.Query("page_size"); pageSizeStr != "" {
+		if ps, err := strconv.Atoi(pageSizeStr); err == nil && ps > 0 {
+			pageSize = ps
+		}
+	}
+
+	resp, err := h.service.GetUserCountByDay(appName, days, page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
+}

@@ -139,3 +139,20 @@ type PaginatedUsersWithCountResponse struct {
 	NextPage   *int                    `json:"next_page"`
 	PrevPage   *int                    `json:"prev_page"`
 }
+
+// UserDailyCountResponse represents daily user count for a specific date
+type UserDailyCountResponse struct {
+	Date      string `json:"date"`
+	UserCount int64  `json:"user_count"`
+}
+
+// PaginatedUserDailyCountResponse represents paginated user daily count response
+type PaginatedUserDailyCountResponse struct {
+	Data       []UserDailyCountResponse `json:"data"`
+	Page       int                      `json:"page"`
+	PageSize   int                      `json:"page_size"`
+	Total      int64                    `json:"total"`
+	TotalPages int                      `json:"total_pages"`
+	NextPage   *int                     `json:"next_page"`
+	PrevPage   *int                     `json:"prev_page"`
+}

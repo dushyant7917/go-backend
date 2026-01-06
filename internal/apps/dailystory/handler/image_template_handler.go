@@ -263,3 +263,61 @@ func (h *ImageTemplateHandler) GetDesignerStats(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"data": resp})
 }
+
+// GetPosterCountByCount handles GET /api/v1/dailystory/image-templates/poster-count-by-count
+func (h *ImageTemplateHandler) GetPosterCountByCount(c *gin.Context) {
+	// Default pagination values
+	page := 1
+	pageSize := 10
+
+	// Parse page parameter
+	if pageStr := c.Query("page"); pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+
+	// Parse page_size parameter
+	if pageSizeStr := c.Query("page_size"); pageSizeStr != "" {
+		if ps, err := strconv.Atoi(pageSizeStr); err == nil && ps > 0 {
+			pageSize = ps
+		}
+	}
+
+	resp, err := h.service.GetPosterCountByTemplate(true, page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
+// GetPosterCountByDate handles GET /api/v1/dailystory/image-templates/poster-count-by-date
+func (h *ImageTemplateHandler) GetPosterCountByDate(c *gin.Context) {
+	// Default pagination values
+	page := 1
+	pageSize := 10
+
+	// Parse page parameter
+	if pageStr := c.Query("page"); pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+
+	// Parse page_size parameter
+	if pageSizeStr := c.Query("page_size"); pageSizeStr != "" {
+		if ps, err := strconv.Atoi(pageSizeStr); err == nil && ps > 0 {
+			pageSize = ps
+		}
+	}
+
+	resp, err := h.service.GetPosterCountByTemplate(false, page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
+}

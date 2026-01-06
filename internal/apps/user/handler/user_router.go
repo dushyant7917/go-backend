@@ -8,6 +8,7 @@ func RegisterUserRoutes(router *gin.RouterGroup, handler *UserHandler) {
 	{
 		users.POST("", handler.CreateUser)
 		users.GET("/all", handler.ListAllUsers)
+		users.GET("/count-by-day", handler.GetUserCountByDay)
 		users.GET("/:id", handler.GetUser)
 		users.PUT("/:id", handler.UpdateUser)
 		users.GET("/by-phone", handler.GetUserByAppAndPhone)

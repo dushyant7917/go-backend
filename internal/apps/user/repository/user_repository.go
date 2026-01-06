@@ -17,6 +17,7 @@ type UserRepository interface {
 	FindAllPaginated(appName string, page, pageSize int) ([]models.User, int64, error)
 	UpdateWithTransaction(fn func(txRepo UserRepository) error) error
 	FindByAppWithPushToken(appName string) ([]models.User, error)
+	GetUserCountByDay(appName string, days, page, pageSize int) ([]models.UserDailyCountResponse, int64, error)
 }
 
 // userRepository implements UserRepository
@@ -110,4 +111,44 @@ func (r *userRepository) FindByAppWithPushToken(appName string) ([]models.User, 
 		return nil, err
 	}
 	return users, nil
+}
+
+// GetUserCountByDay retrieves user count grouped by day for the last n days with pagination
+func (r *userRepository) GetUserCountByDay(appName string, days, page, pageSize int) ([]models.UserDailyCountResponse, int64, error) {
+	var results []models.UserDailyCountResponse
+	var total int64
+
+	// Get total count of distinct dates
+	var countResult []struct {
+		Count int64
+	}
+	countQuery := r.db.Table("users").
+		Select("COUNT(DISTINCT DATE(created_at)) as count").
+		Where("app_name = ? AND created_at >= CURRENT_DATE - INTERVAL '1 day' * ? AND deleted_at IS NULL", appName, days-1)
+	if err := countQuery.Scan(&countResult).Error; err != nil {
+		return nil, 0, err
+	}
+	if len(countResult) > 0 {
+		total = countResult[0].Count
+	}
+
+	// Query to get user counts for each day with pagination
+	offset := (page - 1) * pageSize
+	err := r.db.Table("users").
+		Select(`
+			DATE(created_at) as date,
+			COUNT(id) as user_count
+		`).
+		Where("app_name = ? AND created_at >= CURRENT_DATE - INTERVAL '1 day' * ? AND deleted_at IS NULL", appName, days-1).
+		Group("DATE(created_at)").
+		Order("date DESC").
+		Offset(offset).
+		Limit(pageSize).
+		Scan(&results).Error
+
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return results, total, nil
 }

@@ -16,8 +16,8 @@ import (
 
 // Configuration - Update these values as needed
 const (
-	MessageTitle = "आपके लिए नया पोस्टर तैयार है!"
-	MessageBody  = "चीन से आगे निकला भारत, चावल उत्पादन में नंबर-1"
+	MessageTitle = "लोगों के बीच अपनी एक अलग पहचान बनाएँ!"
+	MessageBody  = "हमारे ऐप से ताज़ा खबर अपनी फोटो और नाम के साथ WhatsApp पर share करें!"
 )
 
 func main() {

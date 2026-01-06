@@ -162,3 +162,24 @@ type DesignerStatsResponse struct {
 	TemplatesCreatedTotal     int64     `json:"templates_created_total"`
 	TemplatesPendingApproval  int64     `json:"templates_pending_approval"`
 }
+
+// TemplatePosterCountResponse represents count of posters for a template
+type TemplatePosterCountResponse struct {
+	TemplateID  uuid.UUID `json:"template_id"`
+	FileKey     string    `json:"file_key"`
+	Category    string    `json:"category"`
+	SubCategory string    `json:"sub_category"`
+	PosterCount int64     `json:"poster_count"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// PaginatedTemplatePosterCountResponse represents paginated template poster count response
+type PaginatedTemplatePosterCountResponse struct {
+	Data       []TemplatePosterCountResponse `json:"data"`
+	Page       int                           `json:"page"`
+	PageSize   int                           `json:"page_size"`
+	Total      int64                         `json:"total"`
+	TotalPages int                           `json:"total_pages"`
+	NextPage   *int                          `json:"next_page"`
+	PrevPage   *int                          `json:"prev_page"`
+}

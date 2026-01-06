@@ -16,6 +16,7 @@ type ImageTemplateService interface {
 	GetImageTemplateByID(id uuid.UUID) (*models.ImageTemplateResponse, error)
 	GetImageTemplatesWithFilters(category, subCategory string, authorID *uuid.UUID, status *string, page, pageSize int) (*models.PaginatedImageTemplatesResponse, error)
 	GetDesignerStats() ([]models.DesignerStatsResponse, error)
+	GetPosterCountByTemplate(orderByCount bool, page, pageSize int) (*models.PaginatedTemplatePosterCountResponse, error)
 }
 
 // imageTemplateService implements ImageTemplateService
@@ -160,4 +161,50 @@ func (s *imageTemplateService) GetImageTemplatesWithFilters(category, subCategor
 // GetDesignerStats retrieves template creation statistics for designers
 func (s *imageTemplateService) GetDesignerStats() ([]models.DesignerStatsResponse, error) {
 	return s.repo.GetDesignerStats()
+}
+
+// GetPosterCountByTemplate retrieves count of posters generated for each template with pagination
+func (s *imageTemplateService) GetPosterCountByTemplate(orderByCount bool, page, pageSize int) (*models.PaginatedTemplatePosterCountResponse, error) {
+	// Validate page and pageSize
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 10 // default page size
+	}
+	if pageSize > 100 {
+		pageSize = 100 // max page size
+	}
+
+	results, total, err := s.repo.GetPosterCountByTemplate(orderByCount, page, pageSize)
+	if err != nil {
+		return nil, err
+	}
+
+	// Calculate pagination metadata
+	totalPages := int(total) / pageSize
+	if int(total)%pageSize > 0 {
+		totalPages++
+	}
+
+	var nextPage *int
+	var prevPage *int
+	if page < totalPages {
+		next := page + 1
+		nextPage = &next
+	}
+	if page > 1 {
+		prev := page - 1
+		prevPage = &prev
+	}
+
+	return &models.PaginatedTemplatePosterCountResponse{
+		Data:       results,
+		Page:       page,
+		PageSize:   pageSize,
+		Total:      total,
+		TotalPages: totalPages,
+		NextPage:   nextPage,
+		PrevPage:   prevPage,
+	}, nil
 }
