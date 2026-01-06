@@ -16,8 +16,8 @@ import (
 
 // Configuration - Update these values as needed
 const (
-	MessageTitle = "दूषित पानी का कहर!"
-	MessageBody  = "गांधीनगर में दूषित पानी से हड़कंप, एक हफ्ते में 100 से ज्यादा लोग बीमार"
+	MessageTitle = "आपके लिए नया पोस्टर तैयार है!"
+	MessageBody  = "चीन से आगे निकला भारत, चावल उत्पादन में नंबर-1"
 )
 
 func main() {

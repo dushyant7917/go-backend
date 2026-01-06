@@ -310,6 +310,17 @@ func (s *imagePosterService) createPosterImage(
 
 		// Reset clipping
 		dc.ResetClip()
+
+		// Draw black border around the circle
+		// Border width scales with image size (0.5% of radius for better visibility)
+		borderWidth := radius * 0.01 // 1% of radius
+		if borderWidth < 3 {
+			borderWidth = 3 // Minimum 3px for small images
+		}
+		dc.SetRGB(0, 0, 0) // Black color
+		dc.SetLineWidth(borderWidth)
+		dc.DrawCircle(centerX, centerY, radius)
+		dc.Stroke()
 	}
 
 	// Draw name text with black background if config exists
