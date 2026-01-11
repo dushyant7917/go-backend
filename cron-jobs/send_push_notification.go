@@ -16,8 +16,8 @@ import (
 
 // Configuration - Update these values as needed
 const (
-	MessageTitle = "लोगों के बीच अपनी एक अलग पहचान बनाएँ!"
-	MessageBody  = "हमारे ऐप से ताज़ा खबर अपनी फोटो और नाम के साथ WhatsApp पर share करें!"
+	MessageTitle = "आपके लिए नई स्टोरी तैयार है!"
+	MessageBody  = "रेलवे का बढ़िया फैसला है! अब हर ट्रेन का अनाउंसमेंट होगा - रुके या न रुके। पूरे देश के स्टेशनों पर दुर्घटनाएं कम होंगी"
 )
 
 func main() {
@@ -105,7 +105,8 @@ func main() {
 				"title": MessageTitle,
 				"body":  MessageBody,
 			},
-			Sound: "default",
+			Sound:    "default",
+			Priority: "high",
 		})
 	}
 

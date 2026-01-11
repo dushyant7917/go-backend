@@ -15,13 +15,17 @@ const (
 
 // ExpoMessage represents a push notification message for Expo
 type ExpoMessage struct {
-	To       string                 `json:"to"`
-	Title    string                 `json:"title,omitempty"`
-	Body     string                 `json:"body,omitempty"`
-	Data     map[string]interface{} `json:"data,omitempty"`
-	Sound    string                 `json:"sound,omitempty"`
-	Badge    int                    `json:"badge,omitempty"`
-	Priority string                 `json:"priority,omitempty"`
+	To             string                 `json:"to"`
+	Title          string                 `json:"title,omitempty"`
+	Body           string                 `json:"body,omitempty"`
+	Data           map[string]interface{} `json:"data,omitempty"`
+	Sound          string                 `json:"sound,omitempty"`
+	Badge          int                    `json:"badge,omitempty"`
+	Priority       string                 `json:"priority,omitempty"`
+	MutableContent bool                   `json:"mutableContent,omitempty"`
+	// Image is supported on Android natively
+	// For iOS, requires Notification Service Extension to download and display the image
+	Image string `json:"image,omitempty"`
 }
 
 // ExpoResponse represents the response from Expo Push API

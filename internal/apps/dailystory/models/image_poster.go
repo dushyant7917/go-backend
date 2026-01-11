@@ -38,3 +38,25 @@ type GeneratePosterResponse struct {
 	PosterURL string `json:"poster_url"`
 	Cached    bool   `json:"cached"`
 }
+
+// UserPosterStatsResponse represents poster statistics for a user
+type UserPosterStatsResponse struct {
+	UserID           uuid.UUID  `json:"user_id"`
+	UserName         *string    `json:"user_name,omitempty"`
+	CountryCode      *string    `json:"country_code,omitempty"`
+	Phone            *string    `json:"phone,omitempty"`
+	UserCreatedAt    *time.Time `json:"user_created_at,omitempty"`
+	PosterCount      int64      `json:"poster_count"`
+	LastGenerationAt *time.Time `json:"last_generation_at,omitempty"`
+}
+
+// PaginatedUserPosterStatsResponse represents paginated user poster stats response
+type PaginatedUserPosterStatsResponse struct {
+	Data       []UserPosterStatsResponse `json:"data"`
+	Page       int                       `json:"page"`
+	PageSize   int                       `json:"page_size"`
+	Total      int64                     `json:"total"`
+	TotalPages int                       `json:"total_pages"`
+	NextPage   *int                      `json:"next_page"`
+	PrevPage   *int                      `json:"prev_page"`
+}

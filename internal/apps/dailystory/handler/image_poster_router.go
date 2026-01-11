@@ -7,5 +7,6 @@ func RegisterImagePosterRoutes(router *gin.RouterGroup, handler *ImagePosterHand
 	posters := router.Group("/dailystory/posters")
 	{
 		posters.POST("/generate", handler.GeneratePoster)
+		posters.GET("/user-stats", handler.GetUserPosterStats)
 	}
 }
