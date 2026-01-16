@@ -41,7 +41,7 @@ jobs:
           DB_SSL_MODE: ${{ secrets.DB_SSL_MODE }}
         run: |
           cd cron-jobs
-          go run send_push_notification.go dailystory
+          go run send_push_notification.go DailyStoryApp
 
       - name: Notify on failure
         if: failure()
