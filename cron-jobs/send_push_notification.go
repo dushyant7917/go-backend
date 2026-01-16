@@ -17,7 +17,7 @@ import (
 // Configuration - Update these values as needed
 const (
 	MessageTitle = "आपके लिए नई स्टोरी तैयार है!"
-	MessageBody  = "रेलवे का बढ़िया फैसला है! अब हर ट्रेन का अनाउंसमेंट होगा - रुके या न रुके। पूरे देश के स्टेशनों पर दुर्घटनाएं कम होंगी"
+	MessageBody  = "नये पोस्टर्स शेयर करें और अपनी एक अलग पहचान बनाएं!"
 )
 
 func main() {
