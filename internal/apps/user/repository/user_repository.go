@@ -115,35 +115,18 @@ func (r *userRepository) FindByAppWithPushToken(appName string) ([]models.User, 
 
 // GetUserCountByDay retrieves user count grouped by day for the last n days with pagination
 func (r *userRepository) GetUserCountByDay(appName string, days, page, pageSize int) ([]models.UserDailyCountResponse, int64, error) {
-	var results []models.UserDailyCountResponse
-	var total int64
+	results := []models.UserDailyCountResponse{}
+	total := int64(days)
 
-	// Get total count of distinct dates
-	var countResult []struct {
-		Count int64
-	}
-	countQuery := r.db.Table("users").
-		Select("COUNT(DISTINCT DATE(created_at)) as count").
-		Where("app_name = ? AND created_at >= CURRENT_DATE - INTERVAL '1 day' * ? AND deleted_at IS NULL", appName, days-1)
-	if err := countQuery.Scan(&countResult).Error; err != nil {
-		return nil, 0, err
-	}
-	if len(countResult) > 0 {
-		total = countResult[0].Count
-	}
-
-	// Query to get user counts for each day with pagination
+	// Query to get user counts for each day with pagination including days with zero signups
 	offset := (page - 1) * pageSize
-	err := r.db.Table("users").
-		Select(`
-			DATE(created_at) as date,
-			COUNT(id) as user_count
-		`).
-		Where("app_name = ? AND created_at >= CURRENT_DATE - INTERVAL '1 day' * ? AND deleted_at IS NULL", appName, days-1).
-		Group("DATE(created_at)").
-		Order("date DESC").
-		Offset(offset).
+	err := r.db.Table("(SELECT generate_series(CURRENT_DATE - (INTERVAL '1 day' * (? - 1)), CURRENT_DATE, '1 day'::interval)::date AS date) AS ds", days).
+		Select("ds.date::text as date, COUNT(u.id) as user_count").
+		Joins("LEFT JOIN users u ON DATE(u.created_at) = ds.date AND u.app_name = ? AND u.deleted_at IS NULL", appName).
+		Group("ds.date").
+		Order("ds.date DESC").
 		Limit(pageSize).
+		Offset(offset).
 		Scan(&results).Error
 
 	if err != nil {
