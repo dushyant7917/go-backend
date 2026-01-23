@@ -19,12 +19,12 @@ import (
 	"go-backend/internal/apps/dailystory/repository"
 	userModels "go-backend/internal/apps/user/models"
 	userRepository "go-backend/internal/apps/user/repository"
+	"go-backend/pkg/fonts"
 	"go-backend/pkg/storage"
 
 	"github.com/fogleman/gg"
 	"github.com/golang/freetype/truetype"
 	"github.com/google/uuid"
-	"golang.org/x/image/font/gofont/goregular"
 	"gorm.io/gorm"
 )
 
@@ -398,10 +398,10 @@ func (s *imagePosterService) createPosterImage(
 		dc.DrawRectangle(topLeftX, topLeftY, width, height)
 		dc.Fill()
 
-		// Load font
-		font, err := truetype.Parse(goregular.TTF)
+		// Load font with Hindi/Devanagari support
+		font, err := fonts.LoadMultilingualFont()
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to parse font: %w", err)
+			return nil, "", fmt.Errorf("failed to load font: %w", err)
 		}
 
 		// Calculate optimal font size that fits the text within the rectangle
