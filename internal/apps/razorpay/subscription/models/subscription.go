@@ -130,3 +130,9 @@ type CheckAuthenticationStatusResponse struct {
 	HasAuthenticated bool   `json:"has_authenticated"`
 	Phone            string `json:"phone"`
 }
+
+// SubscriptionStatusResponse represents the combined response for subscription status
+type SubscriptionStatusResponse struct {
+	Active           bool `json:"active"`
+	HasAuthenticated bool `json:"has_authenticated"`
+}

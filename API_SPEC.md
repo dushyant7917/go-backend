@@ -1235,6 +1235,64 @@ curl -X GET "{backend_url}/subscriptions/check-authentication?phone=1234567890&a
 }
 ```
 
+### 9. Get Subscription Status (Combined)
+
+**Endpoint:** `GET {backend_url}/subscriptions/status`
+
+**Description:** Returns subscription active status and authentication history in a single API call. This endpoint uses concurrent goroutines to fetch both pieces of information efficiently. The `active` field is `true` if the latest subscription status is either `active` or `authenticated`, otherwise `false`.
+
+**Request:**
+
+```bash
+curl -X GET '{backend_url}/subscriptions/status?phone=1234567890&app_name=krush_connect'
+```
+
+**Query Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| phone | string | Yes | Phone number |
+| app_name | string | Yes | Application name |
+
+**Response (active subscription):**
+
+```json
+{
+  "data": {
+    "active": true,
+    "has_authenticated": true
+  }
+}
+```
+
+**Response (no active subscription):**
+
+```json
+{
+  "data": {
+    "active": false,
+    "has_authenticated": false
+  }
+}
+```
+
+**Response (previously authenticated but not active):**
+
+```json
+{
+  "data": {
+    "active": false,
+    "has_authenticated": true
+  }
+}
+```
+
+**Use Cases:**
+
+- Checking if user has an active subscription on app launch
+- Determining if user needs to create or renew a subscription
+- Showing whether user has previously had access to premium features
+- Gating premium content based on active subscription status
+
 ---
 
 ## DailyStory - Image Templates

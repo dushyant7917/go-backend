@@ -27,6 +27,9 @@ func RegisterSubscriptionRoutes(router *gin.RouterGroup, handler *SubscriptionHa
 		// Get subscription by Razorpay subscription ID
 		subscriptions.GET("/razorpay/:razorpay_id", handler.GetSubscriptionByRazorpayID)
 
+		// Get combined subscription status (latest subscription + authentication check)
+		subscriptions.GET("/status", handler.GetSubscriptionStatus)
+
 		// Cancel subscription
 		subscriptions.POST("/:id/cancel", handler.CancelSubscription)
 	}

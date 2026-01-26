@@ -32,6 +32,7 @@ type SubscriptionService interface {
 	GetLatestSubscriptionByPhoneAndApp(phone string, appName string) (*models.SubscriptionResponse, error)
 	CancelSubscription(id uuid.UUID) error
 	CheckAuthenticationStatus(phone string, appName string) (*models.CheckAuthenticationStatusResponse, error)
+	GetSubscriptionStatus(phone string, appName string) (*models.SubscriptionStatusResponse, error)
 }
 
 // subscriptionService implements SubscriptionService interface
@@ -726,5 +727,72 @@ func (s *subscriptionService) CheckAuthenticationStatus(phone string, appName st
 	return &models.CheckAuthenticationStatusResponse{
 		HasAuthenticated: hasAuthenticated,
 		Phone:            phone,
+	}, nil
+}
+
+// GetSubscriptionStatus fetches both latest subscription and authentication status concurrently
+func (s *subscriptionService) GetSubscriptionStatus(phone string, appName string) (*models.SubscriptionStatusResponse, error) {
+	type latestSubResult struct {
+		subscription *models.Subscription
+		err          error
+	}
+
+	type authStatusResult struct {
+		hasAuthenticated bool
+		err              error
+	}
+
+	// Channels to receive results from goroutines
+	latestSubChan := make(chan latestSubResult, 1)
+	authStatusChan := make(chan authStatusResult, 1)
+
+	// Fetch latest subscription in a goroutine
+	go func() {
+		subscription, err := s.repo.FindByPhoneAndAppName(phone, appName)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				latestSubChan <- latestSubResult{subscription: nil, err: nil}
+				return
+			}
+			latestSubChan <- latestSubResult{subscription: nil, err: err}
+			return
+		}
+		latestSubChan <- latestSubResult{subscription: subscription, err: nil}
+	}()
+
+	// Check authentication status in a goroutine
+	go func() {
+		hasAuthenticated, err := s.repo.HasAuthenticatedSubscriptionByPhone(phone, appName)
+		if err != nil {
+			authStatusChan <- authStatusResult{hasAuthenticated: false, err: err}
+			return
+		}
+		authStatusChan <- authStatusResult{hasAuthenticated: hasAuthenticated, err: nil}
+	}()
+
+	// Wait for both goroutines to complete
+	latestSubRes := <-latestSubChan
+	authStatusRes := <-authStatusChan
+
+	// Check for errors
+	if latestSubRes.err != nil {
+		return nil, fmt.Errorf("failed to fetch latest subscription: %w", latestSubRes.err)
+	}
+
+	if authStatusRes.err != nil {
+		return nil, fmt.Errorf("failed to check authentication status: %w", authStatusRes.err)
+	}
+
+	// Determine if subscription is active based on status
+	active := false
+	if latestSubRes.subscription != nil {
+		status := latestSubRes.subscription.Status
+		active = status == models.SubscriptionStatusActive || status == models.SubscriptionStatusAuthenticated
+	}
+
+	// Build response
+	return &models.SubscriptionStatusResponse{
+		Active:           active,
+		HasAuthenticated: authStatusRes.hasAuthenticated,
 	}, nil
 }

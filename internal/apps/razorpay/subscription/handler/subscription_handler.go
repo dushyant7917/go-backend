@@ -223,3 +223,27 @@ func (h *SubscriptionHandler) CheckAuthenticationStatus(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"data": response})
 }
+
+// GetSubscriptionStatus handles GET /api/v1/subscriptions/status
+// Returns both latest subscription and authentication status in a single call
+func (h *SubscriptionHandler) GetSubscriptionStatus(c *gin.Context) {
+	phone := c.Query("phone")
+	if phone == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "phone number is required"})
+		return
+	}
+
+	appName := c.Query("app_name")
+	if appName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "app_name is required"})
+		return
+	}
+
+	response, err := h.service.GetSubscriptionStatus(phone, appName)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": response})
+}
