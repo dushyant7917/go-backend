@@ -172,28 +172,10 @@ func (s *subscriptionService) CreateCheckoutURL(req models.CreateSubscriptionReq
 			initialChargeAmountPaise/100, firstChargeDelayDays, planPeriod)
 	}
 
-	// Create or fetch Razorpay customer first
-	// Google Pay requires customer_id to be present for UPI Autopay
-	customerData := map[string]interface{}{
-		"name":          "", // Can be empty initially
-		"email":         req.Email,
-		"contact":       "+91" + strings.TrimPrefix(req.Phone, "+91"),
-		"fail_existing": "0", // Return existing customer if phone/email already exists
-	}
-
-	razorpayCustomer, err := razorpayClient.Customer.Create(customerData, nil)
-	if err != nil {
-		fmt.Printf("[CreateCheckoutURL ERROR] Failed to create/fetch customer: %v\n", err)
-		return nil, fmt.Errorf("failed to create razorpay customer: %w", err)
-	}
-
-	customerID := razorpayCustomer["id"].(string)
-	fmt.Printf("[CreateCheckoutURL] Customer created/fetched: %s\n", customerID)
-
-	// Prepare subscription data with customer_id
+	// Prepare subscription data - do NOT include customer_id initially
+	// Customer will be linked automatically after authorization payment
 	subscriptionData := map[string]interface{}{
 		"plan_id":         planID,
-		"customer_id":     customerID,
 		"quantity":        1,
 		"customer_notify": false,
 	}
@@ -277,13 +259,10 @@ func (s *subscriptionService) CreateCheckoutURL(req models.CreateSubscriptionReq
 	shortURL := razorpaySub["short_url"].(string)
 	status := razorpaySub["status"].(string)
 
-	// Extract customer_id from subscription response
-	// This should now always be present since we created/fetched customer before subscription
-	var finalCustomerID string
+	// Extract customer_id if available (will be populated after authorization)
+	var customerID string
 	if custID, ok := razorpaySub["customer_id"].(string); ok {
-		finalCustomerID = custID
-	} else {
-		finalCustomerID = customerID // Fallback to the one we created
+		customerID = custID
 	}
 
 	// Get plan details to extract amount
@@ -312,7 +291,7 @@ func (s *subscriptionService) CreateCheckoutURL(req models.CreateSubscriptionReq
 		Phone:                  req.Phone,
 		Email:                  req.Email,
 		RazorpaySubscriptionID: razorpaySubID,
-		RazorpayCustomerID:     finalCustomerID,
+		RazorpayCustomerID:     customerID,
 		RazorpayPlanID:         razorpayPlanID,
 		Status:                 models.SubscriptionStatus(status),
 		Amount:                 amount,
@@ -435,6 +414,7 @@ func (s *subscriptionService) HandleWebhook(payload []byte, signature string) er
 
 	if razorpaySubID == "" {
 		fmt.Printf("[Webhook ERROR] Could not extract subscription ID from payload\n")
+		fmt.Printf("[Webhook ERROR] Event type: %s\n", eventType)
 		fmt.Printf("[Webhook ERROR] Payload data: %+v\n", payloadData)
 		return errors.New("subscription ID not found in webhook payload")
 	}
