@@ -172,10 +172,28 @@ func (s *subscriptionService) CreateCheckoutURL(req models.CreateSubscriptionReq
 			initialChargeAmountPaise/100, firstChargeDelayDays, planPeriod)
 	}
 
-	// Prepare subscription data - do NOT include customer_id initially
-	// Customer will be linked automatically after authorization payment
+	// Create or fetch Razorpay customer first
+	// Google Pay requires customer_id to be present for UPI Autopay
+	customerData := map[string]interface{}{
+		"name":          "", // Can be empty initially
+		"email":         req.Email,
+		"contact":       "+91" + strings.TrimPrefix(req.Phone, "+91"),
+		"fail_existing": "0", // Return existing customer if phone/email already exists
+	}
+
+	razorpayCustomer, err := razorpayClient.Customer.Create(customerData, nil)
+	if err != nil {
+		fmt.Printf("[CreateCheckoutURL ERROR] Failed to create/fetch customer: %v\n", err)
+		return nil, fmt.Errorf("failed to create razorpay customer: %w", err)
+	}
+
+	customerID := razorpayCustomer["id"].(string)
+	fmt.Printf("[CreateCheckoutURL] Customer created/fetched: %s\n", customerID)
+
+	// Prepare subscription data with customer_id
 	subscriptionData := map[string]interface{}{
 		"plan_id":         planID,
+		"customer_id":     customerID,
 		"quantity":        1,
 		"customer_notify": false,
 	}
@@ -259,10 +277,13 @@ func (s *subscriptionService) CreateCheckoutURL(req models.CreateSubscriptionReq
 	shortURL := razorpaySub["short_url"].(string)
 	status := razorpaySub["status"].(string)
 
-	// Extract customer_id if available (will be populated after authorization)
-	var customerID string
+	// Extract customer_id from subscription response
+	// This should now always be present since we created/fetched customer before subscription
+	var finalCustomerID string
 	if custID, ok := razorpaySub["customer_id"].(string); ok {
-		customerID = custID
+		finalCustomerID = custID
+	} else {
+		finalCustomerID = customerID // Fallback to the one we created
 	}
 
 	// Get plan details to extract amount
@@ -291,7 +312,7 @@ func (s *subscriptionService) CreateCheckoutURL(req models.CreateSubscriptionReq
 		Phone:                  req.Phone,
 		Email:                  req.Email,
 		RazorpaySubscriptionID: razorpaySubID,
-		RazorpayCustomerID:     customerID,
+		RazorpayCustomerID:     finalCustomerID,
 		RazorpayPlanID:         razorpayPlanID,
 		Status:                 models.SubscriptionStatus(status),
 		Amount:                 amount,
@@ -370,15 +391,29 @@ func (s *subscriptionService) VerifyPayment(req models.VerifyPaymentRequest) (*m
 
 // HandleWebhook handles Razorpay webhook events
 func (s *subscriptionService) HandleWebhook(payload []byte, signature string) error {
+	fmt.Printf("[Webhook] ========== New Webhook Request ==========\n")
+	fmt.Printf("[Webhook] Signature: %s\n", signature)
+	fmt.Printf("[Webhook] Payload length: %d bytes\n", len(payload))
+
 	// Parse webhook payload first to extract subscription info
 	var event map[string]interface{}
 	if err := json.Unmarshal(payload, &event); err != nil {
+		fmt.Printf("[Webhook ERROR] Failed to parse JSON payload: %v\n", err)
+		fmt.Printf("[Webhook ERROR] Raw payload: %s\n", string(payload))
 		return fmt.Errorf("failed to parse webhook payload: %w", err)
 	}
 
-	eventType := event["event"].(string)
-	payloadData := event["payload"].(map[string]interface{})
-	fmt.Printf("Webhook event received: %s\n", eventType)
+	eventType, ok := event["event"].(string)
+	if !ok {
+		fmt.Printf("[Webhook ERROR] Missing or invalid 'event' field in payload\n")
+		return errors.New("invalid webhook payload: missing event type")
+	}
+	payloadData, ok := event["payload"].(map[string]interface{})
+	if !ok {
+		fmt.Printf("[Webhook ERROR] Missing or invalid 'payload' field\n")
+		return errors.New("invalid webhook payload: missing payload data")
+	}
+	fmt.Printf("[Webhook] Event type: %s\n", eventType)
 
 	// Extract razorpay_subscription_id to fetch client configuration
 	var razorpaySubID string
@@ -387,63 +422,142 @@ func (s *subscriptionService) HandleWebhook(payload []byte, signature string) er
 			if id, ok := entity["id"].(string); ok {
 				razorpaySubID = id
 				status, _ := entity["status"].(string)
-				fmt.Printf("Subscription entity: id=%s status=%s\n", id, status)
+				fmt.Printf("[Webhook] Subscription entity: id=%s status=%s\n", id, status)
+			} else {
+				fmt.Printf("[Webhook ERROR] Subscription ID field exists but is not a string\n")
 			}
+		} else {
+			fmt.Printf("[Webhook ERROR] Subscription entity field missing or invalid\n")
 		}
+	} else {
+		fmt.Printf("[Webhook ERROR] Subscription wrapper missing in payload\n")
 	}
 
 	if razorpaySubID == "" {
+		fmt.Printf("[Webhook ERROR] Could not extract subscription ID from payload\n")
+		fmt.Printf("[Webhook ERROR] Payload data: %+v\n", payloadData)
 		return errors.New("subscription ID not found in webhook payload")
 	}
 
 	// Fetch subscription to get razorpay_config_id
+	fmt.Printf("[Webhook] Fetching subscription from database: %s\n", razorpaySubID)
 	subscription, err := s.repo.FindByRazorpaySubscriptionID(razorpaySubID)
 	if err != nil {
+		fmt.Printf("[Webhook ERROR] Failed to find subscription in database: %v\n", err)
+		fmt.Printf("[Webhook ERROR] Razorpay subscription ID: %s\n", razorpaySubID)
 		return fmt.Errorf("failed to find subscription: %w", err)
 	}
+	fmt.Printf("[Webhook] Found subscription in database: ID=%s, Status=%s\n", subscription.ID, subscription.Status)
 
 	// Get razorpay config
+	fmt.Printf("[Webhook] Fetching Razorpay config: %s\n", subscription.RazorpayConfigID)
 	config, err := s.configRepo.FindByID(subscription.RazorpayConfigID)
 	if err != nil {
+		fmt.Printf("[Webhook ERROR] Failed to find Razorpay config: %v\n", err)
+		fmt.Printf("[Webhook ERROR] Config ID: %s\n", subscription.RazorpayConfigID)
 		return fmt.Errorf("failed to find razorpay config: %w", err)
 	}
+	fmt.Printf("[Webhook] Using config: AppName=%s, Environment=%s\n", config.AppName, config.Environment)
 
 	// Verify webhook signature using config's webhook secret
+	fmt.Printf("[Webhook] Verifying webhook signature...\n")
 	if !s.verifyWebhookSignature(payload, signature, config.RazorpayWebhookSecret) {
-		fmt.Printf("Webhook signature verification failed. signature=%s\n", signature)
+		fmt.Printf("[Webhook ERROR] Signature verification failed\n")
+		fmt.Printf("[Webhook ERROR] Received signature: %s\n", signature)
+		fmt.Printf("[Webhook ERROR] Payload (first 200 chars): %s\n", string(payload[:min(200, len(payload))]))
 		return errors.New("invalid webhook signature")
 	}
+	fmt.Printf("[Webhook] Signature verified successfully\n")
 
 	// Log payment info if present
 	if payWrap, ok := payloadData["payment"].(map[string]interface{}); ok {
 		if entity, ok := payWrap["entity"].(map[string]interface{}); ok {
 			pid, _ := entity["id"].(string)
 			pstatus, _ := entity["status"].(string)
-			fmt.Printf("Payment entity: id=%s status=%s\n", pid, pstatus)
+			pmethod, _ := entity["method"].(string)
+			fmt.Printf("[Webhook] Payment entity: id=%s status=%s method=%s\n", pid, pstatus, pmethod)
 		}
+	} else {
+		fmt.Printf("[Webhook] No payment entity in webhook payload\n")
 	}
+
 	// Handle different event types
+	fmt.Printf("[Webhook] Dispatching to event handler: %s\n", eventType)
 	switch eventType {
 	case "subscription.authenticated":
-		return s.handleSubscriptionAuthenticated(payloadData)
+		err := s.handleSubscriptionAuthenticated(payloadData)
+		if err != nil {
+			fmt.Printf("[Webhook ERROR] handleSubscriptionAuthenticated failed: %v\n", err)
+			return err
+		}
+		fmt.Printf("[Webhook] Successfully processed subscription.authenticated\n")
+		return nil
 	case "subscription.activated":
-		return s.handleSubscriptionActivated(payloadData)
+		err := s.handleSubscriptionActivated(payloadData)
+		if err != nil {
+			fmt.Printf("[Webhook ERROR] handleSubscriptionActivated failed: %v\n", err)
+			return err
+		}
+		fmt.Printf("[Webhook] Successfully processed subscription.activated\n")
+		return nil
 	case "subscription.charged":
-		return s.handleSubscriptionCharged(payloadData)
+		err := s.handleSubscriptionCharged(payloadData)
+		if err != nil {
+			fmt.Printf("[Webhook ERROR] handleSubscriptionCharged failed: %v\n", err)
+			return err
+		}
+		fmt.Printf("[Webhook] Successfully processed subscription.charged\n")
+		return nil
 	case "subscription.pending":
-		return s.handleSubscriptionPending(payloadData)
+		err := s.handleSubscriptionPending(payloadData)
+		if err != nil {
+			fmt.Printf("[Webhook ERROR] handleSubscriptionPending failed: %v\n", err)
+			return err
+		}
+		fmt.Printf("[Webhook] Successfully processed subscription.pending\n")
+		return nil
 	case "subscription.halted":
-		return s.handleSubscriptionHalted(payloadData)
+		err := s.handleSubscriptionHalted(payloadData)
+		if err != nil {
+			fmt.Printf("[Webhook ERROR] handleSubscriptionHalted failed: %v\n", err)
+			return err
+		}
+		fmt.Printf("[Webhook] Successfully processed subscription.halted\n")
+		return nil
 	case "subscription.cancelled":
-		return s.handleSubscriptionCancelled(payloadData)
+		err := s.handleSubscriptionCancelled(payloadData)
+		if err != nil {
+			fmt.Printf("[Webhook ERROR] handleSubscriptionCancelled failed: %v\n", err)
+			return err
+		}
+		fmt.Printf("[Webhook] Successfully processed subscription.cancelled\n")
+		return nil
 	case "subscription.completed":
-		return s.handleSubscriptionCompleted(payloadData)
+		err := s.handleSubscriptionCompleted(payloadData)
+		if err != nil {
+			fmt.Printf("[Webhook ERROR] handleSubscriptionCompleted failed: %v\n", err)
+			return err
+		}
+		fmt.Printf("[Webhook] Successfully processed subscription.completed\n")
+		return nil
 	case "subscription.paused":
-		return s.handleSubscriptionPaused(payloadData)
+		err := s.handleSubscriptionPaused(payloadData)
+		if err != nil {
+			fmt.Printf("[Webhook ERROR] handleSubscriptionPaused failed: %v\n", err)
+			return err
+		}
+		fmt.Printf("[Webhook] Successfully processed subscription.paused\n")
+		return nil
 	case "subscription.resumed":
-		return s.handleSubscriptionResumed(payloadData)
+		err := s.handleSubscriptionResumed(payloadData)
+		if err != nil {
+			fmt.Printf("[Webhook ERROR] handleSubscriptionResumed failed: %v\n", err)
+			return err
+		}
+		fmt.Printf("[Webhook] Successfully processed subscription.resumed\n")
+		return nil
 	default:
-		// Log unknown event type but don't error
+		fmt.Printf("[Webhook] Unknown event type (ignoring): %s\n", eventType)
 		return nil
 	}
 }
@@ -537,6 +651,14 @@ func (s *subscriptionService) verifyWebhookSignature(payload []byte, signature, 
 	mac.Write(payload)
 	expectedMAC := hex.EncodeToString(mac.Sum(nil))
 	return hmac.Equal([]byte(signature), []byte(expectedMAC))
+}
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // handleSubscriptionAuthenticated handles subscription.authenticated event
