@@ -1,0 +1,37 @@
+package handler
+
+import (
+	"net/http"
+
+	"go-backend/internal/apps/agora/chat/models"
+	"go-backend/internal/apps/agora/chat/service"
+
+	"github.com/gin-gonic/gin"
+)
+
+// ChatHandler handles HTTP requests for chat operations
+type ChatHandler struct {
+	service service.ChatService
+}
+
+// NewChatHandler creates a new instance of ChatHandler
+func NewChatHandler(service service.ChatService) *ChatHandler {
+	return &ChatHandler{service: service}
+}
+
+// GenerateChatToken handles POST /api/v1/agora/chat/token
+func (h *ChatHandler) GenerateChatToken(c *gin.Context) {
+	var req models.GenerateChatTokenRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	resp, err := h.service.GenerateChatToken(req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{"data": resp})
+}

@@ -1993,3 +1993,187 @@ Paginated endpoints return:
 - `total_pages`: Total number of pages
 - `next_page`: Next page number (null if last page)
 - `prev_page`: Previous page number (null if first page)
+
+---
+
+## Agora Chat Integration
+
+### Generate Chat Token
+
+**Endpoint:** `POST {backend_url}/agora/chat/token`
+
+**Description:** Generates a new Agora chat token for a user. The token is valid for 24 hours and is not stored in the database.
+
+**Request:**
+
+```bash
+curl -X POST '{backend_url}/agora/chat/token' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user_id": "550e8400-e29b-41d4-a716-446655440000"
+  }'
+```
+
+**Request Body:**
+
+```json
+{
+  "user_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+**Request Parameters:**
+
+- `user_id` (required): UUID of the user requesting the token
+- `app_name` (optional): Name of the application for tracking purposes
+- `agora_uid` (optional): Custom Agora user identifier. If not provided, defaults to `user_id`
+
+**Response:**
+
+```json
+{
+  "data": {
+    "user_id": "550e8400-e29b-41d4-a716-446655440000",
+    "agora_uid": "550e8400-e29b-41d4-a716-446655440000",
+    "token": "007:your_app_id:signature:550e8400-e29b-41d4-a716-446655440000:1706227200",
+    "expires_at": "2026-01-28T12:00:00Z",
+    "created_at": "2026-01-27T12:00:00Z"
+  }
+}
+```
+
+**Response Fields:**
+
+- `user_id`: UUID of the user
+- `app_name`: Application name (if provided in request)
+- `agora_uid`: Agora user identifier (defaults to `user_id` if not provided in request)
+- `token`: Generated Agora chat token (use this for Agora SDK authentication)
+- `expires_at`: Token expiration timestamp (24 hours from creation)
+- `created_at`: Token creation timestamp
+
+**Error Responses:**
+
+```json
+{
+  "error": "Key: 'GenerateChatTokenRequest.UserID' Error:Field validation for 'UserID' failed on the 'required' tag"
+}
+```
+
+```json
+{
+  "error": "Agora credentials not configured"
+}
+```
+
+**Status Codes:**
+
+- `201 Created`: Token generated successfully
+- `400 Bad Request`: Invalid request body or missing required fields
+- `500 Internal Server Error`: Server error or Agora credentials not configured
+
+---
+
+## Environment Variables
+
+To use the Agora chat integration, add the following environment variables:
+
+```bash
+# Agora.io Configuration
+AGORA_APP_ID=your_agora_app_id
+AGORA_APP_CERTIFICATE=your_agora_app_certificate
+```
+
+**Notes:**
+
+- Tokens are valid for 24 hours from generation
+- Tokens are generated on-demand and not stored in the database
+- The `agora_uid` is optional and defaults to `user_id` if not provided
+- Voice call token generation will be available in the `voicecall` sub-package (coming soon)
+
+---
+
+## Stream Chat Integration
+
+### Generate Chat Token
+
+**Endpoint:** `POST {backend_url}/stream/chat/token`
+
+**Description:** Generates a new Stream chat token. The token is valid for 24 hours and is not stored in the database.
+
+**Request:**
+
+```bash
+curl -X POST '{backend_url}/stream/chat/token' \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+```
+
+**Request Body (all fields optional):**
+
+```json
+{
+  "user_id": "custom_user_id"
+}
+```
+
+**Request Parameters:**
+
+- `user_id` (optional): Custom user identifier. If not provided, a UUID will be generated
+
+**Response:**
+
+```json
+{
+  "data": {
+    "user_id": "550e8400-e29b-41d4-a716-446655440000",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNTUwZTg0MDAtZTI5Yi00MWQ0LWE3MTYtNDQ2NjU1NDQwMDAwIiwiZXhwIjoxNzA2MjI3MjAwfQ.signature",
+    "expires_at": "2026-01-28T12:00:00Z",
+    "created_at": "2026-01-27T12:00:00Z"
+  }
+}
+```
+
+**Response Fields:**
+
+- `user_id`: User identifier (generated UUID or provided custom ID)
+- `token`: Generated Stream chat token (JWT format)
+- `expires_at`: Token expiration timestamp (24 hours from creation)
+- `created_at`: Token creation timestamp
+
+**Error Responses:**
+
+```json
+{
+  "error": "Stream credentials not configured"
+}
+```
+
+**Status Codes:**
+
+- `201 Created`: Token generated successfully
+- `400 Bad Request`: Invalid request body
+- `500 Internal Server Error`: Server error or Stream credentials not configured
+
+---
+
+## Environment Variables
+
+To use the Agora and Stream integrations, add the following environment variables:
+
+```bash
+# Agora.io Configuration
+AGORA_APP_ID=your_agora_app_id
+AGORA_APP_CERTIFICATE=your_agora_app_certificate
+
+# Stream Configuration
+STREAM_API_KEY=your_stream_api_key
+STREAM_API_SECRET=your_stream_api_secret
+```
+
+**Notes:**
+
+- All tokens are valid for 24 hours from generation
+- Tokens are generated on-demand and not stored in the database
+- Stream: `user_id` is optional and auto-generated if not provided
+- Agora: `agora_uid` is optional and defaults to `user_id` if not provided
+- Call token generation will be available in both platforms (coming soon)

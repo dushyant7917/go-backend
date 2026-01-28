@@ -4,6 +4,8 @@ import (
 	"log"
 	"os"
 
+	agoraChatHandler "go-backend/internal/apps/agora/chat/handler"
+	agoraChatService "go-backend/internal/apps/agora/chat/service"
 	crushHandler "go-backend/internal/apps/crush/handler"
 	crushRepository "go-backend/internal/apps/crush/repository"
 	crushService "go-backend/internal/apps/crush/service"
@@ -19,9 +21,14 @@ import (
 	razorpayHandler "go-backend/internal/apps/razorpay/subscription/handler"
 	razorpayRepository "go-backend/internal/apps/razorpay/subscription/repository"
 	razorpayService "go-backend/internal/apps/razorpay/subscription/service"
+	streamChatHandler "go-backend/internal/apps/stream/chat/handler"
+	streamChatService "go-backend/internal/apps/stream/chat/service"
 	userHandler "go-backend/internal/apps/user/handler"
 	userRepository "go-backend/internal/apps/user/repository"
 	userService "go-backend/internal/apps/user/service"
+	wingwomanHandler "go-backend/internal/apps/wingwoman/handler"
+	wingwomanRepository "go-backend/internal/apps/wingwoman/repository"
+	wingwomanService "go-backend/internal/apps/wingwoman/service"
 	"go-backend/internal/common/database"
 	"go-backend/internal/common/middleware"
 	"go-backend/pkg/storage"
@@ -128,6 +135,19 @@ func main() {
 	imagePosterSvc := dailystoryService.NewImagePosterService(imagePosterRepo, imageTemplateRepo, userRepo, r2Client)
 	imagePosterH := dailystoryHandler.NewImagePosterHandler(imagePosterSvc)
 
+	// Initialize WingWoman dependencies
+	helperRepo := wingwomanRepository.NewHelperRepository(db)
+	helperSvc := wingwomanService.NewHelperService(helperRepo)
+	helperH := wingwomanHandler.NewHelperHandler(helperSvc)
+
+	// Initialize Agora Chat dependencies
+	chatSvc := agoraChatService.NewChatService()
+	chatH := agoraChatHandler.NewChatHandler(chatSvc)
+
+	// Initialize Stream Chat dependencies
+	streamChatSvc := streamChatService.NewChatService()
+	streamChatH := streamChatHandler.NewChatHandler(streamChatSvc)
+
 	// Setup Gin router
 	ginMode := getEnv("GIN_MODE", "release")
 	gin.SetMode(ginMode)
@@ -170,6 +190,15 @@ func main() {
 		dailystoryHandler.RegisterImageTemplateRoutes(v1, imageTemplateH)
 		dailystoryHandler.RegisterProfilePictureRoutes(v1, profilePictureH)
 		dailystoryHandler.RegisterImagePosterRoutes(v1, imagePosterH)
+
+		// Register WingWoman routes
+		wingwomanHandler.RegisterWingWomanRoutes(v1, helperH)
+
+		// Register Agora routes
+		agoraChatHandler.RegisterChatRoutes(v1, chatH)
+
+		// Register Stream routes
+		streamChatHandler.RegisterChatRoutes(v1, streamChatH)
 
 		// Future apps can register their routes here
 		// Example: handler.RegisterUserRoutes(v1, userHandler)
