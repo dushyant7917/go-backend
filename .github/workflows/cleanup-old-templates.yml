@@ -2,8 +2,8 @@ name: Cleanup Old Templates
 
 on:
   schedule:
-    # Runs at 3:30 AM IST (10:00 PM UTC previous day) every day
-    - cron: "0 22 * * *"
+    # Runs at 3:30 AM IST (10:00 PM UTC previous day) every Monday
+    - cron: "0 22 * * 1"
   workflow_dispatch: # Allows manual triggering
 
 jobs:

@@ -2,8 +2,8 @@ name: Cleanup Old Posters
 
 on:
   schedule:
-    # Runs at 4:00 AM IST (10:30 PM UTC previous day) every day
-    - cron: "30 22 * * *"
+    # Runs at 4:00 AM IST (10:30 PM UTC previous day) every Monday
+    - cron: "30 22 * * 1"
   workflow_dispatch: # Allows manual triggering
 
 jobs:
