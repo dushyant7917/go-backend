@@ -44,8 +44,8 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_DS_TEMPLATES_BUCKET_NAME: ${{ secrets.R2_DS_TEMPLATES_BUCKET_NAME }}
         run: |
-          cd cron-jobs
-          go run cleanup_old_templates.go 14
+          cd cron-jobs/cleanup_old_templates
+          go run main.go 14
 
       - name: Notify on failure
         if: failure()

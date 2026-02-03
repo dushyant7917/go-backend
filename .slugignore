@@ -1,0 +1,5 @@
+cron-jobs/cleanup_orphan_profile_pictures/
+cron-jobs/cleanup_old_templates/
+cron-jobs/cleanup_old_posters/
+cron-jobs/cleanup_rejected_templates/
+cron-jobs/send_push_notification/

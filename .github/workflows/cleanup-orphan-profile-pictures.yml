@@ -44,8 +44,8 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_DS_USERS_BUCKET_NAME: ${{ secrets.R2_DS_USERS_BUCKET_NAME }}
         run: |
-          cd cron-jobs
-          go run cleanup_orphan_profile_pictures.go
+          cd cron-jobs/cleanup_orphan_profile_pictures
+          go run main.go
 
       - name: Notify on failure
         if: failure()
