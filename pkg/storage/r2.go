@@ -212,3 +212,8 @@ func (r *R2Client) DeleteFile(bucketName, fileKey string) error {
 
 	return nil
 }
+
+// GetClient returns the underlying S3 client for advanced operations
+func (r *R2Client) GetClient() *s3.Client {
+	return r.client
+}

@@ -58,6 +58,74 @@ go build -o cron-jobs/push_notifier cron-jobs/send_push_notification.go
 2026/01/04 16:30:01 [2026-01-04 16:30:01]   Success: 45, Failed: 2, Total: 47
 ```
 
+### Cleanup Orphaned Profile Pictures Script
+
+**File:** `cleanup_orphan_profile_pictures.go`
+
+Scans the R2 bucket for profile pictures that are no longer assigned to any user in the DailyStoryApp. The script identifies orphaned files by comparing all profile pictures in the R2 bucket against the `profile_picture_key` field in users' metadata.
+
+#### What It Does
+
+1. Connects to the database and fetches all DailyStoryApp users
+2. Extracts all active `profile_picture_key` values from user metadata
+3. Lists all objects in the R2 bucket with `profile-pictures/` prefix
+4. Identifies files that are NOT referenced by any user
+5. Outputs a list of orphaned files (does not delete them)
+
+#### Usage
+
+```bash
+# Run directly with go run
+go run cron-jobs/cleanup_orphan_profile_pictures.go
+
+# Or compile once and use the binary (recommended for production)
+go build -o cron-jobs/cleanup_orphan_profile_pics cron-jobs/cleanup_orphan_profile_pictures.go
+./cron-jobs/cleanup_orphan_profile_pics
+```
+
+#### Environment Variables
+
+**Database Configuration:**
+
+- `DB_HOST` - Database host (default: `localhost`)
+- `DB_PORT` - Database port (default: `5432`)
+- `DB_USER` - Database user (default: `postgres`)
+- `DB_PASSWORD` - Database password (default: empty)
+- `DB_NAME` - Database name (default: `gobackend`)
+- `DB_SSL_MODE` - SSL mode (default: `disable`)
+
+**R2 Storage Configuration:**
+
+- `R2_ACCOUNT_ID` - Cloudflare R2 account ID (required)
+- `R2_ACCESS_KEY_ID` - R2 access key ID (required)
+- `R2_SECRET_ACCESS_KEY` - R2 secret access key (required)
+- `R2_DS_USERS_BUCKET_NAME` - Bucket name for DailyStory users (required)
+
+#### Output Example
+
+```
+2026/02/03 22:54:00 [2026-02-03 22:54:00] Starting orphaned profile pictures cleanup for DailyStoryApp
+2026/02/03 22:54:00 Database connection established successfully
+2026/02/03 22:54:00 [2026-02-03 22:54:00] ✓ Database connected successfully
+2026/02/03 22:54:00 [2026-02-03 22:54:00] ✓ R2 client initialized successfully
+2026/02/03 22:54:00 [2026-02-03 22:54:00] Using bucket: dailystory-users
+2026/02/03 22:54:01 [2026-02-03 22:54:01] Found 1523 users in DailyStoryApp
+2026/02/03 22:54:01 [2026-02-03 22:54:01] Found 1402 active profile picture keys in database
+2026/02/03 22:54:02 Scanned 1450 total objects in bucket with prefix 'profile-pictures/'
+2026/02/03 22:54:02 [2026-02-03 22:54:02] ⚠ Found 48 orphaned profile pictures:
+2026/02/03 22:54:02 [2026-02-03 22:54:02]   1. profile-pictures/user_123_old.jpg
+2026/02/03 22:54:02 [2026-02-03 22:54:02]   2. profile-pictures/deleted_user_456.jpg
+2026/02/03 22:54:02 [2026-02-03 22:54:02] ✓ Cleanup scan completed successfully
+2026/02/03 22:54:02 [2026-02-03 22:54:02] Note: This script only identifies orphaned files. To delete them, extend the script or manually remove.
+```
+
+#### Important Notes
+
+- This script **ONLY IDENTIFIES** orphaned files - it does not delete them
+- Run this periodically to monitor storage usage
+- Review the output before manually deleting files
+- Consider extending the script to automatically delete files older than a certain threshold
+
 ## Setting Up Cron Jobs
 
 ### 1. Edit Crontab

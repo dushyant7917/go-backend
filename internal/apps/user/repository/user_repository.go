@@ -18,6 +18,7 @@ type UserRepository interface {
 	UpdateWithTransaction(fn func(txRepo UserRepository) error) error
 	FindByAppWithPushToken(appName string) ([]models.User, error)
 	GetUserCountByDay(appName string, days, page, pageSize int) ([]models.UserDailyCountResponse, int64, error)
+	FindByApp(appName string) ([]models.User, error)
 }
 
 // userRepository implements UserRepository
@@ -134,4 +135,13 @@ func (r *userRepository) GetUserCountByDay(appName string, days, page, pageSize 
 	}
 
 	return results, total, nil
+}
+
+// FindByApp retrieves all users by app name
+func (r *userRepository) FindByApp(appName string) ([]models.User, error) {
+	var users []models.User
+	if err := r.db.Where("app_name = ?", appName).Find(&users).Error; err != nil {
+		return nil, err
+	}
+	return users, nil
 }

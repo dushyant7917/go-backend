@@ -32,6 +32,14 @@
 # Send notification at 9 AM, 2 PM, and 7 PM daily
 0 9,14,19 * * * cd /Users/dushyant7917/D7/go-backend && DB_HOST=localhost DB_PASSWORD=yourpass go run cron-jobs/send_push_notification.go dailystory
 
+# ----- Cleanup Orphaned Profile Pictures Examples -----
+
+# Run cleanup scan every Sunday at 2:00 AM
+0 2 * * 0 cd /Users/dushyant7917/D7/go-backend && DB_HOST=localhost DB_PASSWORD=yourpass R2_ACCOUNT_ID=your_account_id R2_ACCESS_KEY_ID=your_key R2_SECRET_ACCESS_KEY=your_secret R2_DS_USERS_BUCKET_NAME=dailystory-users go run cron-jobs/cleanup_orphan_profile_pictures.go >> /var/log/cleanup-orphans.log 2>&1
+
+# Run cleanup scan on the 1st of every month at 3:00 AM (using compiled binary)
+0 3 1 * * cd /Users/dushyant7917/D7/go-backend && DB_HOST=localhost DB_PASSWORD=yourpass R2_ACCOUNT_ID=your_account_id R2_ACCESS_KEY_ID=your_key R2_SECRET_ACCESS_KEY=your_secret R2_DS_USERS_BUCKET_NAME=dailystory-users ./cron-jobs/cleanup_orphan_profile_pics >> /var/log/cleanup-orphans.log 2>&1
+
 # ----- Production Configuration -----
 # For production, use the production database credentials:
 # 0 9 * * * cd /Users/dushyant7917/D7/go-backend && DB_HOST=prod-db.example.com DB_USER=produser DB_PASSWORD=yourpass DB_NAME=production go run cron-jobs/send_push_notification.go dailystory
