@@ -26,8 +26,10 @@ type TextConfig struct {
 
 // TemplateConfig represents the config JSONB field structure
 type TemplateConfig struct {
-	Face *FaceConfig `json:"face,omitempty"`
-	Name *TextConfig `json:"name,omitempty"`
+	Face   *FaceConfig `json:"face,omitempty"`
+	Name   *TextConfig `json:"name,omitempty"`
+	Phone  *TextConfig `json:"phone,omitempty"`
+	Detail *TextConfig `json:"detail,omitempty"`
 }
 
 // Scan implements the sql.Scanner interface for TemplateConfig
