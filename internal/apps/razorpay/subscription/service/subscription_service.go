@@ -11,10 +11,12 @@ import (
 	"sync"
 	"time"
 
+	metaDatasetRepository "go-backend/internal/apps/metadataset/config/repository"
 	clientModels "go-backend/internal/apps/razorpay/config/models"
 	"go-backend/internal/apps/razorpay/config/repository"
 	"go-backend/internal/apps/razorpay/subscription/models"
 	razorpayRepository "go-backend/internal/apps/razorpay/subscription/repository"
+	"go-backend/pkg/notification"
 	"go-backend/pkg/utils"
 
 	"github.com/google/uuid"
@@ -37,21 +39,26 @@ type SubscriptionService interface {
 
 // subscriptionService implements SubscriptionService interface
 type subscriptionService struct {
-	repo        razorpayRepository.SubscriptionRepository
-	configRepo  repository.RazorpayConfigRepository
-	clientCache map[string]*razorpay.Client // Cache Razorpay clients by app_name:environment
-	cacheMutex  sync.RWMutex                // Protect concurrent access to cache
+	repo              razorpayRepository.SubscriptionRepository
+	configRepo        repository.RazorpayConfigRepository
+	metaDatasetRepo   metaDatasetRepository.MetaDatasetConfigRepository
+	clientCache       map[string]*razorpay.Client     // Cache Razorpay clients by app_name:environment
+	cacheMutex        sync.RWMutex                    // Protect concurrent access to cache
+	metaDatasetClient *notification.MetaDatasetClient // Meta dataset client for conversion tracking
 }
 
 // NewSubscriptionService creates a new instance of SubscriptionService
 func NewSubscriptionService(
 	repo razorpayRepository.SubscriptionRepository,
 	configRepo repository.RazorpayConfigRepository,
+	metaDatasetRepo metaDatasetRepository.MetaDatasetConfigRepository,
 ) SubscriptionService {
 	return &subscriptionService{
-		repo:        repo,
-		configRepo:  configRepo,
-		clientCache: make(map[string]*razorpay.Client),
+		repo:              repo,
+		configRepo:        configRepo,
+		metaDatasetRepo:   metaDatasetRepo,
+		clientCache:       make(map[string]*razorpay.Client),
+		metaDatasetClient: notification.NewMetaDatasetClient(),
 	}
 }
 
@@ -728,7 +735,15 @@ func (s *subscriptionService) handleSubscriptionCharged(payload map[string]inter
 		subscription.Status = models.SubscriptionStatusActive
 	}
 
-	return s.repo.Update(subscription)
+	// Update subscription in database first
+	if err := s.repo.Update(subscription); err != nil {
+		return err
+	}
+
+	// Send Meta dataset Subscribe event (non-blocking)
+	go s.sendMetaDatasetSubscribeEvent(subscription, payload)
+
+	return nil
 }
 
 // handleSubscriptionPending handles subscription.pending event
@@ -897,4 +912,85 @@ func (s *subscriptionService) GetSubscriptionStatus(phone string, appName string
 		Active:           active,
 		HasAuthenticated: authStatusRes.hasAuthenticated,
 	}, nil
+}
+
+// sendMetaDatasetSubscribeEvent sends a Subscribe event to Meta via Conversions API (dataset_id)
+// This function is called asynchronously and should not block the webhook handler
+func (s *subscriptionService) sendMetaDatasetSubscribeEvent(subscription *models.Subscription, payload map[string]interface{}) {
+	fmt.Printf("[Meta Dataset] Processing Subscribe event for subscription: %s\n", subscription.ID)
+
+	// Get Meta dataset config based on app_name and environment
+	env := utils.GetEnv("GO_ENV", "local")
+	metaConfig, err := s.metaDatasetRepo.FindByAppNameAndEnv(subscription.AppName, env)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			fmt.Printf("[Meta Dataset] No meta dataset config found for app: %s, environment: %s. Skipping event.\n", subscription.AppName, env)
+		} else {
+			fmt.Printf("[Meta Dataset ERROR] Failed to get meta dataset config: %v\n", err)
+		}
+		return
+	}
+
+	if !metaConfig.IsActive {
+		fmt.Printf("[Meta Dataset] Meta dataset config is inactive for app: %s. Skipping event.\n", subscription.AppName)
+		return
+	}
+
+	if metaConfig.DatasetID == "" {
+		fmt.Printf("[Meta Dataset ERROR] dataset_id is empty for app: %s, environment: %s\n", subscription.AppName, env)
+		return
+	}
+
+	// Extract payment information from webhook payload
+	var paymentID string
+	if payWrap, ok := payload["payment"].(map[string]interface{}); ok {
+		if entity, ok := payWrap["entity"].(map[string]interface{}); ok {
+			if pid, ok := entity["id"].(string); ok {
+				paymentID = pid
+			}
+		}
+	}
+
+	// Convert amount from paise to rupees (Meta expects decimal currency value)
+	value := float64(subscription.Amount) / 100.0
+
+	// Prepare event data
+	eventData := notification.SubscriptionEventData{
+		DatasetID:    metaConfig.DatasetID,
+		AccessToken:  metaConfig.AccessToken,
+		EventName:    "SubscriptionCharged",
+		EventTime:    time.Now().Unix(),
+		ActionSource: "other",
+		UserData: notification.UserData{
+			Phone:      notification.HashPhone(subscription.Phone),
+			ExternalID: subscription.UserID.String(),
+		},
+		CustomData: notification.CustomData{
+			Currency:    subscription.Currency,
+			Value:       value,
+			ContentName: fmt.Sprintf("%s Subscription", subscription.AppName),
+			ContentType: "product",
+			Contents: []notification.Content{
+				{
+					ID:       subscription.RazorpayPlanID,
+					Quantity: 1,
+					Price:    value,
+				},
+			},
+		},
+	}
+
+	// Add event ID for deduplication if payment ID is available
+	if paymentID != "" {
+		eventData.EventID = notification.GenerateEventID(paymentID, eventData.EventTime)
+	}
+
+	// Send event to Meta Conversions API
+	if err := s.metaDatasetClient.SendSubscriptionEvent(eventData); err != nil {
+		fmt.Printf("[Meta Dataset ERROR] Failed to send Subscribe event: %v\n", err)
+		return
+	}
+
+	fmt.Printf("[Meta Dataset] Successfully sent Subscribe event for subscription %s (%.2f %s) to dataset_id %s\n",
+		subscription.ID, value, subscription.Currency, metaConfig.DatasetID)
 }

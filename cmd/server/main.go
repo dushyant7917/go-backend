@@ -12,6 +12,7 @@ import (
 	dailystoryHandler "go-backend/internal/apps/dailystory/handler"
 	dailystoryRepository "go-backend/internal/apps/dailystory/repository"
 	dailystoryService "go-backend/internal/apps/dailystory/service"
+	metaDatasetRepository "go-backend/internal/apps/metadataset/config/repository"
 	otpHandler "go-backend/internal/apps/otp/handler"
 	otpRepository "go-backend/internal/apps/otp/repository"
 	otpService "go-backend/internal/apps/otp/service"
@@ -71,10 +72,14 @@ func main() {
 	configSvc := configService.NewRazorpayConfigService(configRepo)
 	configH := configHandler.NewRazorpayConfigHandler(configSvc)
 
+	// Initialize Meta dataset dependencies
+	metaDatasetRepo := metaDatasetRepository.NewMetaDatasetConfigRepository(db)
+
 	subscriptionRepo := razorpayRepository.NewSubscriptionRepository(db)
 	subscriptionService := razorpayService.NewSubscriptionService(
 		subscriptionRepo,
 		configRepo,
+		metaDatasetRepo,
 	)
 	subscriptionHandler := razorpayHandler.NewSubscriptionHandler(subscriptionService)
 
