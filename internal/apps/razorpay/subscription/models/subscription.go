@@ -149,10 +149,14 @@ type DailySubscriptionStats struct {
 
 // SubscriptionStatsResponse represents the paginated response for subscription statistics
 type SubscriptionStatsResponse struct {
-	Stats        []DailySubscriptionStats `json:"stats"`
-	TotalRevenue float64                  `json:"total_revenue"` // Total revenue across all N days in rupees
-	TotalPages   int                      `json:"total_pages"`
-	TotalDays    int                      `json:"total_days"`
-	CurrentPage  int                      `json:"current_page"`
-	PageSize     int                      `json:"page_size"`
+	Stats              []DailySubscriptionStats `json:"stats"`
+	TotalRevenue       float64                  `json:"total_revenue"`       // Total revenue across all N days in rupees
+	TotalCreated       int                      `json:"total_created"`       // Total subscriptions created across all N days
+	TotalAuthenticated int                      `json:"total_authenticated"` // Total authenticated across all N days
+	TotalCancelled     int                      `json:"total_cancelled"`     // Total cancelled across all N days
+	TotalActive        int                      `json:"total_active"`        // Total active across all N days
+	TotalPages         int                      `json:"total_pages"`
+	TotalDays          int                      `json:"total_days"`
+	CurrentPage        int                      `json:"current_page"`
+	PageSize           int                      `json:"page_size"`
 }

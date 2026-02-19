@@ -1066,12 +1066,21 @@ func (s *subscriptionService) GetSubscriptionStats(appName string, days int, pag
 	// Convert map to sorted slice (descending by date)
 	var allStats []models.DailySubscriptionStats
 	totalRevenue := 0.0
+	totalCreated := 0
+	totalAuthenticated := 0
+	totalCancelled := 0
+	totalActive := 0
+
 	for i := 0; i < days; i++ {
 		date := now.AddDate(0, 0, -i)
 		dateStr := date.Format("2006-01-02")
 		if stats, exists := dateStatsMap[dateStr]; exists {
 			allStats = append(allStats, *stats)
 			totalRevenue += stats.Revenue
+			totalCreated += stats.CreatedCount
+			totalAuthenticated += stats.AuthCount
+			totalCancelled += stats.CancelledCount
+			totalActive += stats.ActiveCount
 		}
 	}
 
@@ -1095,11 +1104,15 @@ func (s *subscriptionService) GetSubscriptionStats(appName string, days int, pag
 	paginatedStats := allStats[start:end]
 
 	return &models.SubscriptionStatsResponse{
-		Stats:        paginatedStats,
-		TotalRevenue: totalRevenue,
-		TotalPages:   totalPages,
-		TotalDays:    totalDays,
-		CurrentPage:  page,
-		PageSize:     pageSize,
+		Stats:              paginatedStats,
+		TotalRevenue:       totalRevenue,
+		TotalCreated:       totalCreated,
+		TotalAuthenticated: totalAuthenticated,
+		TotalCancelled:     totalCancelled,
+		TotalActive:        totalActive,
+		TotalPages:         totalPages,
+		TotalDays:          totalDays,
+		CurrentPage:        page,
+		PageSize:           pageSize,
 	}, nil
 }
