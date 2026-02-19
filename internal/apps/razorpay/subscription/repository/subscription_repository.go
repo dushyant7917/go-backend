@@ -168,13 +168,16 @@ func (r *subscriptionRepository) HasAuthenticatedSubscriptionByPhone(phone strin
 }
 
 // GetStatsByAppName retrieves subscriptions for the last N days for a given app_name
+// Fetches subscriptions where either created_at or updated_at is within the date range
 func (r *subscriptionRepository) GetStatsByAppName(appName string, days int) ([]models.Subscription, error) {
 	var subscriptions []models.Subscription
 
 	// Calculate date range (last N days)
 	startDate := time.Now().AddDate(0, 0, -days).Truncate(24 * time.Hour)
 
-	err := r.db.Where("app_name = ? AND created_at >= ?", appName, startDate).
+	// Fetch subscriptions where either created_at or updated_at is within range
+	// This ensures we capture both creation metrics and revenue metrics correctly
+	err := r.db.Where("app_name = ? AND (created_at >= ? OR updated_at >= ?)", appName, startDate, startDate).
 		Order("created_at DESC").
 		Find(&subscriptions).Error
 
