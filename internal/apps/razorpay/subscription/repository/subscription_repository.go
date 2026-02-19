@@ -2,6 +2,7 @@ package repository
 
 import (
 	"go-backend/internal/apps/razorpay/subscription/models"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -20,6 +21,7 @@ type SubscriptionRepository interface {
 	FindAll(limit, offset int) ([]models.Subscription, int64, error)
 	FindByAppName(appName string, limit, offset int) ([]models.Subscription, int64, error)
 	HasAuthenticatedSubscriptionByPhone(phone string, appName string) (bool, error)
+	GetStatsByAppName(appName string, days int) ([]models.Subscription, error)
 }
 
 // subscriptionRepository implements SubscriptionRepository interface
@@ -163,4 +165,22 @@ func (r *subscriptionRepository) HasAuthenticatedSubscriptionByPhone(phone strin
 		return false, err
 	}
 	return count > 0, nil
+}
+
+// GetStatsByAppName retrieves subscriptions for the last N days for a given app_name
+func (r *subscriptionRepository) GetStatsByAppName(appName string, days int) ([]models.Subscription, error) {
+	var subscriptions []models.Subscription
+
+	// Calculate date range (last N days)
+	startDate := time.Now().AddDate(0, 0, -days).Truncate(24 * time.Hour)
+
+	err := r.db.Where("app_name = ? AND created_at >= ?", appName, startDate).
+		Order("created_at DESC").
+		Find(&subscriptions).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return subscriptions, nil
 }

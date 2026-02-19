@@ -35,6 +35,7 @@ type SubscriptionService interface {
 	CancelSubscription(id uuid.UUID) error
 	CheckAuthenticationStatus(phone string, appName string) (*models.CheckAuthenticationStatusResponse, error)
 	GetSubscriptionStatus(phone string, appName string) (*models.SubscriptionStatusResponse, error)
+	GetSubscriptionStats(appName string, days int, page int, pageSize int) (*models.SubscriptionStatsResponse, error)
 }
 
 // subscriptionService implements SubscriptionService interface
@@ -993,4 +994,112 @@ func (s *subscriptionService) sendMetaDatasetSubscribeEvent(subscription *models
 
 	fmt.Printf("[Meta Dataset] Successfully sent Subscribe event for subscription %s (%.2f %s) to dataset_id %s\n",
 		subscription.ID, value, subscription.Currency, metaConfig.DatasetID)
+}
+
+// GetSubscriptionStats returns subscription statistics for the last N days with pagination
+func (s *subscriptionService) GetSubscriptionStats(appName string, days int, page int, pageSize int) (*models.SubscriptionStatsResponse, error) {
+	// Validate input
+	if days <= 0 {
+		return nil, errors.New("days must be greater than 0")
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 30 // Default page size
+	}
+
+	// Fetch all subscriptions for the last N days
+	subscriptions, err := s.repo.GetStatsByAppName(appName, days)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch subscriptions: %w", err)
+	}
+
+	// Create a map to group subscriptions by date
+	dateStatsMap := make(map[string]*models.DailySubscriptionStats)
+
+	// Initialize stats for each day in the range (in descending order)
+	now := time.Now().Truncate(24 * time.Hour)
+	for i := 0; i < days; i++ {
+		date := now.AddDate(0, 0, -i)
+		dateStr := date.Format("2006-01-02")
+		dateStatsMap[dateStr] = &models.DailySubscriptionStats{
+			Date:           dateStr,
+			CreatedCount:   0,
+			AuthCount:      0,
+			CancelledCount: 0,
+			ActiveCount:    0,
+			Revenue:        0.0,
+		}
+	}
+
+	// Process each subscription and calculate statistics
+	for _, sub := range subscriptions {
+		// Count subscriptions by created_at date
+		createdDateStr := sub.CreatedAt.Truncate(24 * time.Hour).Format("2006-01-02")
+		if stats, exists := dateStatsMap[createdDateStr]; exists {
+			// All subscriptions are created
+			stats.CreatedCount++
+
+			// Count by current status
+			switch sub.Status {
+			case models.SubscriptionStatusAuthenticated:
+				stats.AuthCount++
+			case models.SubscriptionStatusActive:
+				stats.ActiveCount++
+			case models.SubscriptionStatusCancelled:
+				stats.CancelledCount++
+			}
+		}
+
+		// Calculate revenue based on updated_at date when status became active
+		if sub.Status == models.SubscriptionStatusActive && sub.Amount > 0 {
+			updatedDateStr := sub.UpdatedAt.Truncate(24 * time.Hour).Format("2006-01-02")
+			if updatedStats, exists := dateStatsMap[updatedDateStr]; exists {
+				// Add amount (1 × amount) to revenue for the day it became active
+				revenue := float64(sub.Amount) / 100.0
+				updatedStats.Revenue += revenue
+			}
+		}
+	}
+
+	// Convert map to sorted slice (descending by date)
+	var allStats []models.DailySubscriptionStats
+	totalRevenue := 0.0
+	for i := 0; i < days; i++ {
+		date := now.AddDate(0, 0, -i)
+		dateStr := date.Format("2006-01-02")
+		if stats, exists := dateStatsMap[dateStr]; exists {
+			allStats = append(allStats, *stats)
+			totalRevenue += stats.Revenue
+		}
+	}
+
+	// Calculate pagination
+	totalDays := len(allStats)
+	totalPages := (totalDays + pageSize - 1) / pageSize
+	if totalPages == 0 {
+		totalPages = 1
+	}
+
+	// Paginate the results
+	start := (page - 1) * pageSize
+	end := start + pageSize
+	if start > len(allStats) {
+		start = len(allStats)
+	}
+	if end > len(allStats) {
+		end = len(allStats)
+	}
+
+	paginatedStats := allStats[start:end]
+
+	return &models.SubscriptionStatsResponse{
+		Stats:        paginatedStats,
+		TotalRevenue: totalRevenue,
+		TotalPages:   totalPages,
+		TotalDays:    totalDays,
+		CurrentPage:  page,
+		PageSize:     pageSize,
+	}, nil
 }

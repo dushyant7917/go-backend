@@ -136,3 +136,23 @@ type SubscriptionStatusResponse struct {
 	Active           bool `json:"active"`
 	HasAuthenticated bool `json:"has_authenticated"`
 }
+
+// DailySubscriptionStats represents subscription statistics for a single day
+type DailySubscriptionStats struct {
+	Date           string  `json:"date"` // Format: YYYY-MM-DD
+	CreatedCount   int     `json:"created_count"`
+	AuthCount      int     `json:"authenticated_count"`
+	CancelledCount int     `json:"cancelled_count"`
+	ActiveCount    int     `json:"active_count"`
+	Revenue        float64 `json:"revenue"` // Revenue in rupees
+}
+
+// SubscriptionStatsResponse represents the paginated response for subscription statistics
+type SubscriptionStatsResponse struct {
+	Stats        []DailySubscriptionStats `json:"stats"`
+	TotalRevenue float64                  `json:"total_revenue"` // Total revenue across all N days in rupees
+	TotalPages   int                      `json:"total_pages"`
+	TotalDays    int                      `json:"total_days"`
+	CurrentPage  int                      `json:"current_page"`
+	PageSize     int                      `json:"page_size"`
+}

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -240,6 +241,54 @@ func (h *SubscriptionHandler) GetSubscriptionStatus(c *gin.Context) {
 	}
 
 	response, err := h.service.GetSubscriptionStatus(phone, appName)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": response})
+}
+
+// GetSubscriptionStats handles GET /api/v1/subscriptions/stats
+// Returns subscription statistics for last N days grouped by date with pagination
+func (h *SubscriptionHandler) GetSubscriptionStats(c *gin.Context) {
+	appName := c.Query("app_name")
+	if appName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "app_name is required"})
+		return
+	}
+
+	// Parse days parameter (required)
+	daysStr := c.Query("days")
+	if daysStr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "days parameter is required"})
+		return
+	}
+	days := 0
+	if _, err := fmt.Sscanf(daysStr, "%d", &days); err != nil || days <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "days must be a positive integer"})
+		return
+	}
+
+	// Parse pagination parameters (optional, with defaults)
+	page := 1
+	if pageStr := c.Query("page"); pageStr != "" {
+		if _, err := fmt.Sscanf(pageStr, "%d", &page); err != nil || page < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "page must be a positive integer"})
+			return
+		}
+	}
+
+	pageSize := 30
+	if pageSizeStr := c.Query("page_size"); pageSizeStr != "" {
+		if _, err := fmt.Sscanf(pageSizeStr, "%d", &pageSize); err != nil || pageSize < 1 || pageSize > 100 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "page_size must be between 1 and 100"})
+			return
+		}
+	}
+
+	// Get statistics from service
+	response, err := h.service.GetSubscriptionStats(appName, days, page, pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

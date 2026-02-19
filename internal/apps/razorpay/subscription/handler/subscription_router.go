@@ -30,6 +30,9 @@ func RegisterSubscriptionRoutes(router *gin.RouterGroup, handler *SubscriptionHa
 		// Get combined subscription status (latest subscription + authentication check)
 		subscriptions.GET("/status", handler.GetSubscriptionStatus)
 
+		// Get subscription statistics for last N days
+		subscriptions.GET("/stats", handler.GetSubscriptionStats)
+
 		// Cancel subscription
 		subscriptions.POST("/:id/cancel", handler.CancelSubscription)
 	}
