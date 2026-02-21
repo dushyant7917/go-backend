@@ -694,7 +694,15 @@ func (s *subscriptionService) handleSubscriptionAuthenticated(payload map[string
 		subscription.Status = models.SubscriptionStatus(rzpStatus)
 	}
 
-	return s.repo.Update(subscription)
+	// Update subscription in database first
+	if err := s.repo.Update(subscription); err != nil {
+		return err
+	}
+
+	// Send Meta dataset SubscriptionAuthenticated event (non-blocking)
+	go s.sendMetaDatasetAuthenticatedEvent(subscription, payload)
+
+	return nil
 }
 
 // handleSubscriptionActivated handles subscription.activated event
@@ -785,7 +793,15 @@ func (s *subscriptionService) handleSubscriptionCancelled(payload map[string]int
 		subscription.EndAt = &t
 	}
 
-	return s.repo.Update(subscription)
+	// Update subscription in database first
+	if err := s.repo.Update(subscription); err != nil {
+		return err
+	}
+
+	// Send Meta dataset SubscriptionCancelled event (non-blocking)
+	go s.sendMetaDatasetCancelledEvent(subscription, payload)
+
+	return nil
 }
 
 // handleSubscriptionCompleted handles subscription.completed event
@@ -993,6 +1009,142 @@ func (s *subscriptionService) sendMetaDatasetSubscribeEvent(subscription *models
 	}
 
 	fmt.Printf("[Meta Dataset] Successfully sent Subscribe event for subscription %s (%.2f %s) to dataset_id %s\n",
+		subscription.ID, value, subscription.Currency, metaConfig.DatasetID)
+}
+
+// sendMetaDatasetAuthenticatedEvent sends SubscriptionAuthenticated event to Meta Conversions API
+func (s *subscriptionService) sendMetaDatasetAuthenticatedEvent(subscription *models.Subscription, payload map[string]interface{}) {
+	fmt.Printf("[Meta Dataset] Processing SubscriptionAuthenticated event for subscription: %s\n", subscription.ID)
+
+	// Get Meta dataset config based on app_name and environment
+	env := utils.GetEnv("GO_ENV", "local")
+	metaConfig, err := s.metaDatasetRepo.FindByAppNameAndEnv(subscription.AppName, env)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			fmt.Printf("[Meta Dataset] No meta dataset config found for app: %s, environment: %s. Skipping event.\n", subscription.AppName, env)
+		} else {
+			fmt.Printf("[Meta Dataset ERROR] Failed to get meta dataset config: %v\n", err)
+		}
+		return
+	}
+
+	if !metaConfig.IsActive {
+		fmt.Printf("[Meta Dataset] Meta dataset config is inactive for app: %s. Skipping event.\n", subscription.AppName)
+		return
+	}
+
+	if metaConfig.DatasetID == "" {
+		fmt.Printf("[Meta Dataset ERROR] dataset_id is empty for app: %s, environment: %s\n", subscription.AppName, env)
+		return
+	}
+
+	// Convert amount from paise to rupees (Meta expects decimal currency value)
+	value := float64(subscription.Amount) / 100.0
+
+	// Prepare event data
+	eventData := notification.SubscriptionEventData{
+		DatasetID:    metaConfig.DatasetID,
+		AccessToken:  metaConfig.AccessToken,
+		EventName:    "SubscriptionAuthenticated",
+		EventTime:    time.Now().Unix(),
+		ActionSource: "other",
+		UserData: notification.UserData{
+			Phone:      notification.HashPhone(subscription.Phone),
+			ExternalID: subscription.UserID.String(),
+		},
+		CustomData: notification.CustomData{
+			Currency:    subscription.Currency,
+			Value:       value,
+			ContentName: fmt.Sprintf("%s Subscription", subscription.AppName),
+			ContentType: "product",
+			Contents: []notification.Content{
+				{
+					ID:       subscription.RazorpayPlanID,
+					Quantity: 1,
+					Price:    value,
+				},
+			},
+		},
+	}
+
+	// Add event ID for deduplication using subscription ID
+	eventData.EventID = notification.GenerateEventID(subscription.RazorpaySubscriptionID, eventData.EventTime)
+
+	// Send event to Meta Conversions API
+	if err := s.metaDatasetClient.SendSubscriptionEvent(eventData); err != nil {
+		fmt.Printf("[Meta Dataset ERROR] Failed to send SubscriptionAuthenticated event: %v\n", err)
+		return
+	}
+
+	fmt.Printf("[Meta Dataset] Successfully sent SubscriptionAuthenticated event for subscription %s (%.2f %s) to dataset_id %s\n",
+		subscription.ID, value, subscription.Currency, metaConfig.DatasetID)
+}
+
+// sendMetaDatasetCancelledEvent sends SubscriptionCancelled event to Meta Conversions API
+func (s *subscriptionService) sendMetaDatasetCancelledEvent(subscription *models.Subscription, payload map[string]interface{}) {
+	fmt.Printf("[Meta Dataset] Processing SubscriptionCancelled event for subscription: %s\n", subscription.ID)
+
+	// Get Meta dataset config based on app_name and environment
+	env := utils.GetEnv("GO_ENV", "local")
+	metaConfig, err := s.metaDatasetRepo.FindByAppNameAndEnv(subscription.AppName, env)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			fmt.Printf("[Meta Dataset] No meta dataset config found for app: %s, environment: %s. Skipping event.\n", subscription.AppName, env)
+		} else {
+			fmt.Printf("[Meta Dataset ERROR] Failed to get meta dataset config: %v\n", err)
+		}
+		return
+	}
+
+	if !metaConfig.IsActive {
+		fmt.Printf("[Meta Dataset] Meta dataset config is inactive for app: %s. Skipping event.\n", subscription.AppName)
+		return
+	}
+
+	if metaConfig.DatasetID == "" {
+		fmt.Printf("[Meta Dataset ERROR] dataset_id is empty for app: %s, environment: %s\n", subscription.AppName, env)
+		return
+	}
+
+	// Convert amount from paise to rupees (Meta expects decimal currency value)
+	value := float64(subscription.Amount) / 100.0
+
+	// Prepare event data
+	eventData := notification.SubscriptionEventData{
+		DatasetID:    metaConfig.DatasetID,
+		AccessToken:  metaConfig.AccessToken,
+		EventName:    "SubscriptionCancelled",
+		EventTime:    time.Now().Unix(),
+		ActionSource: "other",
+		UserData: notification.UserData{
+			Phone:      notification.HashPhone(subscription.Phone),
+			ExternalID: subscription.UserID.String(),
+		},
+		CustomData: notification.CustomData{
+			Currency:    subscription.Currency,
+			Value:       value,
+			ContentName: fmt.Sprintf("%s Subscription", subscription.AppName),
+			ContentType: "product",
+			Contents: []notification.Content{
+				{
+					ID:       subscription.RazorpayPlanID,
+					Quantity: 1,
+					Price:    value,
+				},
+			},
+		},
+	}
+
+	// Add event ID for deduplication using subscription ID
+	eventData.EventID = notification.GenerateEventID(subscription.RazorpaySubscriptionID, eventData.EventTime)
+
+	// Send event to Meta Conversions API
+	if err := s.metaDatasetClient.SendSubscriptionEvent(eventData); err != nil {
+		fmt.Printf("[Meta Dataset ERROR] Failed to send SubscriptionCancelled event: %v\n", err)
+		return
+	}
+
+	fmt.Printf("[Meta Dataset] Successfully sent SubscriptionCancelled event for subscription %s (%.2f %s) to dataset_id %s\n",
 		subscription.ID, value, subscription.Currency, metaConfig.DatasetID)
 }
 
