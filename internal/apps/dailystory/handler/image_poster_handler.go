@@ -3,9 +3,15 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	"go-backend/internal/apps/dailystory/models"
 	"go-backend/internal/apps/dailystory/service"
+	"go-backend/pkg/storage"
+	"go-backend/pkg/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -13,19 +19,21 @@ import (
 
 // ImagePosterHandler handles HTTP requests for image poster operations
 type ImagePosterHandler struct {
-	service service.ImagePosterService
+	service  service.ImagePosterService
+	r2Client *storage.R2Client
 }
 
 // NewImagePosterHandler creates a new instance of ImagePosterHandler
-func NewImagePosterHandler(service service.ImagePosterService) *ImagePosterHandler {
+func NewImagePosterHandler(service service.ImagePosterService, r2Client *storage.R2Client) *ImagePosterHandler {
 	return &ImagePosterHandler{
-		service: service,
+		service:  service,
+		r2Client: r2Client,
 	}
 }
 
-// GeneratePoster handles POST /api/v1/dailystory/posters/generate
-func (h *ImagePosterHandler) GeneratePoster(c *gin.Context) {
-	var req models.GeneratePosterRequest
+// CreatePoster handles POST /api/v1/dailystory/posters
+func (h *ImagePosterHandler) CreatePoster(c *gin.Context) {
+	var req models.CreatePosterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -41,24 +49,74 @@ func (h *ImagePosterHandler) GeneratePoster(c *gin.Context) {
 		return
 	}
 
-	resp, err := h.service.GeneratePoster(req.TemplateID, req.UserID)
+	poster, err := h.service.CreatePoster(&req)
 	if err != nil {
-		status := http.StatusInternalServerError
-		errMsg := err.Error()
-
-		// Handle specific error cases
-		if errMsg == "user not found" || errMsg == "template not found" {
-			status = http.StatusNotFound
-		} else if errMsg == "user does not have a profile picture" ||
-			errMsg == "template does not have complete configuration" {
-			status = http.StatusBadRequest
-		}
-
-		c.JSON(status, gin.H{"error": errMsg})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": resp})
+	c.JSON(http.StatusCreated, gin.H{"data": poster})
+}
+
+// GetPosterUploadURL handles POST /api/v1/dailystory/posters/upload-url
+func (h *ImagePosterHandler) GetPosterUploadURL(c *gin.Context) {
+	var req struct {
+		Filename string `json:"filename" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Validate filename
+	if strings.TrimSpace(req.Filename) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "filename cannot be empty"})
+		return
+	}
+
+	// Extract file extension and name without extension
+	ext := filepath.Ext(req.Filename)
+	if ext == "" {
+		ext = ".png" // Default to PNG
+	}
+	filenameWithoutExt := strings.TrimSuffix(req.Filename, ext)
+
+	// Get content type dynamically based on extension
+	contentType := utils.GetContentTypeFromExtension(ext)
+
+	// Validate extension is an image type
+	if !strings.HasPrefix(contentType, "image/") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "only image files are supported"})
+		return
+	}
+
+	// Generate file key in format: images/<filename_without_extension>_<timestamp>.<extension>
+	timestamp := time.Now().UTC().Unix()
+	fileKey := fmt.Sprintf("images/%s_%d%s", filenameWithoutExt, timestamp, ext)
+
+	// Get bucket name from environment
+	bucketName := os.Getenv("R2_DS_POSTERS_BUCKET_NAME")
+	if bucketName == "" {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "R2 bucket configuration missing"})
+		return
+	}
+
+	// Generate presigned upload URL (valid for 5 minutes)
+	presignedURL, err := h.r2Client.GetPresignedUploadURL(bucketName, fileKey, contentType, 5)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate upload URL"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"presigned_url": presignedURL,
+		"file_key":      fileKey,
+		"upload_headers": gin.H{
+			"Content-Type": contentType,
+		},
+		"instructions": fmt.Sprintf("MUST send Content-Type: %s header when uploading. The presigned URL signature requires this exact header.", contentType),
+	})
 }
 
 // GetUserPosterStats handles GET /api/v1/dailystory/posters/user-stats

@@ -1713,97 +1713,120 @@ curl -X GET "{backend_url}/dailystory/profile-picture/view-url?file_key=profile-
 
 ## DailyStory - Image Posters
 
-### 1. Generate Poster
+### 1. Get Upload URL for Poster
 
-**Endpoint:** `POST {backend_url}/dailystory/posters/generate`
+**Endpoint:** `POST {backend_url}/dailystory/posters/upload-url`
 
-**Description:** Generates a personalized poster by combining an image template with user's profile picture and name. Returns a cached poster URL if one already exists for the same combination of user, template, name, and profile picture.
+**Description:** Generates a presigned URL for uploading a poster image to R2. Use this when generating posters on the client side.
 
 **Request:**
 
 ```bash
-curl -X POST {backend_url}/dailystory/posters/generate \
+curl -X POST {backend_url}/dailystory/posters/upload-url \
   -H "Content-Type: application/json" \
   -d '{
-    "template_id": "111e2222-e33b-44d5-a666-777788889999",
-    "user_id": "123e4567-e89b-12d3-a456-426614174000"
+    "filename": "my_poster.png"
   }'
 ```
 
 **Request Body:**
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| template_id | UUID | Yes | ID of the image template |
+| filename | string | Yes | Original filename with extension |
+
+**Response:**
+
+```json
+{
+  "presigned_url": "https://account.r2.cloudflarestorage.com/bucket/images/my_poster_1735560000.png?X-Amz-Algorithm=...",
+  "file_key": "images/my_poster_1735560000.png",
+  "upload_headers": {
+    "Content-Type": "image/png"
+  },
+  "instructions": "MUST send Content-Type: image/png header when uploading. The presigned URL signature requires this exact header."
+}
+```
+
+### 2. Create Poster Record
+
+**Endpoint:** `POST {backend_url}/dailystory/posters`
+
+**Description:** Creates a new poster record in the database. Use this after uploading the poster image to R2. The combination of user_id, template_id, name_used, profile_picture_key_used, and detail_used must be unique.
+
+**Request:**
+
+```bash
+curl -X POST {backend_url}/dailystory/posters \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "123e4567-e89b-12d3-a456-426614174000",
+    "template_id": "111e2222-e33b-44d5-a666-777788889999",
+    "name_used": "John Doe",
+    "detail_used": "Software Engineer",
+    "profile_picture_key_used": "profile-pictures/user_avatar_1735560000.jpg",
+    "file_key": "images/my_poster_1735560000.png"
+  }'
+```
+
+**Request Body:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
 | user_id | UUID | Yes | ID of the user |
+| template_id | UUID | Yes | ID of the image template |
+| name_used | string | Yes | Snapshot of user's name at poster creation time |
+| detail_used | string | No | Additional user detail (e.g., job title, tagline) |
+| profile_picture_key_used | string | Yes | R2 key of the profile picture used |
+| file_key | string | Yes | R2 key where the poster is stored |
 
-**Response (New Poster):**
-
-```json
-{
-  "data": {
-    "poster_url": "https://pub-xxxxx.r2.dev/images/a1b2c3d4_1735560000.png",
-    "cached": false
-  }
-}
-```
-
-**Response (Cached Poster):**
+**Response (201 Created):**
 
 ```json
 {
   "data": {
-    "poster_url": "https://pub-xxxxx.r2.dev/images/a1b2c3d4_1735560000.png",
-    "cached": true
+    "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "user_id": "123e4567-e89b-12d3-a456-426614174000",
+    "template_id": "111e2222-e33b-44d5-a666-777788889999",
+    "name_used": "John Doe",
+    "detail_used": "Software Engineer",
+    "profile_picture_key_used": "profile-pictures/user_avatar_1735560000.jpg",
+    "file_key": "images/my_poster_1735560000.png",
+    "created_at": "2026-02-22T05:00:00Z",
+    "updated_at": "2026-02-22T05:00:00Z"
   }
 }
 ```
-
-**Response Fields:**
-| Field | Type | Description |
-|-------|------|-------------|
-| poster_url | string | Public URL of the generated poster image |
-| cached | boolean | Whether the poster was retrieved from cache (true) or newly generated (false) |
 
 **Notes:**
 
-- User must have `profile_picture_key` stored in their metadata field (e.g., `{"profile_picture_key": "profile-pictures/user_avatar_1735560000.jpg"}`)
-- Template must have complete configuration with `face` and `name` settings
-- Image processing uses RAM only (no disk I/O)
-- Memory usage is logged during generation
-- Posters are cached based on the unique combination of: user_id, template_id, user's name, and user's profile picture key
+- Posters are generated on the client side
+- A unique constraint prevents duplicate posters with the same combination of user_id, template_id, name_used, profile_picture_key_used, and detail_used
 - Generated posters are stored in the `R2_DS_POSTERS_BUCKET_NAME` bucket
 
 **Error Responses:**
-
-404 Not Found:
-
-```json
-{
-  "error": "user not found"
-}
-```
-
-```json
-{
-  "error": "template not found"
-}
-```
 
 400 Bad Request:
 
 ```json
 {
-  "error": "user does not have a profile picture"
+  "error": "template_id is required"
 }
 ```
 
 ```json
 {
-  "error": "template does not have complete configuration"
+  "error": "user_id is required"
 }
 ```
 
-### 2. Get User Poster Stats
+500 Internal Server Error:
+
+```json
+{
+  "error": "failed to create poster: ..."
+}
+```
+
+### 3. Get User Poster Stats
 
 **Endpoint:** `GET {backend_url}/dailystory/posters/user-stats`
 

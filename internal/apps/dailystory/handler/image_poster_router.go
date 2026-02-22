@@ -6,7 +6,8 @@ import "github.com/gin-gonic/gin"
 func RegisterImagePosterRoutes(router *gin.RouterGroup, handler *ImagePosterHandler) {
 	posters := router.Group("/dailystory/posters")
 	{
-		posters.POST("/generate", handler.GeneratePoster)
+		posters.POST("", handler.CreatePoster)
+		posters.POST("/upload-url", handler.GetPosterUploadURL)
 		posters.GET("/user-stats", handler.GetUserPosterStats)
 	}
 }

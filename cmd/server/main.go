@@ -138,7 +138,7 @@ func main() {
 	// Initialize DailyStory Image Poster dependencies
 	imagePosterRepo := dailystoryRepository.NewImagePosterRepository(db)
 	imagePosterSvc := dailystoryService.NewImagePosterService(imagePosterRepo, imageTemplateRepo, userRepo, r2Client)
-	imagePosterH := dailystoryHandler.NewImagePosterHandler(imagePosterSvc)
+	imagePosterH := dailystoryHandler.NewImagePosterHandler(imagePosterSvc, r2Client)
 
 	// Initialize WingWoman dependencies
 	helperRepo := wingwomanRepository.NewHelperRepository(db)

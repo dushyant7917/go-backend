@@ -13,6 +13,7 @@ type ImagePoster struct {
 	UserID                uuid.UUID `gorm:"type:uuid;not null" json:"user_id"`
 	TemplateID            uuid.UUID `gorm:"type:uuid;not null" json:"template_id"`
 	NameUsed              string    `gorm:"type:varchar(255);not null" json:"name_used"`
+	DetailUsed            string    `gorm:"type:varchar(255);not null;default:''" json:"detail_used"`
 	ProfilePictureKeyUsed string    `gorm:"type:varchar(512);not null" json:"profile_picture_key_used"`
 	FileKey               string    `gorm:"type:varchar(512);not null" json:"file_key"`
 	CreatedAt             time.Time `json:"created_at"`
@@ -27,16 +28,14 @@ func (i *ImagePoster) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// GeneratePosterRequest represents the request body for generating a poster
-type GeneratePosterRequest struct {
-	TemplateID uuid.UUID `json:"template_id" binding:"required"`
-	UserID     uuid.UUID `json:"user_id" binding:"required"`
-}
-
-// GeneratePosterResponse represents the response for generating a poster
-type GeneratePosterResponse struct {
-	PosterURL string `json:"poster_url"`
-	Cached    bool   `json:"cached"`
+// CreatePosterRequest represents the request body for creating a poster record
+type CreatePosterRequest struct {
+	UserID                uuid.UUID `json:"user_id" binding:"required"`
+	TemplateID            uuid.UUID `json:"template_id" binding:"required"`
+	NameUsed              string    `json:"name_used" binding:"required"`
+	DetailUsed            string    `json:"detail_used"`
+	ProfilePictureKeyUsed string    `json:"profile_picture_key_used" binding:"required"`
+	FileKey               string    `json:"file_key" binding:"required"`
 }
 
 // UserPosterStatsResponse represents poster statistics for a user
