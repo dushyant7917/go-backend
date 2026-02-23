@@ -1246,6 +1246,9 @@ func (s *subscriptionService) GetSubscriptionStats(appName string, days int, pag
 	// Create a map to group subscriptions by date
 	dateStatsMap := make(map[string]*models.DailySubscriptionStats)
 
+	// Track unique phone numbers per date for created count
+	datePhoneSet := make(map[string]map[string]bool)
+
 	// Initialize stats for each day in the range (in descending order)
 	now := time.Now().Truncate(24 * time.Hour)
 	for i := 0; i < days; i++ {
@@ -1259,17 +1262,21 @@ func (s *subscriptionService) GetSubscriptionStats(appName string, days int, pag
 			ActiveCount:    0,
 			Revenue:        0.0,
 		}
+		datePhoneSet[dateStr] = make(map[string]bool)
 	}
 
 	// Process each subscription and calculate statistics
 	for _, sub := range subscriptions {
-		// Count subscriptions by created_at date
+		// Count unique phone numbers by created_at date
 		createdDateStr := sub.CreatedAt.Truncate(24 * time.Hour).Format("2006-01-02")
 		if stats, exists := dateStatsMap[createdDateStr]; exists {
-			// All subscriptions are created
-			stats.CreatedCount++
+			phoneKey := strings.TrimSpace(sub.Phone)
+			if _, counted := datePhoneSet[createdDateStr][phoneKey]; !counted {
+				stats.CreatedCount++
+				datePhoneSet[createdDateStr][phoneKey] = true
+			}
 
-			// Count by current status
+			// Count by current status (per subscription)
 			switch sub.Status {
 			case models.SubscriptionStatusAuthenticated:
 				stats.AuthCount++
