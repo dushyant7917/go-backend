@@ -1,0 +1,50 @@
+name: Update Subscription Amount
+
+on:
+  schedule:
+    # Runs at 5:00 AM IST (11:30 PM UTC previous day) every day
+    - cron: "30 23 * * *"
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  update-subscription-amount:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run subscription amount update script
+        env:
+          GO_ENV: ${{ secrets.GO_ENV }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_SSL_MODE: ${{ secrets.DB_SSL_MODE }}
+        run: |
+          cd cron-jobs/update_subscription_amount
+          go run main.go
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "Subscription amount update script failed"
+          echo "Check the logs above for details"
