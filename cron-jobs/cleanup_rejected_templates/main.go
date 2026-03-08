@@ -8,8 +8,10 @@ import (
 
 	"go-backend/internal/apps/dailystory/models"
 	"go-backend/internal/apps/dailystory/repository"
+	r2ConfigRepository "go-backend/internal/apps/r2/config/repository"
+	r2ConfigService "go-backend/internal/apps/r2/config/service"
+	"go-backend/internal/common/constants"
 	"go-backend/internal/common/database"
-	"go-backend/pkg/storage"
 	"go-backend/pkg/utils"
 
 	"github.com/joho/godotenv"
@@ -46,8 +48,12 @@ func main() {
 
 	log.Printf("[%s] ✓ Database connected successfully\n", timestamp)
 
-	// Initialize R2 client
-	r2Client, err := storage.NewR2ClientFromEnv()
+	// Initialize R2 client factory for dynamic config from database
+	r2ConfigRepo := r2ConfigRepository.NewR2ConfigRepository(db)
+	r2ClientFactory := r2ConfigService.NewR2ClientFactory(r2ConfigRepo)
+
+	// Get R2 client for dailystory app
+	r2Client, err := r2ClientFactory.GetClient(constants.AppNameDailyStory)
 	if err != nil {
 		log.Fatalf("[%s] ✗ Failed to initialize R2 client: %v\n", timestamp, err)
 	}

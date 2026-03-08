@@ -6,6 +6,7 @@ import (
 
 	agoraChatHandler "go-backend/internal/apps/agora/chat/handler"
 	agoraChatService "go-backend/internal/apps/agora/chat/service"
+	chemistryHandler "go-backend/internal/apps/chemistry/handler"
 	crushHandler "go-backend/internal/apps/crush/handler"
 	crushRepository "go-backend/internal/apps/crush/repository"
 	crushService "go-backend/internal/apps/crush/service"
@@ -16,6 +17,9 @@ import (
 	otpHandler "go-backend/internal/apps/otp/handler"
 	otpRepository "go-backend/internal/apps/otp/repository"
 	otpService "go-backend/internal/apps/otp/service"
+	r2ConfigHandler "go-backend/internal/apps/r2/config/handler"
+	r2ConfigRepository "go-backend/internal/apps/r2/config/repository"
+	r2ConfigService "go-backend/internal/apps/r2/config/service"
 	configHandler "go-backend/internal/apps/razorpay/config/handler"
 	configRepository "go-backend/internal/apps/razorpay/config/repository"
 	configService "go-backend/internal/apps/razorpay/config/service"
@@ -32,7 +36,6 @@ import (
 	wingwomanService "go-backend/internal/apps/wingwoman/service"
 	"go-backend/internal/common/database"
 	"go-backend/internal/common/middleware"
-	"go-backend/pkg/storage"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -75,6 +78,14 @@ func main() {
 	// Initialize Meta dataset dependencies
 	metaDatasetRepo := metaDatasetRepository.NewMetaDatasetConfigRepository(db)
 
+	// Initialize R2 Config dependencies
+	r2ConfigRepo := r2ConfigRepository.NewR2ConfigRepository(db)
+	r2ConfigSvc := r2ConfigService.NewR2ConfigService(r2ConfigRepo)
+	r2ConfigH := r2ConfigHandler.NewR2ConfigHandler(r2ConfigSvc)
+
+	// Initialize R2 Client Factory for dynamic per-app R2 clients
+	r2ClientFactory := r2ConfigService.NewR2ClientFactory(r2ConfigRepo)
+
 	subscriptionRepo := razorpayRepository.NewSubscriptionRepository(db)
 	subscriptionService := razorpayService.NewSubscriptionService(
 		subscriptionRepo,
@@ -87,16 +98,9 @@ func main() {
 	userRepo := userRepository.NewUserRepository(db)
 	crushRepo := crushRepository.NewCrushRepository(db)
 
-	// Initialize R2 client (reusable across all requests)
-	r2Client, err := storage.NewR2ClientFromEnv()
-	if err != nil {
-		log.Fatalf("Failed to initialize R2 client: %v", err)
-	}
-	log.Println("R2 client initialized successfully")
-
 	// Initialize services
 	crushSvc := crushService.NewCrushService(crushRepo, userRepo)
-	userSvc := userService.NewUserService(userRepo, crushRepo, r2Client)
+	userSvc := userService.NewUserService(userRepo, crushRepo, r2ClientFactory)
 
 	// Initialize handlers
 	crushH := crushHandler.NewCrushHandler(crushSvc)
@@ -130,15 +134,18 @@ func main() {
 	// Initialize DailyStory dependencies
 	imageTemplateRepo := dailystoryRepository.NewImageTemplateRepository(db)
 	imageTemplateSvc := dailystoryService.NewImageTemplateService(imageTemplateRepo)
-	imageTemplateH := dailystoryHandler.NewImageTemplateHandler(imageTemplateSvc, r2Client)
+	imageTemplateH := dailystoryHandler.NewImageTemplateHandler(imageTemplateSvc, r2ClientFactory)
 
 	// Initialize DailyStory Profile Picture handler
-	profilePictureH := dailystoryHandler.NewProfilePictureHandler(r2Client)
+	profilePictureH := dailystoryHandler.NewProfilePictureHandler(r2ClientFactory)
+
+	// Initialize Chemistry Profile Picture handler
+	chemistryProfilePictureH := chemistryHandler.NewProfilePictureHandler(r2ClientFactory)
 
 	// Initialize DailyStory Image Poster dependencies
 	imagePosterRepo := dailystoryRepository.NewImagePosterRepository(db)
-	imagePosterSvc := dailystoryService.NewImagePosterService(imagePosterRepo, imageTemplateRepo, userRepo, r2Client)
-	imagePosterH := dailystoryHandler.NewImagePosterHandler(imagePosterSvc, r2Client)
+	imagePosterSvc := dailystoryService.NewImagePosterService(imagePosterRepo, imageTemplateRepo, userRepo)
+	imagePosterH := dailystoryHandler.NewImagePosterHandler(imagePosterSvc, r2ClientFactory)
 
 	// Initialize WingWoman dependencies
 	helperRepo := wingwomanRepository.NewHelperRepository(db)
@@ -179,6 +186,9 @@ func main() {
 		// Register Razorpay Config management routes
 		configHandler.RegisterRazorpayConfigRoutes(v1, configH)
 
+		// Register R2 Config management routes
+		r2ConfigHandler.RegisterR2ConfigRoutes(v1, r2ConfigH)
+
 		// Register Razorpay subscription routes
 		razorpayHandler.RegisterSubscriptionRoutes(v1, subscriptionHandler)
 
@@ -195,6 +205,9 @@ func main() {
 		dailystoryHandler.RegisterImageTemplateRoutes(v1, imageTemplateH)
 		dailystoryHandler.RegisterProfilePictureRoutes(v1, profilePictureH)
 		dailystoryHandler.RegisterImagePosterRoutes(v1, imagePosterH)
+
+		// Register Chemistry routes
+		chemistryHandler.RegisterProfilePictureRoutes(v1, chemistryProfilePictureH)
 
 		// Register WingWoman routes
 		wingwomanHandler.RegisterWingWomanRoutes(v1, helperH)

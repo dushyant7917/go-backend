@@ -8,7 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"go-backend/pkg/storage"
+	r2ConfigService "go-backend/internal/apps/r2/config/service"
+	"go-backend/internal/common/constants"
 	"go-backend/pkg/utils"
 
 	"github.com/gin-gonic/gin"
@@ -16,13 +17,13 @@ import (
 
 // ProfilePictureHandler handles HTTP requests for profile picture operations
 type ProfilePictureHandler struct {
-	r2Client *storage.R2Client
+	r2ClientFactory *r2ConfigService.R2ClientFactory
 }
 
 // NewProfilePictureHandler creates a new instance of ProfilePictureHandler
-func NewProfilePictureHandler(r2Client *storage.R2Client) *ProfilePictureHandler {
+func NewProfilePictureHandler(r2ClientFactory *r2ConfigService.R2ClientFactory) *ProfilePictureHandler {
 	return &ProfilePictureHandler{
-		r2Client: r2Client,
+		r2ClientFactory: r2ClientFactory,
 	}
 }
 
@@ -70,9 +71,15 @@ func (h *ProfilePictureHandler) GetUploadURL(c *gin.Context) {
 		return
 	}
 
-	// Use the reusable R2 client from handler (initialized at startup)
+	// Get R2 client dynamically from database config
+	r2Client, err := h.r2ClientFactory.GetClient(constants.AppNameDailyStory)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "R2 configuration not found for dailystory app"})
+		return
+	}
+
 	// Generate presigned upload URL (valid for 5 minutes)
-	presignedURL, err := h.r2Client.GetPresignedUploadURL(bucketName, fileKey, contentType, 5)
+	presignedURL, err := r2Client.GetPresignedUploadURL(bucketName, fileKey, contentType, 5)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate upload URL"})
 		return
@@ -109,9 +116,16 @@ func (h *ProfilePictureHandler) GetViewURL(c *gin.Context) {
 		return
 	}
 
+	// Get R2 client dynamically from database config
+	r2Client, err := h.r2ClientFactory.GetClient(constants.AppNameDailyStory)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "R2 configuration not found for dailystory app"})
+		return
+	}
+
 	// Generate presigned view URL (valid for 60 minutes by default)
 	expirationMinutes := 60
-	presignedURL, err := h.r2Client.GetPresignedViewURL(bucketName, fileKey, expirationMinutes)
+	presignedURL, err := r2Client.GetPresignedViewURL(bucketName, fileKey, expirationMinutes)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate view URL"})
 		return

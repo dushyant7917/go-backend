@@ -16,10 +16,6 @@ Example Usage:
 		AccountID:       "your-account-id",
 		AccessKeyID:     "your-access-key-id",
 		SecretAccessKey: "your-secret-access-key",
-		BucketPublicURLs: map[string]string{
-			"daily-story-templates": "https://pub-xxxxx.r2.dev",
-			"daily-story-posters":   "https://pub-yyyyy.r2.dev",
-		},
 	})
 
 	// 1. Get pre-signed URL for uploading a file
@@ -36,8 +32,8 @@ Example Usage:
 
 	// 2. Get public URL for viewing a file (requires public bucket)
 	publicURL, err := r2Client.GetPublicFileURL(
-		"my-public-bucket",    // bucket name
-		"images/photo.jpg",    // file key
+		"https://pub-xxxxx.r2.dev",  // public URL base for the bucket
+		"images/photo.jpg",          // file key
 	)
 	if err != nil {
 		log.Fatal(err)
@@ -69,6 +65,5 @@ Environment Variables (when using NewR2ClientFromEnv):
 	R2_ACCOUNT_ID          - Required: Your Cloudflare account ID
 	R2_ACCESS_KEY_ID       - Required: R2 access key ID
 	R2_SECRET_ACCESS_KEY   - Required: R2 secret access key
-	R2_PUBLIC_BASE_URL     - Optional: Base URL for public bucket (e.g., https://pub-xxxxx.r2.dev)
 */
 package storage

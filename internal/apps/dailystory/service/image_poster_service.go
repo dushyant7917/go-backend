@@ -6,7 +6,6 @@ import (
 	"go-backend/internal/apps/dailystory/models"
 	"go-backend/internal/apps/dailystory/repository"
 	userRepository "go-backend/internal/apps/user/repository"
-	"go-backend/pkg/storage"
 )
 
 // ImagePosterService defines the interface for image poster business logic
@@ -20,7 +19,6 @@ type imagePosterService struct {
 	posterRepo   repository.ImagePosterRepository
 	templateRepo repository.ImageTemplateRepository
 	userRepo     userRepository.UserRepository
-	r2Client     *storage.R2Client
 }
 
 // NewImagePosterService creates a new instance of ImagePosterService
@@ -28,13 +26,11 @@ func NewImagePosterService(
 	posterRepo repository.ImagePosterRepository,
 	templateRepo repository.ImageTemplateRepository,
 	userRepo userRepository.UserRepository,
-	r2Client *storage.R2Client,
 ) ImagePosterService {
 	return &imagePosterService{
 		posterRepo:   posterRepo,
 		templateRepo: templateRepo,
 		userRepo:     userRepo,
-		r2Client:     r2Client,
 	}
 }
 

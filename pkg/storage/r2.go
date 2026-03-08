@@ -13,17 +13,15 @@ import (
 
 // R2Client wraps the S3 client for Cloudflare R2 operations
 type R2Client struct {
-	client           *s3.Client
-	accountID        string
-	bucketPublicURLs map[string]string // Map of bucket names to their public base URLs
+	client    *s3.Client
+	accountID string
 }
 
 // R2Config holds configuration for Cloudflare R2
 type R2Config struct {
-	AccountID        string            // Cloudflare account ID
-	AccessKeyID      string            // R2 access key ID
-	SecretAccessKey  string            // R2 secret access key
-	BucketPublicURLs map[string]string // Map of bucket names to their public base URLs (optional)
+	AccountID       string // Cloudflare account ID
+	AccessKeyID     string // R2 access key ID
+	SecretAccessKey string // R2 secret access key
 }
 
 // NewR2Client creates a new R2 client with the provided configuration
@@ -55,9 +53,8 @@ func NewR2Client(cfg R2Config) (*R2Client, error) {
 	})
 
 	return &R2Client{
-		client:           client,
-		accountID:        cfg.AccountID,
-		bucketPublicURLs: cfg.BucketPublicURLs,
+		client:    client,
+		accountID: cfg.AccountID,
 	}, nil
 }
 
@@ -113,36 +110,25 @@ func (r *R2Client) GetPresignedUploadURL(bucketName, fileKey, contentType string
 	return presignedReq.URL, nil
 }
 
-// GetPublicFileURL returns the public URL for accessing a file in a public R2 bucket
+// GetPublicFileURL constructs a public URL for accessing a file in a public R2 bucket
 //
 // Parameters:
-//   - bucketName: Name of the R2 bucket (must be publicly accessible)
+//   - publicURLBase: The public base URL of the bucket (e.g., "https://pub-xxxxx.r2.dev")
 //   - fileKey: Object key (path) in the bucket
 //
 // Returns:
 //   - Public URL string
-//   - Error if public base URL is not configured for the bucket
 //
 // Note: This requires the bucket to have public access enabled and a custom domain
-// or R2.dev subdomain configured. The bucket's public URL must be configured when creating the client.
-func (r *R2Client) GetPublicFileURL(bucketName, fileKey string) (string, error) {
-	if bucketName == "" || fileKey == "" {
-		return "", fmt.Errorf("bucket name and file key are required")
-	}
-
-	if r.bucketPublicURLs == nil {
-		return "", fmt.Errorf("no public URLs configured for any buckets")
-	}
-
-	publicBaseURL, ok := r.bucketPublicURLs[bucketName]
-	if !ok || publicBaseURL == "" {
-		return "", fmt.Errorf("public base URL not configured for bucket: %s", bucketName)
+// or R2.dev subdomain configured.
+func (r *R2Client) GetPublicFileURL(publicURLBase, fileKey string) (string, error) {
+	if publicURLBase == "" || fileKey == "" {
+		return "", fmt.Errorf("public URL base and file key are required")
 	}
 
 	// Construct public URL
 	// Format: https://pub-xxxxx.r2.dev/file-key or https://custom-domain.com/file-key
-	url := fmt.Sprintf("%s/%s", publicBaseURL, fileKey)
-	return url, nil
+	return fmt.Sprintf("%s/%s", publicURLBase, fileKey), nil
 }
 
 // GetPresignedViewURL generates a pre-signed URL for viewing/downloading a private file from R2

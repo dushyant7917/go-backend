@@ -11,7 +11,8 @@ import (
 
 	"go-backend/internal/apps/dailystory/models"
 	"go-backend/internal/apps/dailystory/service"
-	"go-backend/pkg/storage"
+	r2ConfigService "go-backend/internal/apps/r2/config/service"
+	"go-backend/internal/common/constants"
 	"go-backend/pkg/utils"
 
 	"github.com/gin-gonic/gin"
@@ -20,15 +21,15 @@ import (
 
 // ImageTemplateHandler handles HTTP requests for image template operations
 type ImageTemplateHandler struct {
-	service  service.ImageTemplateService
-	r2Client *storage.R2Client
+	service         service.ImageTemplateService
+	r2ClientFactory *r2ConfigService.R2ClientFactory
 }
 
 // NewImageTemplateHandler creates a new instance of ImageTemplateHandler
-func NewImageTemplateHandler(service service.ImageTemplateService, r2Client *storage.R2Client) *ImageTemplateHandler {
+func NewImageTemplateHandler(service service.ImageTemplateService, r2ClientFactory *r2ConfigService.R2ClientFactory) *ImageTemplateHandler {
 	return &ImageTemplateHandler{
-		service:  service,
-		r2Client: r2Client,
+		service:         service,
+		r2ClientFactory: r2ClientFactory,
 	}
 }
 
@@ -196,9 +197,15 @@ func (h *ImageTemplateHandler) GetUploadURL(c *gin.Context) {
 		return
 	}
 
-	// Use the reusable R2 client from handler (initialized at startup)
+	// Get R2 client dynamically from database config
+	r2Client, err := h.r2ClientFactory.GetClient(constants.AppNameDailyStory)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "R2 configuration not found for dailystory app"})
+		return
+	}
+
 	// Generate presigned upload URL (valid for 5 minutes)
-	presignedURL, err := h.r2Client.GetPresignedUploadURL(bucketName, fileKey, contentType, 5)
+	presignedURL, err := r2Client.GetPresignedUploadURL(bucketName, fileKey, contentType, 5)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate upload URL"})
 		return
@@ -233,15 +240,22 @@ func (h *ImageTemplateHandler) GetImageTemplateViewURL(c *gin.Context) {
 		return
 	}
 
-	// Get bucket name from environment
-	bucketName := os.Getenv("R2_DS_TEMPLATES_BUCKET_NAME")
-	if bucketName == "" {
+	// Get public URL base from environment
+	publicURLBase := os.Getenv("R2_DS_TEMPLATES_PUBLIC_URL")
+	if publicURLBase == "" {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "R2 bucket configuration missing"})
 		return
 	}
 
-	// Get public file URL (permanent URL for public bucket)
-	publicURL, err := h.r2Client.GetPublicFileURL(bucketName, resp.FileKey)
+	// Get R2 client dynamically from database config
+	r2Client, err := h.r2ClientFactory.GetClient(constants.AppNameDailyStory)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "R2 configuration not found for dailystory app"})
+		return
+	}
+
+	// Construct public URL
+	publicURL, err := r2Client.GetPublicFileURL(publicURLBase, resp.FileKey)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate view URL"})
 		return

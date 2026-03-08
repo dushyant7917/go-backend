@@ -10,7 +10,8 @@ import (
 
 	"go-backend/internal/apps/dailystory/models"
 	"go-backend/internal/apps/dailystory/service"
-	"go-backend/pkg/storage"
+	r2ConfigService "go-backend/internal/apps/r2/config/service"
+	"go-backend/internal/common/constants"
 	"go-backend/pkg/utils"
 
 	"github.com/gin-gonic/gin"
@@ -19,15 +20,15 @@ import (
 
 // ImagePosterHandler handles HTTP requests for image poster operations
 type ImagePosterHandler struct {
-	service  service.ImagePosterService
-	r2Client *storage.R2Client
+	service         service.ImagePosterService
+	r2ClientFactory *r2ConfigService.R2ClientFactory
 }
 
 // NewImagePosterHandler creates a new instance of ImagePosterHandler
-func NewImagePosterHandler(service service.ImagePosterService, r2Client *storage.R2Client) *ImagePosterHandler {
+func NewImagePosterHandler(service service.ImagePosterService, r2ClientFactory *r2ConfigService.R2ClientFactory) *ImagePosterHandler {
 	return &ImagePosterHandler{
-		service:  service,
-		r2Client: r2Client,
+		service:         service,
+		r2ClientFactory: r2ClientFactory,
 	}
 }
 
@@ -102,8 +103,15 @@ func (h *ImagePosterHandler) GetPosterUploadURL(c *gin.Context) {
 		return
 	}
 
+	// Get R2 client dynamically from database config
+	r2Client, err := h.r2ClientFactory.GetClient(constants.AppNameDailyStory)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "R2 configuration not found for dailystory app"})
+		return
+	}
+
 	// Generate presigned upload URL (valid for 5 minutes)
-	presignedURL, err := h.r2Client.GetPresignedUploadURL(bucketName, fileKey, contentType, 5)
+	presignedURL, err := r2Client.GetPresignedUploadURL(bucketName, fileKey, contentType, 5)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate upload URL"})
 		return

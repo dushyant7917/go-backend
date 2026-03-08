@@ -6,9 +6,10 @@ import (
 	"strings"
 
 	crushRepository "go-backend/internal/apps/crush/repository"
+	r2ConfigService "go-backend/internal/apps/r2/config/service"
 	"go-backend/internal/apps/user/models"
 	"go-backend/internal/apps/user/repository"
-	"go-backend/pkg/storage"
+	"go-backend/internal/common/constants"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -27,17 +28,17 @@ type UserService interface {
 
 // userService implements UserService
 type userService struct {
-	repo      repository.UserRepository
-	crushRepo crushRepository.CrushRepository
-	r2Client  *storage.R2Client
+	repo            repository.UserRepository
+	crushRepo       crushRepository.CrushRepository
+	r2ClientFactory *r2ConfigService.R2ClientFactory
 }
 
 // NewUserService creates a new instance of UserService
-func NewUserService(repo repository.UserRepository, crushRepo crushRepository.CrushRepository, r2Client *storage.R2Client) UserService {
+func NewUserService(repo repository.UserRepository, crushRepo crushRepository.CrushRepository, r2ClientFactory *r2ConfigService.R2ClientFactory) UserService {
 	return &userService{
-		repo:      repo,
-		crushRepo: crushRepo,
-		r2Client:  r2Client,
+		repo:            repo,
+		crushRepo:       crushRepo,
+		r2ClientFactory: r2ClientFactory,
 	}
 }
 
@@ -151,6 +152,13 @@ func (s *userService) UpdateUser(id uuid.UUID, req models.UpdateUserRequest) (*m
 			return nil, errors.New("bucket configuration not found for app: " + user.AppName)
 		}
 
+		// Get R2 client dynamically from database config
+		r2AppName := s.getR2AppName(user.AppName)
+		r2Client, err := s.r2ClientFactory.GetClient(r2AppName)
+		if err != nil {
+			return nil, errors.New("R2 configuration not found for app: " + user.AppName)
+		}
+
 		// Perform atomic transaction: update DB first, then delete file
 		err = s.repo.UpdateWithTransaction(func(txRepo repository.UserRepository) error {
 			// Apply all updates to user object
@@ -169,7 +177,7 @@ func (s *userService) UpdateUser(id uuid.UUID, req models.UpdateUserRequest) (*m
 			}
 
 			// Step 2: DB update succeeded, now delete old file from R2
-			if err := s.r2Client.DeleteFile(bucketName, oldProfilePictureKey); err != nil {
+			if err := r2Client.DeleteFile(bucketName, oldProfilePictureKey); err != nil {
 				// R2 deletion failed, return error to trigger transaction rollback
 				return errors.New("failed to delete old profile picture: " + err.Error())
 			}
@@ -218,6 +226,22 @@ func (s *userService) getBucketNameForApp(appName string) string {
 	default:
 		// Return empty string for unknown apps (no deletion will occur)
 		return ""
+	}
+}
+
+// getR2AppName normalizes the app name to match R2 config database entries
+func (s *userService) getR2AppName(appName string) string {
+	normalizedAppName := strings.ToLower(appName)
+
+	switch normalizedAppName {
+	case "dailystory", "dailystoryapp":
+		return constants.AppNameDailyStory
+	case "crushconnect", "crushconnectapp":
+		return constants.AppNameCrushConnect
+	case "chemistry":
+		return constants.AppNameChemistry
+	default:
+		return appName
 	}
 }
 
