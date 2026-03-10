@@ -16,7 +16,7 @@ var (
 	encryptKeyErr  error
 )
 
-const encryptionKeyEnv = "RAZORPAY_ENCRYPTION_KEY"
+const encryptionKeyEnv = "ENCRYPTION_KEY"
 
 // getKey lazily loads and validates the encryption key from environment variables.
 // Supported key sizes: 16, 24, 32 bytes (AES-128/192/256).
@@ -24,14 +24,14 @@ func getKey() ([]byte, error) {
 	encryptKeyOnce.Do(func() {
 		keyStr := os.Getenv(encryptionKeyEnv)
 		if keyStr == "" {
-			encryptKeyErr = errors.New("RAZORPAY_ENCRYPTION_KEY is not set")
+			encryptKeyErr = errors.New("ENCRYPTION_KEY is not set")
 			return
 		}
 
 		key := []byte(keyStr)
 		keyLen := len(key)
 		if keyLen != 16 && keyLen != 24 && keyLen != 32 {
-			encryptKeyErr = errors.New("RAZORPAY_ENCRYPTION_KEY must be 16, 24, or 32 bytes long")
+			encryptKeyErr = errors.New("ENCRYPTION_KEY must be 16, 24, or 32 bytes long")
 			return
 		}
 
