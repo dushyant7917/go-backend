@@ -33,6 +33,9 @@ func RegisterSubscriptionRoutes(router *gin.RouterGroup, handler *SubscriptionHa
 		// Get subscription statistics for last N days
 		subscriptions.GET("/stats", handler.GetSubscriptionStats)
 
+		// Get default subscription plan ID and amount
+		subscriptions.GET("/default-plan", handler.GetDefaultPlan)
+
 		// Cancel subscription
 		subscriptions.POST("/:id/cancel", handler.CancelSubscription)
 	}

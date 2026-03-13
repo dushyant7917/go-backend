@@ -8,6 +8,7 @@ import (
 
 	"go-backend/internal/apps/razorpay/subscription/models"
 	"go-backend/internal/apps/razorpay/subscription/service"
+	"go-backend/pkg/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -295,4 +296,18 @@ func (h *SubscriptionHandler) GetSubscriptionStats(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": response})
+}
+
+// GetDefaultPlan handles GET /api/v1/subscriptions/default-plan
+// Returns the default subscription plan ID and amount from environment variables
+func (h *SubscriptionHandler) GetDefaultPlan(c *gin.Context) {
+	planID := utils.GetEnv("DEFAULT_SUBSCRIPTION_PLAN_ID", "")
+	amount := utils.GetEnv("DEFAULT_SUBSCRIPTION_AMOUNT", "")
+
+	c.JSON(http.StatusOK, gin.H{
+		"data": gin.H{
+			"plan_id": planID,
+			"amount":  amount,
+		},
+	})
 }
