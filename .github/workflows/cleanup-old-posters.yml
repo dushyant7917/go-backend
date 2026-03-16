@@ -46,7 +46,7 @@ jobs:
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
         run: |
           cd cron-jobs/cleanup_old_posters
-          go run main.go 14
+          go run main.go 7
 
       - name: Notify on failure
         if: failure()
