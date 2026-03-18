@@ -641,6 +641,32 @@ func (s *subscriptionService) verifyWebhookSignature(payload []byte, signature, 
 	return hmac.Equal([]byte(signature), []byte(expectedMAC))
 }
 
+// appendEventToMetadata adds a timestamp key to subscription metadata for the given event
+func (s *subscriptionService) appendEventToMetadata(subscription *models.Subscription, eventName string, payload map[string]interface{}) {
+	meta := map[string]interface{}{}
+	_ = json.Unmarshal([]byte(subscription.Metadata), &meta)
+
+	// Map event names to timestamp keys
+	eventKeyMap := map[string]string{
+		"subscription.authenticated": "authenticated_at",
+		"subscription.activated":     "activated_at",
+		"subscription.charged":       "charged_at",
+		"subscription.pending":       "pending_at",
+		"subscription.halted":        "halted_at",
+		"subscription.cancelled":     "cancelled_at",
+		"subscription.completed":     "completed_at",
+		"subscription.paused":        "paused_at",
+		"subscription.resumed":       "resumed_at",
+	}
+
+	if key, ok := eventKeyMap[eventName]; ok {
+		meta[key] = time.Now().UTC().Format(time.RFC3339)
+	}
+
+	b, _ := json.Marshal(meta)
+	subscription.Metadata = string(b)
+}
+
 // min returns the minimum of two integers
 func min(a, b int) int {
 	if a < b {
@@ -677,22 +703,13 @@ func (s *subscriptionService) handleSubscriptionAuthenticated(payload map[string
 		t := time.Unix(int64(chargeAt), 0)
 		subscription.NextChargeAt = &t
 	}
-	// Record authentication marker in metadata (idempotent)
-	meta := map[string]interface{}{}
-	_ = json.Unmarshal([]byte(subscription.Metadata), &meta)
-	if auth, ok := meta["authenticated"].(bool); !ok || !auth {
-		meta["authenticated"] = true
-		if _, ok := meta["authenticated_at"]; !ok {
-			meta["authenticated_at"] = time.Now().UTC().Format(time.RFC3339)
-		}
-		b, _ := json.Marshal(meta)
-		subscription.Metadata = string(b)
-	}
-
 	// Update status to authenticated from Razorpay webhook
 	if rzpStatus, ok := subscriptionEntity["status"].(string); ok {
 		subscription.Status = models.SubscriptionStatus(rzpStatus)
 	}
+
+	// Append event to metadata for audit trail
+	s.appendEventToMetadata(subscription, "subscription.authenticated", payload)
 
 	// Update subscription in database first
 	if err := s.repo.Update(subscription); err != nil {
@@ -720,6 +737,9 @@ func (s *subscriptionService) handleSubscriptionActivated(payload map[string]int
 		t := time.Unix(int64(startAt), 0)
 		subscription.StartAt = &t
 	}
+
+	// Append event to metadata for audit trail
+	s.appendEventToMetadata(subscription, "subscription.activated", payload)
 
 	// Update subscription in database first
 	if err := s.repo.Update(subscription); err != nil {
@@ -752,6 +772,9 @@ func (s *subscriptionService) handleSubscriptionCharged(payload map[string]inter
 		subscription.Status = models.SubscriptionStatusActive
 	}
 
+	// Append event to metadata for audit trail
+	s.appendEventToMetadata(subscription, "subscription.charged", payload)
+
 	// Update subscription in database first
 	if err := s.repo.Update(subscription); err != nil {
 		return err
@@ -768,7 +791,17 @@ func (s *subscriptionService) handleSubscriptionPending(payload map[string]inter
 	subscriptionEntity := payload["subscription"].(map[string]interface{})["entity"].(map[string]interface{})
 	razorpaySubID := subscriptionEntity["id"].(string)
 
-	return s.repo.UpdateStatus(uuid.MustParse(razorpaySubID), models.SubscriptionStatusCreated)
+	subscription, err := s.repo.FindByRazorpaySubscriptionID(razorpaySubID)
+	if err != nil {
+		return err
+	}
+
+	subscription.Status = models.SubscriptionStatusCreated
+
+	// Append event to metadata for audit trail
+	s.appendEventToMetadata(subscription, "subscription.pending", payload)
+
+	return s.repo.Update(subscription)
 }
 
 // handleSubscriptionHalted handles subscription.halted event
@@ -781,7 +814,11 @@ func (s *subscriptionService) handleSubscriptionHalted(payload map[string]interf
 		return err
 	}
 
-	subscription.Status = models.SubscriptionStatusExpired
+	subscription.Status = models.SubscriptionStatusHalted
+
+	// Append event to metadata for audit trail
+	s.appendEventToMetadata(subscription, "subscription.halted", payload)
+
 	return s.repo.Update(subscription)
 }
 
@@ -800,6 +837,9 @@ func (s *subscriptionService) handleSubscriptionCancelled(payload map[string]int
 		t := time.Unix(int64(endAt), 0)
 		subscription.EndAt = &t
 	}
+
+	// Append event to metadata for audit trail
+	s.appendEventToMetadata(subscription, "subscription.cancelled", payload)
 
 	// Update subscription in database first
 	if err := s.repo.Update(subscription); err != nil {
@@ -828,6 +868,9 @@ func (s *subscriptionService) handleSubscriptionCompleted(payload map[string]int
 		subscription.EndAt = &t
 	}
 
+	// Append event to metadata for audit trail
+	s.appendEventToMetadata(subscription, "subscription.completed", payload)
+
 	return s.repo.Update(subscription)
 }
 
@@ -842,6 +885,10 @@ func (s *subscriptionService) handleSubscriptionPaused(payload map[string]interf
 	}
 
 	subscription.Status = models.SubscriptionStatusPaused
+
+	// Append event to metadata for audit trail
+	s.appendEventToMetadata(subscription, "subscription.paused", payload)
+
 	return s.repo.Update(subscription)
 }
 
@@ -856,6 +903,10 @@ func (s *subscriptionService) handleSubscriptionResumed(payload map[string]inter
 	}
 
 	subscription.Status = models.SubscriptionStatusActive
+
+	// Append event to metadata for audit trail
+	s.appendEventToMetadata(subscription, "subscription.resumed", payload)
+
 	return s.repo.Update(subscription)
 }
 

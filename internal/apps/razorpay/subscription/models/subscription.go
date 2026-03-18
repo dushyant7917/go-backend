@@ -17,7 +17,7 @@ const (
 	SubscriptionStatusPaused        SubscriptionStatus = "paused"
 	SubscriptionStatusCancelled     SubscriptionStatus = "cancelled"
 	SubscriptionStatusCompleted     SubscriptionStatus = "completed"
-	SubscriptionStatusExpired       SubscriptionStatus = "expired"
+	SubscriptionStatusHalted        SubscriptionStatus = "halted"
 )
 
 // Subscription represents a UPI Autopay subscription in the database
