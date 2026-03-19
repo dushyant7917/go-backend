@@ -473,7 +473,7 @@ func (s *subscriptionService) HandleWebhook(payload []byte, signature string) er
 	fmt.Printf("[Webhook] Dispatching to event handler: %s\n", eventType)
 	switch eventType {
 	case "subscription.authenticated":
-		err := s.handleSubscriptionAuthenticated(payloadData)
+		err := s.handleSubscriptionAuthenticated(payloadData, eventType)
 		if err != nil {
 			fmt.Printf("[Webhook ERROR] handleSubscriptionAuthenticated failed: %v\n", err)
 			return err
@@ -481,7 +481,7 @@ func (s *subscriptionService) HandleWebhook(payload []byte, signature string) er
 		fmt.Printf("[Webhook] Successfully processed subscription.authenticated\n")
 		return nil
 	case "subscription.activated":
-		err := s.handleSubscriptionActivated(payloadData)
+		err := s.handleSubscriptionActivated(payloadData, eventType)
 		if err != nil {
 			fmt.Printf("[Webhook ERROR] handleSubscriptionActivated failed: %v\n", err)
 			return err
@@ -489,7 +489,7 @@ func (s *subscriptionService) HandleWebhook(payload []byte, signature string) er
 		fmt.Printf("[Webhook] Successfully processed subscription.activated\n")
 		return nil
 	case "subscription.charged":
-		err := s.handleSubscriptionCharged(payloadData)
+		err := s.handleSubscriptionCharged(payloadData, eventType)
 		if err != nil {
 			fmt.Printf("[Webhook ERROR] handleSubscriptionCharged failed: %v\n", err)
 			return err
@@ -497,7 +497,7 @@ func (s *subscriptionService) HandleWebhook(payload []byte, signature string) er
 		fmt.Printf("[Webhook] Successfully processed subscription.charged\n")
 		return nil
 	case "subscription.pending":
-		err := s.handleSubscriptionPending(payloadData)
+		err := s.handleSubscriptionPending(payloadData, eventType)
 		if err != nil {
 			fmt.Printf("[Webhook ERROR] handleSubscriptionPending failed: %v\n", err)
 			return err
@@ -505,7 +505,7 @@ func (s *subscriptionService) HandleWebhook(payload []byte, signature string) er
 		fmt.Printf("[Webhook] Successfully processed subscription.pending\n")
 		return nil
 	case "subscription.halted":
-		err := s.handleSubscriptionHalted(payloadData)
+		err := s.handleSubscriptionHalted(payloadData, eventType)
 		if err != nil {
 			fmt.Printf("[Webhook ERROR] handleSubscriptionHalted failed: %v\n", err)
 			return err
@@ -513,7 +513,7 @@ func (s *subscriptionService) HandleWebhook(payload []byte, signature string) er
 		fmt.Printf("[Webhook] Successfully processed subscription.halted\n")
 		return nil
 	case "subscription.cancelled":
-		err := s.handleSubscriptionCancelled(payloadData)
+		err := s.handleSubscriptionCancelled(payloadData, eventType)
 		if err != nil {
 			fmt.Printf("[Webhook ERROR] handleSubscriptionCancelled failed: %v\n", err)
 			return err
@@ -521,7 +521,7 @@ func (s *subscriptionService) HandleWebhook(payload []byte, signature string) er
 		fmt.Printf("[Webhook] Successfully processed subscription.cancelled\n")
 		return nil
 	case "subscription.completed":
-		err := s.handleSubscriptionCompleted(payloadData)
+		err := s.handleSubscriptionCompleted(payloadData, eventType)
 		if err != nil {
 			fmt.Printf("[Webhook ERROR] handleSubscriptionCompleted failed: %v\n", err)
 			return err
@@ -529,7 +529,7 @@ func (s *subscriptionService) HandleWebhook(payload []byte, signature string) er
 		fmt.Printf("[Webhook] Successfully processed subscription.completed\n")
 		return nil
 	case "subscription.paused":
-		err := s.handleSubscriptionPaused(payloadData)
+		err := s.handleSubscriptionPaused(payloadData, eventType)
 		if err != nil {
 			fmt.Printf("[Webhook ERROR] handleSubscriptionPaused failed: %v\n", err)
 			return err
@@ -537,7 +537,7 @@ func (s *subscriptionService) HandleWebhook(payload []byte, signature string) er
 		fmt.Printf("[Webhook] Successfully processed subscription.paused\n")
 		return nil
 	case "subscription.resumed":
-		err := s.handleSubscriptionResumed(payloadData)
+		err := s.handleSubscriptionResumed(payloadData, eventType)
 		if err != nil {
 			fmt.Printf("[Webhook ERROR] handleSubscriptionResumed failed: %v\n", err)
 			return err
@@ -676,7 +676,7 @@ func min(a, b int) int {
 }
 
 // handleSubscriptionAuthenticated handles subscription.authenticated event
-func (s *subscriptionService) handleSubscriptionAuthenticated(payload map[string]interface{}) error {
+func (s *subscriptionService) handleSubscriptionAuthenticated(payload map[string]interface{}, eventName string) error {
 	subscriptionEntity := payload["subscription"].(map[string]interface{})["entity"].(map[string]interface{})
 	razorpaySubID := subscriptionEntity["id"].(string)
 
@@ -709,7 +709,7 @@ func (s *subscriptionService) handleSubscriptionAuthenticated(payload map[string
 	}
 
 	// Append event to metadata for audit trail
-	s.appendEventToMetadata(subscription, "subscription.authenticated", payload)
+	s.appendEventToMetadata(subscription, eventName, payload)
 
 	// Update subscription in database first
 	if err := s.repo.Update(subscription); err != nil {
@@ -723,7 +723,7 @@ func (s *subscriptionService) handleSubscriptionAuthenticated(payload map[string
 }
 
 // handleSubscriptionActivated handles subscription.activated event
-func (s *subscriptionService) handleSubscriptionActivated(payload map[string]interface{}) error {
+func (s *subscriptionService) handleSubscriptionActivated(payload map[string]interface{}, eventName string) error {
 	subscriptionEntity := payload["subscription"].(map[string]interface{})["entity"].(map[string]interface{})
 	razorpaySubID := subscriptionEntity["id"].(string)
 
@@ -739,7 +739,7 @@ func (s *subscriptionService) handleSubscriptionActivated(payload map[string]int
 	}
 
 	// Append event to metadata for audit trail
-	s.appendEventToMetadata(subscription, "subscription.activated", payload)
+	s.appendEventToMetadata(subscription, eventName, payload)
 
 	// Update subscription in database first
 	if err := s.repo.Update(subscription); err != nil {
@@ -753,7 +753,7 @@ func (s *subscriptionService) handleSubscriptionActivated(payload map[string]int
 }
 
 // handleSubscriptionCharged handles subscription.charged event
-func (s *subscriptionService) handleSubscriptionCharged(payload map[string]interface{}) error {
+func (s *subscriptionService) handleSubscriptionCharged(payload map[string]interface{}, eventName string) error {
 	subscriptionEntity := payload["subscription"].(map[string]interface{})["entity"].(map[string]interface{})
 	razorpaySubID := subscriptionEntity["id"].(string)
 
@@ -773,7 +773,7 @@ func (s *subscriptionService) handleSubscriptionCharged(payload map[string]inter
 	}
 
 	// Append event to metadata for audit trail
-	s.appendEventToMetadata(subscription, "subscription.charged", payload)
+	s.appendEventToMetadata(subscription, eventName, payload)
 
 	// Update subscription in database first
 	if err := s.repo.Update(subscription); err != nil {
@@ -787,7 +787,7 @@ func (s *subscriptionService) handleSubscriptionCharged(payload map[string]inter
 }
 
 // handleSubscriptionPending handles subscription.pending event
-func (s *subscriptionService) handleSubscriptionPending(payload map[string]interface{}) error {
+func (s *subscriptionService) handleSubscriptionPending(payload map[string]interface{}, eventName string) error {
 	subscriptionEntity := payload["subscription"].(map[string]interface{})["entity"].(map[string]interface{})
 	razorpaySubID := subscriptionEntity["id"].(string)
 
@@ -799,13 +799,13 @@ func (s *subscriptionService) handleSubscriptionPending(payload map[string]inter
 	subscription.Status = models.SubscriptionStatusCreated
 
 	// Append event to metadata for audit trail
-	s.appendEventToMetadata(subscription, "subscription.pending", payload)
+	s.appendEventToMetadata(subscription, eventName, payload)
 
 	return s.repo.Update(subscription)
 }
 
 // handleSubscriptionHalted handles subscription.halted event
-func (s *subscriptionService) handleSubscriptionHalted(payload map[string]interface{}) error {
+func (s *subscriptionService) handleSubscriptionHalted(payload map[string]interface{}, eventName string) error {
 	subscriptionEntity := payload["subscription"].(map[string]interface{})["entity"].(map[string]interface{})
 	razorpaySubID := subscriptionEntity["id"].(string)
 
@@ -817,13 +817,13 @@ func (s *subscriptionService) handleSubscriptionHalted(payload map[string]interf
 	subscription.Status = models.SubscriptionStatusHalted
 
 	// Append event to metadata for audit trail
-	s.appendEventToMetadata(subscription, "subscription.halted", payload)
+	s.appendEventToMetadata(subscription, eventName, payload)
 
 	return s.repo.Update(subscription)
 }
 
 // handleSubscriptionCancelled handles subscription.cancelled event
-func (s *subscriptionService) handleSubscriptionCancelled(payload map[string]interface{}) error {
+func (s *subscriptionService) handleSubscriptionCancelled(payload map[string]interface{}, eventName string) error {
 	subscriptionEntity := payload["subscription"].(map[string]interface{})["entity"].(map[string]interface{})
 	razorpaySubID := subscriptionEntity["id"].(string)
 
@@ -839,7 +839,7 @@ func (s *subscriptionService) handleSubscriptionCancelled(payload map[string]int
 	}
 
 	// Append event to metadata for audit trail
-	s.appendEventToMetadata(subscription, "subscription.cancelled", payload)
+	s.appendEventToMetadata(subscription, eventName, payload)
 
 	// Update subscription in database first
 	if err := s.repo.Update(subscription); err != nil {
@@ -853,7 +853,7 @@ func (s *subscriptionService) handleSubscriptionCancelled(payload map[string]int
 }
 
 // handleSubscriptionCompleted handles subscription.completed event
-func (s *subscriptionService) handleSubscriptionCompleted(payload map[string]interface{}) error {
+func (s *subscriptionService) handleSubscriptionCompleted(payload map[string]interface{}, eventName string) error {
 	subscriptionEntity := payload["subscription"].(map[string]interface{})["entity"].(map[string]interface{})
 	razorpaySubID := subscriptionEntity["id"].(string)
 
@@ -869,13 +869,13 @@ func (s *subscriptionService) handleSubscriptionCompleted(payload map[string]int
 	}
 
 	// Append event to metadata for audit trail
-	s.appendEventToMetadata(subscription, "subscription.completed", payload)
+	s.appendEventToMetadata(subscription, eventName, payload)
 
 	return s.repo.Update(subscription)
 }
 
 // handleSubscriptionPaused handles subscription.paused event
-func (s *subscriptionService) handleSubscriptionPaused(payload map[string]interface{}) error {
+func (s *subscriptionService) handleSubscriptionPaused(payload map[string]interface{}, eventName string) error {
 	subscriptionEntity := payload["subscription"].(map[string]interface{})["entity"].(map[string]interface{})
 	razorpaySubID := subscriptionEntity["id"].(string)
 
@@ -887,13 +887,13 @@ func (s *subscriptionService) handleSubscriptionPaused(payload map[string]interf
 	subscription.Status = models.SubscriptionStatusPaused
 
 	// Append event to metadata for audit trail
-	s.appendEventToMetadata(subscription, "subscription.paused", payload)
+	s.appendEventToMetadata(subscription, eventName, payload)
 
 	return s.repo.Update(subscription)
 }
 
 // handleSubscriptionResumed handles subscription.resumed event
-func (s *subscriptionService) handleSubscriptionResumed(payload map[string]interface{}) error {
+func (s *subscriptionService) handleSubscriptionResumed(payload map[string]interface{}, eventName string) error {
 	subscriptionEntity := payload["subscription"].(map[string]interface{})["entity"].(map[string]interface{})
 	razorpaySubID := subscriptionEntity["id"].(string)
 
@@ -905,7 +905,7 @@ func (s *subscriptionService) handleSubscriptionResumed(payload map[string]inter
 	subscription.Status = models.SubscriptionStatusActive
 
 	// Append event to metadata for audit trail
-	s.appendEventToMetadata(subscription, "subscription.resumed", payload)
+	s.appendEventToMetadata(subscription, eventName, payload)
 
 	return s.repo.Update(subscription)
 }
