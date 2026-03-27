@@ -154,7 +154,7 @@ func (r *subscriptionRepository) FindByAppName(appName string, limit, offset int
 func (r *subscriptionRepository) HasAuthenticatedSubscriptionByPhone(phone string, appName string) (bool, error) {
 	var count int64
 	query := r.db.Model(&models.Subscription{}).
-		Where("phone = ? AND metadata::jsonb @> '{\"authenticated\": true}'", phone)
+		Where("phone = ? AND (metadata->>'authenticated_at') IS NOT NULL", phone)
 
 	if appName != "" {
 		query = query.Where("app_name = ?", appName)

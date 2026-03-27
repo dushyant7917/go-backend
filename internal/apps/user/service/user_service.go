@@ -10,6 +10,7 @@ import (
 	"go-backend/internal/apps/user/models"
 	"go-backend/internal/apps/user/repository"
 	"go-backend/internal/common/constants"
+	"go-backend/pkg/utils"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -270,7 +271,7 @@ func applyUserUpdates(user *models.User, req models.UpdateUserRequest) error {
 	// Merge metadata if provided (partial update)
 	if req.Metadata != nil && len(req.Metadata) > 0 {
 		if user.Metadata == nil {
-			user.Metadata = make(models.Metadata)
+			user.Metadata = make(utils.Metadata)
 		}
 		for key, value := range req.Metadata {
 			user.Metadata[key] = value

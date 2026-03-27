@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go-backend/pkg/utils"
 	"gorm.io/gorm"
 )
 
@@ -50,30 +51,6 @@ func (c TemplateConfig) Value() (driver.Value, error) {
 	return json.Marshal(c)
 }
 
-// Metadata is a custom type for JSONB fields
-type Metadata map[string]interface{}
-
-// Scan implements the sql.Scanner interface for Metadata
-func (m *Metadata) Scan(value interface{}) error {
-	if value == nil {
-		*m = make(Metadata)
-		return nil
-	}
-	bytes, ok := value.([]byte)
-	if !ok {
-		return nil
-	}
-	return json.Unmarshal(bytes, m)
-}
-
-// Value implements the driver.Valuer interface for Metadata
-func (m Metadata) Value() (driver.Value, error) {
-	if m == nil {
-		return json.Marshal(make(map[string]interface{}))
-	}
-	return json.Marshal(m)
-}
-
 // ImageTemplate represents an image template in the database
 type ImageTemplate struct {
 	ID          uuid.UUID       `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
@@ -81,7 +58,7 @@ type ImageTemplate struct {
 	Category    string          `gorm:"size:255;not null" json:"category"`
 	SubCategory string          `gorm:"size:255;not null" json:"sub_category"`
 	Config      *TemplateConfig `gorm:"type:jsonb" json:"config,omitempty"`
-	Metadata    Metadata        `gorm:"type:jsonb" json:"metadata,omitempty"`
+	Metadata    utils.Metadata  `gorm:"type:jsonb" json:"metadata,omitempty"`
 	AuthorID    *uuid.UUID      `gorm:"type:uuid" json:"author_id,omitempty"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
@@ -101,7 +78,7 @@ type CreateImageTemplateRequest struct {
 	Category    string          `json:"category" binding:"required"`
 	SubCategory string          `json:"sub_category" binding:"required"`
 	Config      *TemplateConfig `json:"config,omitempty"`
-	Metadata    Metadata        `json:"metadata,omitempty"`
+	Metadata    utils.Metadata  `json:"metadata,omitempty"`
 	AuthorID    *uuid.UUID      `json:"author_id,omitempty"`
 }
 
@@ -111,7 +88,7 @@ type UpdateImageTemplateRequest struct {
 	Category    *string         `json:"category,omitempty"`
 	SubCategory *string         `json:"sub_category,omitempty"`
 	Config      *TemplateConfig `json:"config,omitempty"`
-	Metadata    Metadata        `json:"metadata,omitempty"`
+	Metadata    utils.Metadata  `json:"metadata,omitempty"`
 	AuthorID    *uuid.UUID      `json:"author_id,omitempty"`
 }
 
@@ -122,7 +99,7 @@ type ImageTemplateResponse struct {
 	Category    string          `json:"category"`
 	SubCategory string          `json:"sub_category"`
 	Config      *TemplateConfig `json:"config,omitempty"`
-	Metadata    Metadata        `json:"metadata,omitempty"`
+	Metadata    utils.Metadata  `json:"metadata,omitempty"`
 	AuthorID    *uuid.UUID      `json:"author_id,omitempty"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`

@@ -5,6 +5,7 @@ import (
 
 	"go-backend/internal/apps/r2/config/models"
 	"go-backend/internal/apps/r2/config/repository"
+	"go-backend/pkg/utils"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -145,7 +146,7 @@ func (s *r2ConfigService) UpdateConfig(id uuid.UUID, req models.UpdateR2ConfigRe
 	}
 	if req.Metadata != nil && len(req.Metadata) > 0 {
 		if config.Metadata == nil {
-			config.Metadata = make(models.R2Metadata)
+			config.Metadata = make(utils.Metadata)
 		}
 		for key, value := range req.Metadata {
 			config.Metadata[key] = value

@@ -5,6 +5,7 @@ import (
 
 	"go-backend/internal/apps/razorpay/config/models"
 	"go-backend/internal/apps/razorpay/config/repository"
+	"go-backend/pkg/utils"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -43,7 +44,7 @@ func (s *razorpayConfigService) CreateRazorpayConfig(req models.CreateRazorpayCo
 		isActive = *req.IsActive
 	}
 
-	metadata := models.Metadata{}
+	metadata := utils.Metadata{}
 	if req.Metadata != nil {
 		metadata = req.Metadata
 	}

@@ -152,6 +152,16 @@ func main() {
 	helperSvc := wingwomanService.NewHelperService(helperRepo)
 	helperH := wingwomanHandler.NewHelperHandler(helperSvc)
 
+	// Initialize News dependencies (within DailyStory)
+	newsRepo := dailystoryRepository.NewNewsRepository(db)
+	newsSvc := dailystoryService.NewNewsService(newsRepo)
+	newsH := dailystoryHandler.NewNewsHandler(newsSvc)
+
+	// Initialize News Poster dependencies (within DailyStory)
+	newsPosterRepo := dailystoryRepository.NewNewsPosterRepository(db)
+	newsPosterSvc := dailystoryService.NewNewsPosterService(newsPosterRepo)
+	newsPosterH := dailystoryHandler.NewNewsPosterHandler(newsPosterSvc)
+
 	// Initialize Agora Chat dependencies
 	chatSvc := agoraChatService.NewChatService()
 	chatH := agoraChatHandler.NewChatHandler(chatSvc)
@@ -211,6 +221,9 @@ func main() {
 
 		// Register WingWoman routes
 		wingwomanHandler.RegisterWingWomanRoutes(v1, helperH)
+
+		// Register News routes (within DailyStory)
+		dailystoryHandler.RegisterNewsRoutes(v1, newsH, newsPosterH)
 
 		// Register Agora routes
 		agoraChatHandler.RegisterChatRoutes(v1, chatH)

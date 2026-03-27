@@ -4,6 +4,7 @@ import (
 	"errors"
 	"go-backend/internal/apps/dailystory/models"
 	"go-backend/internal/apps/dailystory/repository"
+	"go-backend/pkg/utils"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -89,7 +90,7 @@ func (s *imageTemplateService) UpdateImageTemplate(id uuid.UUID, req models.Upda
 	if req.Metadata != nil && len(req.Metadata) > 0 {
 		// Merge metadata (partial update)
 		if template.Metadata == nil {
-			template.Metadata = make(models.Metadata)
+			template.Metadata = make(utils.Metadata)
 		}
 		for key, value := range req.Metadata {
 			template.Metadata[key] = value

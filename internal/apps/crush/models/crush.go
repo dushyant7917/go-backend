@@ -1,37 +1,12 @@
 package models
 
 import (
-	"database/sql/driver"
-	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
+	"go-backend/pkg/utils"
 	"gorm.io/gorm"
 )
-
-// Metadata is a custom type for JSONB fields
-type Metadata map[string]interface{}
-
-// Scan implements the sql.Scanner interface for Metadata
-func (m *Metadata) Scan(value interface{}) error {
-	if value == nil {
-		*m = make(Metadata)
-		return nil
-	}
-	bytes, ok := value.([]byte)
-	if !ok {
-		return nil
-	}
-	return json.Unmarshal(bytes, m)
-}
-
-// Value implements the driver.Valuer interface for Metadata
-func (m Metadata) Value() (driver.Value, error) {
-	if m == nil {
-		return json.Marshal(make(map[string]interface{}))
-	}
-	return json.Marshal(m)
-}
 
 // Crush represents a crush entry in Crush Connect app
 type Crush struct {
@@ -42,7 +17,7 @@ type Crush struct {
 	Phone       *string        `gorm:"size:20" json:"phone,omitempty"`
 	InstagramID *string        `gorm:"size:255" json:"instagram_id,omitempty"`
 	SnapchatID  *string        `gorm:"size:255" json:"snapchat_id,omitempty"`
-	Metadata    Metadata       `gorm:"type:jsonb;not null;default:'{}'" json:"metadata"`
+	Metadata    utils.Metadata `gorm:"type:jsonb;not null;default:'{}'" json:"metadata"`
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
 	DeletedAt   gorm.DeletedAt `gorm:"index" json:"deleted_at,omitempty"`
@@ -58,37 +33,37 @@ func (c *Crush) BeforeCreate(tx *gorm.DB) error {
 
 // CreateCrushRequest represents the request body for creating a crush
 type CreateCrushRequest struct {
-	UserID      uuid.UUID `json:"user_id" binding:"required"`
-	Name        string    `json:"name" binding:"required,min=1,max=255"`
-	CountryCode *string   `json:"country_code,omitempty"`
-	Phone       *string   `json:"phone,omitempty"`
-	InstagramID *string   `json:"instagram_id,omitempty"`
-	SnapchatID  *string   `json:"snapchat_id,omitempty"`
-	Metadata    Metadata  `json:"metadata,omitempty"`
+	UserID      uuid.UUID      `json:"user_id" binding:"required"`
+	Name        string         `json:"name" binding:"required,min=1,max=255"`
+	CountryCode *string        `json:"country_code,omitempty"`
+	Phone       *string        `json:"phone,omitempty"`
+	InstagramID *string        `json:"instagram_id,omitempty"`
+	SnapchatID  *string        `json:"snapchat_id,omitempty"`
+	Metadata    utils.Metadata `json:"metadata,omitempty"`
 }
 
 // UpdateCrushRequest represents the request body for updating a crush
 type UpdateCrushRequest struct {
-	Name        *string  `json:"name,omitempty" binding:"omitempty,min=1,max=255"`
-	CountryCode *string  `json:"country_code,omitempty"`
-	Phone       *string  `json:"phone,omitempty"`
-	InstagramID *string  `json:"instagram_id,omitempty"`
-	SnapchatID  *string  `json:"snapchat_id,omitempty"`
-	Metadata    Metadata `json:"metadata,omitempty"`
+	Name        *string        `json:"name,omitempty" binding:"omitempty,min=1,max=255"`
+	CountryCode *string        `json:"country_code,omitempty"`
+	Phone       *string        `json:"phone,omitempty"`
+	InstagramID *string        `json:"instagram_id,omitempty"`
+	SnapchatID  *string        `json:"snapchat_id,omitempty"`
+	Metadata    utils.Metadata `json:"metadata,omitempty"`
 }
 
 // CrushResponse represents the response payload for crush operations
 type CrushResponse struct {
-	ID          uuid.UUID `json:"id"`
-	UserID      uuid.UUID `json:"user_id"`
-	Name        string    `json:"name"`
-	CountryCode *string   `json:"country_code,omitempty"`
-	Phone       *string   `json:"phone,omitempty"`
-	InstagramID *string   `json:"instagram_id,omitempty"`
-	SnapchatID  *string   `json:"snapchat_id,omitempty"`
-	Metadata    Metadata  `json:"metadata"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          uuid.UUID      `json:"id"`
+	UserID      uuid.UUID      `json:"user_id"`
+	Name        string         `json:"name"`
+	CountryCode *string        `json:"country_code,omitempty"`
+	Phone       *string        `json:"phone,omitempty"`
+	InstagramID *string        `json:"instagram_id,omitempty"`
+	SnapchatID  *string        `json:"snapchat_id,omitempty"`
+	Metadata    utils.Metadata `json:"metadata"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
 }
 
 // ToResponse converts Crush model to CrushResponse

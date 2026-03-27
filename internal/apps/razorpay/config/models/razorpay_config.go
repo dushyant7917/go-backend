@@ -1,37 +1,12 @@
 package models
 
 import (
-	"database/sql/driver"
-	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
+	"go-backend/pkg/utils"
 	"gorm.io/gorm"
 )
-
-// Metadata is a custom type for JSONB fields
-type Metadata map[string]interface{}
-
-// Scan implements the sql.Scanner interface for Metadata
-func (m *Metadata) Scan(value interface{}) error {
-	if value == nil {
-		*m = make(Metadata)
-		return nil
-	}
-	bytes, ok := value.([]byte)
-	if !ok {
-		return nil
-	}
-	return json.Unmarshal(bytes, m)
-}
-
-// Value implements the driver.Valuer interface for Metadata
-func (m Metadata) Value() (driver.Value, error) {
-	if m == nil {
-		return json.Marshal(make(map[string]interface{}))
-	}
-	return json.Marshal(m)
-}
 
 // RazorpayConfig represents a Razorpay configuration for a specific app and environment
 type RazorpayConfig struct {
@@ -42,7 +17,7 @@ type RazorpayConfig struct {
 	RazorpayKeySecret     string         `gorm:"not null;size:255" json:"razorpay_key_secret"`
 	RazorpayWebhookSecret string         `gorm:"not null;size:255" json:"razorpay_webhook_secret"`
 	IsActive              bool           `gorm:"default:true" json:"is_active"`
-	Metadata              Metadata       `gorm:"type:jsonb;not null;default:'{}'" json:"metadata"`
+	Metadata              utils.Metadata `gorm:"type:jsonb;not null;default:'{}'" json:"metadata"`
 	CreatedAt             time.Time      `json:"created_at"`
 	UpdatedAt             time.Time      `json:"updated_at"`
 	DeletedAt             gorm.DeletedAt `gorm:"index" json:"deleted_at,omitempty"`
@@ -63,34 +38,34 @@ func (c *RazorpayConfig) BeforeCreate(tx *gorm.DB) error {
 
 // CreateRazorpayConfigRequest represents the request body for creating a razorpay config
 type CreateRazorpayConfigRequest struct {
-	AppName               string   `json:"app_name" binding:"required,min=1,max=100"`
-	Environment           string   `json:"environment" binding:"required,oneof=test live"`
-	RazorpayKeyID         string   `json:"razorpay_key_id" binding:"required"`
-	RazorpayKeySecret     string   `json:"razorpay_key_secret" binding:"required"`
-	RazorpayWebhookSecret string   `json:"razorpay_webhook_secret" binding:"required"`
-	IsActive              *bool    `json:"is_active,omitempty"`
-	Metadata              Metadata `json:"metadata,omitempty"`
+	AppName               string         `json:"app_name" binding:"required,min=1,max=100"`
+	Environment           string         `json:"environment" binding:"required,oneof=test live"`
+	RazorpayKeyID         string         `json:"razorpay_key_id" binding:"required"`
+	RazorpayKeySecret     string         `json:"razorpay_key_secret" binding:"required"`
+	RazorpayWebhookSecret string         `json:"razorpay_webhook_secret" binding:"required"`
+	IsActive              *bool          `json:"is_active,omitempty"`
+	Metadata              utils.Metadata `json:"metadata,omitempty"`
 }
 
 // UpdateRazorpayConfigRequest represents the request body for updating a razorpay config
 type UpdateRazorpayConfigRequest struct {
-	RazorpayKeyID         *string  `json:"razorpay_key_id,omitempty"`
-	RazorpayKeySecret     *string  `json:"razorpay_key_secret,omitempty"`
-	RazorpayWebhookSecret *string  `json:"razorpay_webhook_secret,omitempty"`
-	IsActive              *bool    `json:"is_active,omitempty"`
-	Metadata              Metadata `json:"metadata,omitempty"`
+	RazorpayKeyID         *string        `json:"razorpay_key_id,omitempty"`
+	RazorpayKeySecret     *string        `json:"razorpay_key_secret,omitempty"`
+	RazorpayWebhookSecret *string        `json:"razorpay_webhook_secret,omitempty"`
+	IsActive              *bool          `json:"is_active,omitempty"`
+	Metadata              utils.Metadata `json:"metadata,omitempty"`
 }
 
 // RazorpayConfigResponse represents the response payload for razorpay config operations
 // Excludes sensitive credentials
 type RazorpayConfigResponse struct {
-	ID          uuid.UUID `json:"id"`
-	AppName     string    `json:"app_name"`
-	Environment string    `json:"environment"`
-	IsActive    bool      `json:"is_active"`
-	Metadata    Metadata  `json:"metadata"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          uuid.UUID      `json:"id"`
+	AppName     string         `json:"app_name"`
+	Environment string         `json:"environment"`
+	IsActive    bool           `json:"is_active"`
+	Metadata    utils.Metadata `json:"metadata"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
 }
 
 // ToResponse converts RazorpayConfig model to RazorpayConfigResponse (excludes sensitive data)

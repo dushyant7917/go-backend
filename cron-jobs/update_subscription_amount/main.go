@@ -68,7 +68,7 @@ func main() {
 			FROM subscriptions s2
 			WHERE s2.user_id = u.id
 			AND s2.app_name = 'DailyStoryApp'
-			AND s2.metadata::jsonb @> '{"authenticated": true}'
+			AND (s2.metadata->>'authenticated_at') IS NOT NULL
 		)
 		AND u.phone IS NOT NULL
 		AND u.deleted_at IS NULL
@@ -128,7 +128,7 @@ func main() {
 
 		// Update metadata fields
 		if user.Metadata == nil {
-			user.Metadata = make(userModels.Metadata)
+			user.Metadata = make(utils.Metadata)
 		}
 		user.Metadata["subscription_plan_id"] = targetPlanID
 		user.Metadata["subscription_amount"] = targetAmount

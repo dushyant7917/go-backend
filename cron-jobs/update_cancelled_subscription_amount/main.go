@@ -131,7 +131,7 @@ func main() {
 
 		// Update metadata fields
 		if user.Metadata == nil {
-			user.Metadata = make(userModels.Metadata)
+			user.Metadata = make(utils.Metadata)
 		}
 		user.Metadata["subscription_plan_id"] = targetPlanID
 		user.Metadata["subscription_amount"] = targetAmount

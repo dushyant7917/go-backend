@@ -8,6 +8,7 @@ import (
 	"go-backend/internal/apps/crush/repository"
 	userModels "go-backend/internal/apps/user/models"
 	userRepository "go-backend/internal/apps/user/repository"
+	"go-backend/pkg/utils"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -170,7 +171,7 @@ func (s *crushService) UpdateCrush(id uuid.UUID, req models.UpdateCrushRequest) 
 	// Merge metadata if provided (partial update)
 	if len(req.Metadata) > 0 {
 		if crush.Metadata == nil {
-			crush.Metadata = make(models.Metadata)
+			crush.Metadata = make(utils.Metadata)
 		}
 		for key, value := range req.Metadata {
 			crush.Metadata[key] = value

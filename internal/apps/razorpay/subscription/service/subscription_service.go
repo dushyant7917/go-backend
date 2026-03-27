@@ -357,14 +357,11 @@ func (s *subscriptionService) VerifyPayment(req models.VerifyPaymentRequest) (*m
 	// After successful signature verification, set status to authenticated
 	subscription.Status = models.SubscriptionStatusAuthenticated
 
-	// Set authenticated markers in metadata if not already present
+	// Set authenticated_at in metadata if not already present
 	meta := map[string]interface{}{}
 	_ = json.Unmarshal([]byte(subscription.Metadata), &meta)
-	if auth, ok := meta["authenticated"].(bool); !ok || !auth {
-		meta["authenticated"] = true
-		if _, ok := meta["authenticated_at"]; !ok {
-			meta["authenticated_at"] = time.Now().UTC().Format(time.RFC3339)
-		}
+	if _, ok := meta["authenticated_at"]; !ok {
+		meta["authenticated_at"] = time.Now().UTC().Format(time.RFC3339)
 		b, _ := json.Marshal(meta)
 		subscription.Metadata = string(b)
 	}

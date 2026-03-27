@@ -1,37 +1,12 @@
 package models
 
 import (
-	"database/sql/driver"
-	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
+	"go-backend/pkg/utils"
 	"gorm.io/gorm"
 )
-
-// Metadata is a custom type for JSONB fields
-type R2Metadata map[string]interface{}
-
-// Scan implements the sql.Scanner interface for R2Metadata
-func (m *R2Metadata) Scan(value interface{}) error {
-	if value == nil {
-		*m = make(R2Metadata)
-		return nil
-	}
-	bytes, ok := value.([]byte)
-	if !ok {
-		return nil
-	}
-	return json.Unmarshal(bytes, m)
-}
-
-// Value implements the driver.Valuer interface for R2Metadata
-func (m R2Metadata) Value() (driver.Value, error) {
-	if m == nil {
-		return json.Marshal(make(map[string]interface{}))
-	}
-	return json.Marshal(m)
-}
 
 // R2Config represents an R2 configuration for a specific app and environment
 type R2Config struct {
@@ -41,7 +16,7 @@ type R2Config struct {
 	AccountID       string         `gorm:"not null;size:255" json:"account_id"`
 	AccessKeyID     string         `gorm:"not null;size:255" json:"access_key_id"`
 	SecretAccessKey string         `gorm:"not null;size:255" json:"secret_access_key"`
-	Metadata        R2Metadata     `gorm:"type:jsonb;not null;default:'{}'" json:"metadata"`
+	Metadata        utils.Metadata `gorm:"type:jsonb;not null;default:'{}'" json:"metadata"`
 	CreatedAt       time.Time      `json:"created_at"`
 	UpdatedAt       time.Time      `json:"updated_at"`
 	DeletedAt       gorm.DeletedAt `gorm:"index" json:"deleted_at,omitempty"`
@@ -62,31 +37,31 @@ func (c *R2Config) BeforeCreate(tx *gorm.DB) error {
 
 // CreateR2ConfigRequest represents the request body for creating an R2 config
 type CreateR2ConfigRequest struct {
-	AppName         string     `json:"app_name" binding:"required,min=1,max=100"`
-	Environment     string     `json:"environment" binding:"required,oneof=test live"`
-	AccountID       string     `json:"account_id" binding:"required"`
-	AccessKeyID     string     `json:"access_key_id" binding:"required"`
-	SecretAccessKey string     `json:"secret_access_key" binding:"required"`
-	Metadata        R2Metadata `json:"metadata,omitempty"`
+	AppName         string         `json:"app_name" binding:"required,min=1,max=100"`
+	Environment     string         `json:"environment" binding:"required,oneof=test live"`
+	AccountID       string         `json:"account_id" binding:"required"`
+	AccessKeyID     string         `json:"access_key_id" binding:"required"`
+	SecretAccessKey string         `json:"secret_access_key" binding:"required"`
+	Metadata        utils.Metadata `json:"metadata,omitempty"`
 }
 
 // UpdateR2ConfigRequest represents the request body for updating an R2 config
 type UpdateR2ConfigRequest struct {
-	AccountID       *string    `json:"account_id,omitempty"`
-	AccessKeyID     *string    `json:"access_key_id,omitempty"`
-	SecretAccessKey *string    `json:"secret_access_key,omitempty"`
-	Metadata        R2Metadata `json:"metadata,omitempty"`
+	AccountID       *string        `json:"account_id,omitempty"`
+	AccessKeyID     *string        `json:"access_key_id,omitempty"`
+	SecretAccessKey *string        `json:"secret_access_key,omitempty"`
+	Metadata        utils.Metadata `json:"metadata,omitempty"`
 }
 
 // R2ConfigResponse represents the response payload for R2 config operations
 // Excludes sensitive credentials
 type R2ConfigResponse struct {
-	ID          uuid.UUID  `json:"id"`
-	AppName     string     `json:"app_name"`
-	Environment string     `json:"environment"`
-	Metadata    R2Metadata `json:"metadata"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	ID          uuid.UUID      `json:"id"`
+	AppName     string         `json:"app_name"`
+	Environment string         `json:"environment"`
+	Metadata    utils.Metadata `json:"metadata"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
 }
 
 // ToResponse converts R2Config model to R2ConfigResponse (excludes sensitive data)

@@ -1,37 +1,12 @@
 package models
 
 import (
-	"database/sql/driver"
-	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
+	"go-backend/pkg/utils"
 	"gorm.io/gorm"
 )
-
-// Metadata is a custom type for JSONB fields
-type Metadata map[string]interface{}
-
-// Scan implements the sql.Scanner interface for Metadata
-func (m *Metadata) Scan(value interface{}) error {
-	if value == nil {
-		*m = make(Metadata)
-		return nil
-	}
-	bytes, ok := value.([]byte)
-	if !ok {
-		return nil
-	}
-	return json.Unmarshal(bytes, m)
-}
-
-// Value implements the driver.Valuer interface for Metadata
-func (m Metadata) Value() (driver.Value, error) {
-	if m == nil {
-		return json.Marshal(make(map[string]interface{}))
-	}
-	return json.Marshal(m)
-}
 
 // MetaDatasetConfig represents a Meta dataset configuration for a specific app and environment
 type MetaDatasetConfig struct {
@@ -41,7 +16,7 @@ type MetaDatasetConfig struct {
 	DatasetID   string         `gorm:"not null;size:100" json:"dataset_id"`
 	AccessToken string         `gorm:"not null;size:500" json:"access_token"`
 	IsActive    bool           `gorm:"default:true" json:"is_active"`
-	Metadata    Metadata       `gorm:"type:jsonb;not null;default:'{}'" json:"metadata"`
+	Metadata    utils.Metadata `gorm:"type:jsonb;not null;default:'{}'" json:"metadata"`
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
 	DeletedAt   gorm.DeletedAt `gorm:"index" json:"deleted_at,omitempty"`
@@ -62,33 +37,33 @@ func (c *MetaDatasetConfig) BeforeCreate(tx *gorm.DB) error {
 
 // CreateMetaDatasetConfigRequest represents the request body for creating a meta dataset config
 type CreateMetaDatasetConfigRequest struct {
-	AppName     string   `json:"app_name" binding:"required,min=1,max=100"`
-	Environment string   `json:"environment" binding:"required,oneof=test live"`
-	DatasetID   string   `json:"dataset_id" binding:"required"`
-	AccessToken string   `json:"access_token" binding:"required"`
-	IsActive    *bool    `json:"is_active,omitempty"`
-	Metadata    Metadata `json:"metadata,omitempty"`
+	AppName     string         `json:"app_name" binding:"required,min=1,max=100"`
+	Environment string         `json:"environment" binding:"required,oneof=test live"`
+	DatasetID   string         `json:"dataset_id" binding:"required"`
+	AccessToken string         `json:"access_token" binding:"required"`
+	IsActive    *bool          `json:"is_active,omitempty"`
+	Metadata    utils.Metadata `json:"metadata,omitempty"`
 }
 
 // UpdateMetaDatasetConfigRequest represents the request body for updating a meta dataset config
 type UpdateMetaDatasetConfigRequest struct {
-	DatasetID   *string  `json:"dataset_id,omitempty"`
-	AccessToken *string  `json:"access_token,omitempty"`
-	IsActive    *bool    `json:"is_active,omitempty"`
-	Metadata    Metadata `json:"metadata,omitempty"`
+	DatasetID   *string        `json:"dataset_id,omitempty"`
+	AccessToken *string        `json:"access_token,omitempty"`
+	IsActive    *bool          `json:"is_active,omitempty"`
+	Metadata    utils.Metadata `json:"metadata,omitempty"`
 }
 
 // MetaDatasetConfigResponse represents the response payload for meta dataset config operations
 // Excludes sensitive access token
 type MetaDatasetConfigResponse struct {
-	ID          uuid.UUID `json:"id"`
-	AppName     string    `json:"app_name"`
-	Environment string    `json:"environment"`
-	DatasetID   string    `json:"dataset_id"`
-	IsActive    bool      `json:"is_active"`
-	Metadata    Metadata  `json:"metadata"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          uuid.UUID      `json:"id"`
+	AppName     string         `json:"app_name"`
+	Environment string         `json:"environment"`
+	DatasetID   string         `json:"dataset_id"`
+	IsActive    bool           `json:"is_active"`
+	Metadata    utils.Metadata `json:"metadata"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
 }
 
 // ToResponse converts MetaDatasetConfig model to MetaDatasetConfigResponse (excludes sensitive data)

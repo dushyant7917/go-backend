@@ -1,37 +1,12 @@
 package models
 
 import (
-	"database/sql/driver"
-	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
+	"go-backend/pkg/utils"
 	"gorm.io/gorm"
 )
-
-// Metadata is a custom type for JSONB fields
-type Metadata map[string]interface{}
-
-// Scan implements the sql.Scanner interface for Metadata
-func (m *Metadata) Scan(value interface{}) error {
-	if value == nil {
-		*m = make(Metadata)
-		return nil
-	}
-	bytes, ok := value.([]byte)
-	if !ok {
-		return nil
-	}
-	return json.Unmarshal(bytes, m)
-}
-
-// Value implements the driver.Valuer interface for Metadata
-func (m Metadata) Value() (driver.Value, error) {
-	if m == nil {
-		return json.Marshal(make(map[string]interface{}))
-	}
-	return json.Marshal(m)
-}
 
 // User represents an application user
 type User struct {
@@ -41,7 +16,7 @@ type User struct {
 	Phone       *string        `gorm:"size:20" json:"phone,omitempty"`
 	Email       *string        `gorm:"size:255" json:"email,omitempty"`
 	AppName     string         `gorm:"not null;size:100" json:"app_name"`
-	Metadata    Metadata       `gorm:"type:jsonb;not null;default:'{}';" json:"metadata"`
+	Metadata    utils.Metadata `gorm:"type:jsonb;not null;default:'{}';" json:"metadata"`
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
 	DeletedAt   gorm.DeletedAt `gorm:"index" json:"deleted_at,omitempty"`
@@ -57,36 +32,36 @@ func (u *User) BeforeCreate(tx *gorm.DB) error {
 
 // CreateUserRequest represents the request body for creating a user
 type CreateUserRequest struct {
-	Name        *string  `json:"name,omitempty"`
-	CountryCode *string  `json:"country_code,omitempty"`
-	Phone       *string  `json:"phone,omitempty"`
-	Email       *string  `json:"email,omitempty" binding:"omitempty,email"`
-	AppName     string   `json:"app_name" binding:"required,min=1,max=100"`
-	Metadata    Metadata `json:"metadata,omitempty"`
+	Name        *string        `json:"name,omitempty"`
+	CountryCode *string        `json:"country_code,omitempty"`
+	Phone       *string        `json:"phone,omitempty"`
+	Email       *string        `json:"email,omitempty" binding:"omitempty,email"`
+	AppName     string         `json:"app_name" binding:"required,min=1,max=100"`
+	Metadata    utils.Metadata `json:"metadata,omitempty"`
 }
 
 // UpdateUserRequest represents the request body for updating a user
 // At least one of (email) or (country_code + phone) must be present after update
 type UpdateUserRequest struct {
-	Name        *string  `json:"name,omitempty"`
-	CountryCode *string  `json:"country_code,omitempty"`
-	Phone       *string  `json:"phone,omitempty"`
-	Email       *string  `json:"email,omitempty" binding:"omitempty,email"`
-	AppName     *string  `json:"app_name,omitempty"`
-	Metadata    Metadata `json:"metadata,omitempty"`
+	Name        *string        `json:"name,omitempty"`
+	CountryCode *string        `json:"country_code,omitempty"`
+	Phone       *string        `json:"phone,omitempty"`
+	Email       *string        `json:"email,omitempty" binding:"omitempty,email"`
+	AppName     *string        `json:"app_name,omitempty"`
+	Metadata    utils.Metadata `json:"metadata,omitempty"`
 }
 
 // UserResponse represents the response payload for user operations
 type UserResponse struct {
-	ID          uuid.UUID `json:"id"`
-	Name        *string   `json:"name,omitempty"`
-	CountryCode *string   `json:"country_code,omitempty"`
-	Phone       *string   `json:"phone,omitempty"`
-	Email       *string   `json:"email,omitempty"`
-	AppName     string    `json:"app_name"`
-	Metadata    Metadata  `json:"metadata"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          uuid.UUID      `json:"id"`
+	Name        *string        `json:"name,omitempty"`
+	CountryCode *string        `json:"country_code,omitempty"`
+	Phone       *string        `json:"phone,omitempty"`
+	Email       *string        `json:"email,omitempty"`
+	AppName     string         `json:"app_name"`
+	Metadata    utils.Metadata `json:"metadata"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
 }
 
 // ToResponse converts User model to UserResponse
@@ -117,16 +92,16 @@ type PaginatedUsersResponse struct {
 
 // UserWithCountResponse represents user response with crushes count
 type UserWithCountResponse struct {
-	ID           uuid.UUID `json:"id"`
-	Name         *string   `json:"name,omitempty"`
-	CountryCode  *string   `json:"country_code,omitempty"`
-	Phone        *string   `json:"phone,omitempty"`
-	Email        *string   `json:"email,omitempty"`
-	AppName      string    `json:"app_name"`
-	Metadata     Metadata  `json:"metadata"`
-	CrushesCount int64     `json:"crushes_count"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID           uuid.UUID      `json:"id"`
+	Name         *string        `json:"name,omitempty"`
+	CountryCode  *string        `json:"country_code,omitempty"`
+	Phone        *string        `json:"phone,omitempty"`
+	Email        *string        `json:"email,omitempty"`
+	AppName      string         `json:"app_name"`
+	Metadata     utils.Metadata `json:"metadata"`
+	CrushesCount int64          `json:"crushes_count"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
 }
 
 // PaginatedUsersWithCountResponse represents paginated users response with crushes count

@@ -1,8 +1,11 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -202,4 +205,89 @@ func (r *R2Client) DeleteFile(bucketName, fileKey string) error {
 // GetClient returns the underlying S3 client for advanced operations
 func (r *R2Client) GetClient() *s3.Client {
 	return r.client
+}
+
+// UploadFile uploads a file directly to R2 from a reader
+//
+// Parameters:
+//   - bucketName: Name of the R2 bucket
+//   - fileKey: Object key (path) in the bucket
+//   - reader: io.Reader containing the file data
+//   - contentType: MIME type of the file (e.g., "image/jpeg", "image/png")
+//
+// Returns:
+//   - Error if upload fails, nil on success
+func (r *R2Client) UploadFile(bucketName, fileKey string, reader io.Reader, contentType string) error {
+	if bucketName == "" || fileKey == "" {
+		return fmt.Errorf("bucket name and file key are required")
+	}
+
+	// Read all data from reader
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read file data: %w", err)
+	}
+
+	// Default content type if not provided
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	// Create PutObject request
+	putObjectInput := &s3.PutObjectInput{
+		Bucket:      aws.String(bucketName),
+		Key:         aws.String(fileKey),
+		Body:        bytes.NewReader(data),
+		ContentType: aws.String(contentType),
+	}
+
+	// Upload the object
+	_, err = r.client.PutObject(context.Background(), putObjectInput)
+	if err != nil {
+		return fmt.Errorf("failed to upload file: %w", err)
+	}
+
+	return nil
+}
+
+// UploadFileFromURL downloads a file from a URL and uploads it to R2
+//
+// Parameters:
+//   - bucketName: Name of the R2 bucket
+//   - fileKey: Object key (path) in the bucket
+//   - fileURL: URL to download the file from
+//   - httpClient: HTTP client to use for downloading
+//
+// Returns:
+//   - Content type of the uploaded file
+//   - Error if download or upload fails
+func (r *R2Client) UploadFileFromURL(bucketName, fileKey, fileURL string, httpClient *http.Client) (string, error) {
+	if bucketName == "" || fileKey == "" || fileURL == "" {
+		return "", fmt.Errorf("bucket name, file key, and file URL are required")
+	}
+
+	// Download the file
+	resp, err := httpClient.Get(fileURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to download file from URL: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to download file: HTTP status %d", resp.StatusCode)
+	}
+
+	// Get content type from response, default to application/octet-stream
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	// Upload to R2
+	err = r.UploadFile(bucketName, fileKey, resp.Body, contentType)
+	if err != nil {
+		return "", err
+	}
+
+	return contentType, nil
 }
