@@ -40,6 +40,7 @@ jobs:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_SSL_MODE: ${{ secrets.DB_SSL_MODE }}
           R2_DS_NEWS_BUCKET_NAME: ${{ secrets.R2_DS_NEWS_BUCKET_NAME }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           cd cron-jobs/parse_news_rss
