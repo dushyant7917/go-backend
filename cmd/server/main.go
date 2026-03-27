@@ -3,6 +3,10 @@ package main
 import (
 	"log"
 	"os"
+	"time"
+
+	"github.com/getsentry/sentry-go"
+	sentrygin "github.com/getsentry/sentry-go/gin"
 
 	agoraChatHandler "go-backend/internal/apps/agora/chat/handler"
 	agoraChatService "go-backend/internal/apps/agora/chat/service"
@@ -50,6 +54,24 @@ func main() {
 		if err := godotenv.Load(); err != nil {
 			log.Printf("No %s or .env file found, using environment variables", envFile)
 		}
+	}
+
+	// Initialize Sentry
+	sentryDsn := getEnv("SENTRY_DSN", "")
+	if sentryDsn != "" {
+		err := sentry.Init(sentry.ClientOptions{
+			Dsn:              sentryDsn,
+			Environment:      env,
+			TracesSampleRate: 1.0,
+		})
+		if err != nil {
+			log.Printf("Sentry initialization failed: %v", err)
+		} else {
+			log.Println("Sentry initialized successfully")
+		}
+		defer sentry.Flush(2 * time.Second)
+	} else {
+		log.Println("SENTRY_DSN not set, skipping Sentry initialization")
 	}
 
 	// Database configuration
@@ -175,6 +197,11 @@ func main() {
 	gin.SetMode(ginMode)
 
 	router := gin.Default()
+
+	// Add Sentry middleware
+	if sentryDsn != "" {
+		router.Use(sentrygin.New(sentrygin.Options{}))
+	}
 
 	// Health check endpoint (before CORS middleware to allow access from any client)
 	router.GET("/health", func(c *gin.Context) {
