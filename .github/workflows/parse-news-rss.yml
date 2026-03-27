@@ -1,0 +1,52 @@
+name: Parse News RSS
+
+on:
+  schedule:
+    # Runs at 6:00 AM IST (12:30 AM UTC), 12:00 PM IST (6:30 AM UTC), and 6:00 PM IST (12:30 PM UTC) daily
+    - cron: "30 0,6,12 * * *"
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  parse-news-rss:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-v2-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-v2-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run RSS news parser
+        env:
+          GO_ENV: ${{ secrets.GO_ENV }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_SSL_MODE: ${{ secrets.DB_SSL_MODE }}
+          R2_DS_NEWS_BUCKET_NAME: ${{ secrets.R2_DS_NEWS_BUCKET_NAME }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          cd cron-jobs/parse_news_rss
+          go run main.go
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "RSS news parser failed"
+          echo "Check the logs above for details"
