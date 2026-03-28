@@ -64,19 +64,26 @@ func (NewsTranslation) TableName() string {
 
 // TranslationResult holds translations for a title (source is Hindi)
 // Map of language code -> translated text
-type TranslationResult map[string]string
-
-// GeminiSingleTranslationResponse for single language translation
-type GeminiSingleTranslationResponse struct {
-	Translation string `json:"translation"`
+type TranslationResult struct {
+	// Converted Hindi headline (2-sentence poster format)
+	HindiHeadline string
+	// Translations of the Hindi headline to other languages
+	Translations map[string]string
 }
 
-// GeminiMultiTranslationResponse for multiple languages translation
-type GeminiMultiTranslationResponse struct {
-	Punjabi  string `json:"punjabi"`
-	Gujarati string `json:"gujarati"`
-	Marathi  string `json:"marathi"`
-	Bengali  string `json:"bengali"`
+// GeminiConversionResponse for single language translation (convert + translate to one language)
+type GeminiConversionResponse struct {
+	HindiHeadline string `json:"hindi_headline"`
+	Translation   string `json:"translation"`
+}
+
+// GeminiConversionMultiResponse for converting headline and translating to multiple languages
+type GeminiConversionMultiResponse struct {
+	HindiHeadline string `json:"hindi_headline"`
+	Punjabi       string `json:"punjabi"`
+	Gujarati      string `json:"gujarati"`
+	Marathi       string `json:"marathi"`
+	Bengali       string `json:"bengali"`
 }
 
 // Category-to-language mapping
@@ -370,10 +377,10 @@ func main() {
 					defer func() { <-itemSemaphore }()    // Release semaphore
 					defer inFlightLinks.Delete(item.Link) // Remove from in-flight tracking
 
-					// Translate title based on category using Gemini
-					translations, err := translateWithGemini(context.Background(), genaiClient, item.Title, targetLanguages, rateLimiter)
+					// Convert title to Hindi headline and translate based on category using Gemini
+					result, err := translateWithGemini(context.Background(), genaiClient, item.Title, targetLanguages, rateLimiter)
 					if err != nil {
-						log.Printf("[%s] ✗ Failed to translate title '%s': %v\n", timestamp, item.Title, err)
+						log.Printf("[%s] ✗ Failed to convert/translate title '%s': %v\n", timestamp, item.Title, err)
 						countersMutex.Lock()
 						totalFailed++
 						countersMutex.Unlock()
@@ -396,7 +403,7 @@ func main() {
 					}
 
 					// Store in database atomically (with R2 cleanup on failure)
-					err = storeNewsWithTranslations(db, r2Client, r2BucketName, item.Link, mediaFileKey, publishedAt, category, item.Title, translations)
+					err = storeNewsWithTranslations(db, r2Client, r2BucketName, item.Link, mediaFileKey, publishedAt, category, result)
 					if err != nil {
 						log.Printf("[%s] ✗ Failed to store news item: %v\n", timestamp, err)
 						countersMutex.Lock()
@@ -425,93 +432,128 @@ func main() {
 	os.Exit(0)
 }
 
-// translateWithGemini translates Hindi title using Gemini API
-// Uses single or multi-language prompt based on targetLanguages count
+// translateWithGemini converts the RSS title to a 2-sentence Hindi poster headline
+// and translates it to target languages in a single LLM call
 func translateWithGemini(ctx context.Context, client *genai.Client, title string, targetLanguages []string, rateLimiter *rate.Limiter) (TranslationResult, error) {
-	// Early return if no translations needed
-	if len(targetLanguages) == 0 {
-		return make(TranslationResult), nil
-	}
-
 	// Wait for rate limiter permission
 	if err := rateLimiter.Wait(ctx); err != nil {
-		return nil, fmt.Errorf("rate limiter wait failed: %w", err)
+		return TranslationResult{}, fmt.Errorf("rate limiter wait failed: %w", err)
 	}
 
 	// Determine if we need single or multi-language translation
-	if len(targetLanguages) == 1 {
-		return callGeminiSingle(ctx, client, title, targetLanguages[0])
+	if len(targetLanguages) == 0 {
+		// Only convert to Hindi headline, no translations needed
+		return callGeminiConversionOnly(ctx, client, title)
 	}
-	return callGeminiMulti(ctx, client, title, targetLanguages)
+	if len(targetLanguages) == 1 {
+		return callGeminiSingleWithConversion(ctx, client, title, targetLanguages[0])
+	}
+	return callGeminiMultiWithConversion(ctx, client, title, targetLanguages)
 }
 
-// callGeminiSingle translates to a single language
-func callGeminiSingle(ctx context.Context, client *genai.Client, title string, langCode string) (TranslationResult, error) {
-	langName := languageCodeToName(langCode)
-	prompt := fmt.Sprintf(`Translate the following Hindi news headline to %s.
-Respond ONLY with a JSON object in this exact format: {"translation": "translated text here"}
+// callGeminiConversionOnly converts RSS title to Hindi headline only (no translations)
+func callGeminiConversionOnly(ctx context.Context, client *genai.Client, title string) (TranslationResult, error) {
+	prompt := fmt.Sprintf(`Convert the following Hindi news headline into a 2-sentence Hindi news poster headline.
+Respond ONLY with a JSON object in this exact format: {"hindi_headline": "converted headline here"}
 
-Hindi headline: "%s"`, langName, title)
+Original Hindi headline: "%s"`, title)
 
 	result, err := callGeminiAPI(ctx, client, prompt)
 	if err != nil {
-		return nil, err
+		return TranslationResult{}, err
 	}
 
-	var response GeminiSingleTranslationResponse
+	var response struct {
+		HindiHeadline string `json:"hindi_headline"`
+	}
 	if err := json.Unmarshal([]byte(result), &response); err != nil {
-		return nil, fmt.Errorf("failed to parse Gemini response: %w", err)
+		return TranslationResult{}, fmt.Errorf("failed to parse Gemini response: %w", err)
 	}
 
-	return TranslationResult{langCode: response.Translation}, nil
+	return TranslationResult{
+		HindiHeadline: strings.TrimSpace(response.HindiHeadline),
+		Translations:  make(map[string]string),
+	}, nil
 }
 
-// callGeminiMulti translates to multiple languages
-func callGeminiMulti(ctx context.Context, client *genai.Client, title string, targetLanguages []string) (TranslationResult, error) {
+// callGeminiSingleWithConversion converts title to Hindi headline and translates to a single language
+func callGeminiSingleWithConversion(ctx context.Context, client *genai.Client, title string, langCode string) (TranslationResult, error) {
+	langName := languageCodeToName(langCode)
+	prompt := fmt.Sprintf(`Convert the following Hindi news headline into a 2-sentence Hindi news poster headline, then translate that converted headline to %s.
+Respond ONLY with a JSON object in this exact format:
+{
+  "hindi_headline": "converted 2-sentence Hindi headline here",
+  "translation": "translated text in %s"
+}
+
+Original Hindi headline: "%s"`, langName, langName, title)
+
+	result, err := callGeminiAPI(ctx, client, prompt)
+	if err != nil {
+		return TranslationResult{}, err
+	}
+
+	var response GeminiConversionResponse
+	if err := json.Unmarshal([]byte(result), &response); err != nil {
+		return TranslationResult{}, fmt.Errorf("failed to parse Gemini response: %w", err)
+	}
+
+	return TranslationResult{
+		HindiHeadline: strings.TrimSpace(response.HindiHeadline),
+		Translations:  map[string]string{langCode: strings.TrimSpace(response.Translation)},
+	}, nil
+}
+
+// callGeminiMultiWithConversion converts title to Hindi headline and translates to multiple languages
+func callGeminiMultiWithConversion(ctx context.Context, client *genai.Client, title string, targetLanguages []string) (TranslationResult, error) {
 	// Build language list for prompt
 	langNames := make([]string, len(targetLanguages))
 	for i, langCode := range targetLanguages {
 		langNames[i] = languageCodeToName(langCode)
 	}
 
-	prompt := fmt.Sprintf(`Translate the following Hindi news headline to these languages: %s.
+	prompt := fmt.Sprintf(`Convert the following Hindi news headline into a 2-sentence Hindi news poster headline, then translate that converted headline to these languages: %s.
 Respond ONLY with a JSON object in this exact format:
 {
+  "hindi_headline": "converted 2-sentence Hindi headline here",
   "punjabi": "translated text in Punjabi",
   "gujarati": "translated text in Gujarati",
   "marathi": "translated text in Marathi",
   "bengali": "translated text in Bengali"
 }
-Only include the languages requested. Use the exact keys shown above.
+Only include the languages requested from: Punjabi, Gujarati, Marathi, Bengali. Use the exact keys shown above.
 
-Hindi headline: "%s"`, strings.Join(langNames, ", "), title)
+Original Hindi headline: "%s"`, strings.Join(langNames, ", "), title)
 
 	result, err := callGeminiAPI(ctx, client, prompt)
 	if err != nil {
-		return nil, err
+		return TranslationResult{}, err
 	}
 
-	var response GeminiMultiTranslationResponse
+	var response GeminiConversionMultiResponse
 	if err := json.Unmarshal([]byte(result), &response); err != nil {
-		return nil, fmt.Errorf("failed to parse Gemini response: %w", err)
+		return TranslationResult{}, fmt.Errorf("failed to parse Gemini response: %w", err)
 	}
 
 	// Map to TranslationResult based on which languages were requested
-	resultMap := make(TranslationResult)
+	translations := make(map[string]string)
 	for _, langCode := range targetLanguages {
 		switch langCode {
 		case "pa":
-			resultMap["pa"] = response.Punjabi
+			translations["pa"] = strings.TrimSpace(response.Punjabi)
 		case "gu":
-			resultMap["gu"] = response.Gujarati
+			translations["gu"] = strings.TrimSpace(response.Gujarati)
 		case "mr":
-			resultMap["mr"] = response.Marathi
+			translations["mr"] = strings.TrimSpace(response.Marathi)
 		case "bn":
-			resultMap["bn"] = response.Bengali
+			translations["bn"] = strings.TrimSpace(response.Bengali)
 		}
 	}
 
-	return resultMap, nil
+	return TranslationResult{
+		HindiHeadline: strings.TrimSpace(response.HindiHeadline),
+		Translations:  translations,
+	}, nil
 }
 
 // languageCodeToName converts language code to full name
@@ -645,7 +687,8 @@ func tryParseDate(dateStr string) *time.Time {
 
 // storeNewsWithTranslations stores news and translations atomically
 // If DB transaction fails and media was uploaded to R2, it cleans up the R2 file
-func storeNewsWithTranslations(db *gorm.DB, r2Client *storage.R2Client, bucketName, link string, mediaFileKey *string, publishedAt *time.Time, category, hindiTitle string, translations TranslationResult) error {
+// The hindiHeadline is the converted 2-sentence poster headline (stored for 'hi' language code)
+func storeNewsWithTranslations(db *gorm.DB, r2Client *storage.R2Client, bucketName, link string, mediaFileKey *string, publishedAt *time.Time, category string, result TranslationResult) error {
 	err := db.Transaction(func(tx *gorm.DB) error {
 		// Create news record
 		news := News{
@@ -661,13 +704,13 @@ func storeNewsWithTranslations(db *gorm.DB, r2Client *storage.R2Client, bucketNa
 		}
 
 		// Create translations (news.ID is populated after Create)
-		// Note: hindiTitle is already trimmed before calling this function
+		// Store the converted Hindi headline (not the original RSS title) for 'hi' language code
 		translationsToCreate := []NewsTranslation{
-			{NewsID: news.ID, Title: hindiTitle, LanguageCode: "hi"},
+			{NewsID: news.ID, Title: result.HindiHeadline, LanguageCode: "hi"},
 		}
 
 		// Add translated titles
-		for langCode, title := range translations {
+		for langCode, title := range result.Translations {
 			translationsToCreate = append(translationsToCreate, NewsTranslation{
 				NewsID:       news.ID,
 				Title:        strings.TrimSpace(title),
