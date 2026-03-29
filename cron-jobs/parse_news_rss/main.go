@@ -126,6 +126,15 @@ const (
 	rateLimitPerMinute = 1000
 )
 
+// llmGuidelines contains the shared guidelines for LLM headline conversion
+const llmGuidelines = `Important guidelines (निर्देश):
+- Convert the content into a single factual headline that summarizes all key information
+- The headline should convey complete information (पूरी जानकारी) so users understand the news without reading the full article
+- Avoid teaser-style text (चुभाने वाला टेक्स्ट) like "जानें क्या हुआ", "पढ़ें विवरण", "और जानें", "आप विश्वास नहीं करेंगे"
+- Include the कौन (who), क्या (what), कब (when), कहाँ (where), and क्यों (why) if available in the original content
+- The headline should be informative (जानकारीपूर्ण), not mysterious (रहस्यमय)
+- Extract the most important facts from the content and present them in one clear headline`
+
 // Shared HTTP client for connection reuse
 var httpClient = &http.Client{
 	Timeout: 30 * time.Second,
@@ -306,8 +315,9 @@ func main() {
 			log.Printf("[%s] ✓ Found %d items in feed\n", timestamp, len(feed.Items))
 
 			for _, item := range feed.Items {
-				// Trim title early
+				// Trim title and description early
 				item.Title = strings.TrimSpace(item.Title)
+				item.Description = strings.TrimSpace(item.Description)
 
 				// Skip items without title
 				if item.Title == "" {
@@ -378,7 +388,8 @@ func main() {
 					defer inFlightLinks.Delete(item.Link) // Remove from in-flight tracking
 
 					// Convert title to Hindi headline and translate based on category using Gemini
-					result, err := translateWithGemini(context.Background(), genaiClient, item.Title, targetLanguages, rateLimiter)
+					// Use description if available, otherwise fall back to title
+					result, err := translateWithGemini(context.Background(), genaiClient, item.Title, item.Description, targetLanguages, rateLimiter)
 					if err != nil {
 						log.Printf("[%s] ✗ Failed to convert/translate title '%s': %v\n", timestamp, item.Title, err)
 						countersMutex.Lock()
@@ -432,31 +443,41 @@ func main() {
 	os.Exit(0)
 }
 
-// translateWithGemini converts the RSS title to a 2-sentence Hindi poster headline
+// translateWithGemini converts the RSS title/description to a 2-sentence Hindi poster headline
 // and translates it to target languages in a single LLM call
-func translateWithGemini(ctx context.Context, client *genai.Client, title string, targetLanguages []string, rateLimiter *rate.Limiter) (TranslationResult, error) {
+// Uses description if available and non-empty, otherwise falls back to title
+func translateWithGemini(ctx context.Context, client *genai.Client, title, description string, targetLanguages []string, rateLimiter *rate.Limiter) (TranslationResult, error) {
 	// Wait for rate limiter permission
 	if err := rateLimiter.Wait(ctx); err != nil {
 		return TranslationResult{}, fmt.Errorf("rate limiter wait failed: %w", err)
 	}
 
+	// Determine which source to use: description if available, otherwise title
+	sourceText := title
+	if description != "" {
+		sourceText = description
+	}
+
 	// Determine if we need single or multi-language translation
 	if len(targetLanguages) == 0 {
 		// Only convert to Hindi headline, no translations needed
-		return callGeminiConversionOnly(ctx, client, title)
+		return callGeminiConversionOnly(ctx, client, sourceText)
 	}
 	if len(targetLanguages) == 1 {
-		return callGeminiSingleWithConversion(ctx, client, title, targetLanguages[0])
+		return callGeminiSingleWithConversion(ctx, client, sourceText, targetLanguages[0])
 	}
-	return callGeminiMultiWithConversion(ctx, client, title, targetLanguages)
+	return callGeminiMultiWithConversion(ctx, client, sourceText, targetLanguages)
 }
 
-// callGeminiConversionOnly converts RSS title to Hindi headline only (no translations)
-func callGeminiConversionOnly(ctx context.Context, client *genai.Client, title string) (TranslationResult, error) {
-	prompt := fmt.Sprintf(`Convert the following Hindi news headline into a 2-sentence Hindi news poster headline.
+// callGeminiConversionOnly converts RSS content to Hindi headline only (no translations)
+func callGeminiConversionOnly(ctx context.Context, client *genai.Client, sourceText string) (TranslationResult, error) {
+	prompt := fmt.Sprintf(`Convert the following Hindi news content into a single factual Hindi news poster headline.
+
+%s
+
 Respond ONLY with a JSON object in this exact format: {"hindi_headline": "converted headline here"}
 
-Original Hindi headline: "%s"`, title)
+Original Hindi news content: "%s"`, llmGuidelines, sourceText)
 
 	result, err := callGeminiAPI(ctx, client, prompt)
 	if err != nil {
@@ -476,17 +497,20 @@ Original Hindi headline: "%s"`, title)
 	}, nil
 }
 
-// callGeminiSingleWithConversion converts title to Hindi headline and translates to a single language
-func callGeminiSingleWithConversion(ctx context.Context, client *genai.Client, title string, langCode string) (TranslationResult, error) {
+// callGeminiSingleWithConversion converts content to Hindi headline and translates to a single language
+func callGeminiSingleWithConversion(ctx context.Context, client *genai.Client, sourceText string, langCode string) (TranslationResult, error) {
 	langName := languageCodeToName(langCode)
-	prompt := fmt.Sprintf(`Convert the following Hindi news headline into a 2-sentence Hindi news poster headline, then translate that converted headline to %s.
+	prompt := fmt.Sprintf(`Convert the following Hindi news content into a single factual Hindi news poster headline, then translate that converted headline to %s.
+
+%s
+
 Respond ONLY with a JSON object in this exact format:
 {
-  "hindi_headline": "converted 2-sentence Hindi headline here",
+  "hindi_headline": "converted Hindi headline here",
   "translation": "translated text in %s"
 }
 
-Original Hindi headline: "%s"`, langName, langName, title)
+Original Hindi news content: "%s"`, langName, llmGuidelines, langName, sourceText)
 
 	result, err := callGeminiAPI(ctx, client, prompt)
 	if err != nil {
@@ -504,18 +528,21 @@ Original Hindi headline: "%s"`, langName, langName, title)
 	}, nil
 }
 
-// callGeminiMultiWithConversion converts title to Hindi headline and translates to multiple languages
-func callGeminiMultiWithConversion(ctx context.Context, client *genai.Client, title string, targetLanguages []string) (TranslationResult, error) {
+// callGeminiMultiWithConversion converts content to Hindi headline and translates to multiple languages
+func callGeminiMultiWithConversion(ctx context.Context, client *genai.Client, sourceText string, targetLanguages []string) (TranslationResult, error) {
 	// Build language list for prompt
 	langNames := make([]string, len(targetLanguages))
 	for i, langCode := range targetLanguages {
 		langNames[i] = languageCodeToName(langCode)
 	}
 
-	prompt := fmt.Sprintf(`Convert the following Hindi news headline into a 2-sentence Hindi news poster headline, then translate that converted headline to these languages: %s.
+	prompt := fmt.Sprintf(`Convert the following Hindi news content into a single factual Hindi news poster headline, then translate that converted headline to these languages: %s.
+
+%s
+
 Respond ONLY with a JSON object in this exact format:
 {
-  "hindi_headline": "converted 2-sentence Hindi headline here",
+  "hindi_headline": "converted Hindi headline here",
   "punjabi": "translated text in Punjabi",
   "gujarati": "translated text in Gujarati",
   "marathi": "translated text in Marathi",
@@ -523,7 +550,7 @@ Respond ONLY with a JSON object in this exact format:
 }
 Only include the languages requested from: Punjabi, Gujarati, Marathi, Bengali. Use the exact keys shown above.
 
-Original Hindi headline: "%s"`, strings.Join(langNames, ", "), title)
+Original Hindi news content: "%s"`, strings.Join(langNames, ", "), llmGuidelines, sourceText)
 
 	result, err := callGeminiAPI(ctx, client, prompt)
 	if err != nil {
