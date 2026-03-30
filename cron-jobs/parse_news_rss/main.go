@@ -110,6 +110,7 @@ var categoryLanguageMapping = map[string][]string{
 	"madhya_pradesh":   {},
 	"jharkhand":        {},
 	"chhattisgarh":     {},
+	"uttarakhand":      {},
 }
 
 // getLanguagesForCategory returns the languages to translate for a given category
@@ -254,6 +255,7 @@ func main() {
 		{URL: "https://api.livehindustan.com/feeds/rss/madhya-pradesh/rssfeed.xml", Category: "madhya_pradesh"},
 		{URL: "https://api.livehindustan.com/feeds/rss/jharkhand/rssfeed.xml", Category: "jharkhand"},
 		{URL: "https://api.livehindustan.com/feeds/rss/chhattisgarh/rssfeed.xml", Category: "chhattisgarh"},
+		{URL: "https://api.livehindustan.com/feeds/rss/uttarakhand/rssfeed.xml", Category: "uttarakhand"},
 		// States - Hindi + regional language (Bhaskar)
 		{URL: "https://www.bhaskar.com/rss-v1--category-1743.xml", Category: "punjab"},
 		{URL: "https://www.bhaskar.com/rss-v1--category-2314.xml", Category: "gujarat"},
