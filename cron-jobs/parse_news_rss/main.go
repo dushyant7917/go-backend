@@ -129,6 +129,7 @@ const (
 // llmGuidelines contains the shared guidelines for LLM headline conversion
 const llmGuidelines = `Important guidelines (निर्देश):
 - Convert the content into a single factual headline that summarizes all key information
+- The headline must not exceed 120 characters (अधिकतम 120 अक्षर)
 - The headline should convey complete information (पूरी जानकारी) so users understand the news without reading the full article
 - Avoid teaser-style text (चुभाने वाला टेक्स्ट) like "जानें क्या हुआ", "पढ़ें विवरण", "और जानें", "आप विश्वास नहीं करेंगे"
 - Include the कौन (who), क्या (what), कब (when), कहाँ (where), and क्यों (why) if available in the original content
