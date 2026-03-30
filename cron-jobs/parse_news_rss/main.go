@@ -350,8 +350,8 @@ func main() {
 					continue
 				}
 
-				// Check if item is duplicate (by link or by Hindi title)
-				isDuplicate, err := checkDuplicateItem(db, item.Link, item.Title)
+				// Check if item is duplicate (by link or media file key)
+				isDuplicate, err := checkDuplicateItem(db, item.Link, mediaLink)
 				if err != nil {
 					log.Printf("[%s] ✗ Database error checking duplicate: %v\n", timestamp, err)
 					countersMutex.Lock()
@@ -627,11 +627,9 @@ func callGeminiAPI(ctx context.Context, client *genai.Client, prompt string) (st
 	return response.Candidates[0].Content.Parts[0].Text, nil
 }
 
-// checkDuplicateItem checks if a news item is duplicate by link or by Hindi title
-// Step 1: Check if link exists in news table
-// Step 2: Check if Hindi title exists in news_translations table
+// checkDuplicateItem checks if a news item is duplicate by link or media file key
 // Returns true if either check finds a match (item is duplicate)
-func checkDuplicateItem(db *gorm.DB, link, hindiTitle string) (bool, error) {
+func checkDuplicateItem(db *gorm.DB, link, mediaFileKey string) (bool, error) {
 	// Step 1: Check if link exists in news table
 	var existingNews News
 	result := db.Where("link = ?", link).First(&existingNews)
@@ -643,18 +641,20 @@ func checkDuplicateItem(db *gorm.DB, link, hindiTitle string) (bool, error) {
 		return false, fmt.Errorf("error checking link: %w", result.Error)
 	}
 
-	// Step 2: Check if Hindi title exists in news_translations table
-	var existingTranslation NewsTranslation
-	result = db.Where("title = ? AND language_code = ?", hindiTitle, "hi").First(&existingTranslation)
-	if result.Error == nil {
-		// Hindi title already exists
-		return true, nil
-	}
-	if result.Error != nil && result.Error != gorm.ErrRecordNotFound {
-		return false, fmt.Errorf("error checking title: %w", result.Error)
+	// Step 2: Check if media file key exists (if provided)
+	if mediaFileKey != "" {
+		var existingMedia News
+		result = db.Where("media_file_key = ?", mediaFileKey).First(&existingMedia)
+		if result.Error == nil {
+			// Media file already exists
+			return true, nil
+		}
+		if result.Error != nil && result.Error != gorm.ErrRecordNotFound {
+			return false, fmt.Errorf("error checking media: %w", result.Error)
+		}
 	}
 
-	// Neither link nor Hindi title exists - not a duplicate
+	// Neither link nor media exists - not a duplicate
 	return false, nil
 }
 
