@@ -1323,6 +1323,10 @@ func (s *recurringPaymentService) createRazorpayRecurringPayment(pa models.Payme
 
 	if orderStatus, ok := order["status"].(string); ok && orderStatus == "paid" {
 		fmt.Printf("[createRazorpayRecurringPayment] Order %s already paid, updating records\n", pa.RazorpayOrderID)
+		// Extract payment_id from order for data completeness
+		if paymentID := extractPaymentIDFromOrder(order); paymentID != nil {
+			pa.RazorpayPaymentID = paymentID
+		}
 		// Update all records to reflect paid status
 		s.handlePaymentCaptured(&pa, billingCycle, recurringPayment)
 		if err := s.saveRecordsInTransaction(&pa, billingCycle, recurringPayment); err != nil {
@@ -1538,6 +1542,28 @@ func (s *recurringPaymentService) reconcileFromPaymentID(
 	return nil
 }
 
+// extractPaymentIDFromOrder extracts the payment_id from an order response
+// Order response contains payments under: payments.items[0].id
+func extractPaymentIDFromOrder(order map[string]interface{}) *string {
+	payments, ok := order["payments"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	items, ok := payments["items"].([]interface{})
+	if !ok || len(items) == 0 {
+		return nil
+	}
+	item, ok := items[0].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	paymentID, ok := item["id"].(string)
+	if !ok {
+		return nil
+	}
+	return &paymentID
+}
+
 // reconcileFromOrderID reconciles using order ID
 func (s *recurringPaymentService) reconcileFromOrderID(
 	razorpayClient *razorpay.Client,
@@ -1551,6 +1577,10 @@ func (s *recurringPaymentService) reconcileFromOrderID(
 	}
 
 	if status, ok := order["status"].(string); ok && status == "paid" {
+		// Extract payment_id from order for data completeness
+		if paymentID := extractPaymentIDFromOrder(order); paymentID != nil {
+			pa.RazorpayPaymentID = paymentID
+		}
 		s.handlePaymentCaptured(pa, billingCycle, recurringPayment)
 	}
 
