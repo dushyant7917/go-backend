@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 
 	recurringPaymentModels "go-backend/internal/apps/razorpay/recurring_payment/models"
@@ -43,22 +44,26 @@ func (h *DailystoryHandler) GetCombinedStatus(c *gin.Context) {
 	appName := c.Query("app_name")
 
 	if appName == "" {
+		log.Printf("[GetCombinedStatus] Missing app_name parameter")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "app_name is required"})
 		return
 	}
 
 	if phone == "" {
+		log.Printf("[GetCombinedStatus] Missing phone parameter")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "phone is required"})
 		return
 	}
 
 	if userIDStr == "" {
+		log.Printf("[GetCombinedStatus] Missing user_id parameter")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "user_id is required"})
 		return
 	}
 
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
+		log.Printf("[GetCombinedStatus] Invalid user_id: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user_id"})
 		return
 	}
