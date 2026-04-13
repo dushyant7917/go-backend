@@ -21,12 +21,18 @@ import (
 	otpHandler "go-backend/internal/apps/otp/handler"
 	otpRepository "go-backend/internal/apps/otp/repository"
 	otpService "go-backend/internal/apps/otp/service"
+	posthogConfigHandler "go-backend/internal/apps/posthog/config/handler"
+	posthogConfigRepository "go-backend/internal/apps/posthog/config/repository"
+	posthogConfigService "go-backend/internal/apps/posthog/config/service"
 	r2ConfigHandler "go-backend/internal/apps/r2/config/handler"
 	r2ConfigRepository "go-backend/internal/apps/r2/config/repository"
 	r2ConfigService "go-backend/internal/apps/r2/config/service"
 	configHandler "go-backend/internal/apps/razorpay/config/handler"
 	configRepository "go-backend/internal/apps/razorpay/config/repository"
 	configService "go-backend/internal/apps/razorpay/config/service"
+	recurringPaymentHandler "go-backend/internal/apps/razorpay/recurring_payment/handler"
+	recurringPaymentRepository "go-backend/internal/apps/razorpay/recurring_payment/repository"
+	recurringPaymentService "go-backend/internal/apps/razorpay/recurring_payment/service"
 	razorpayHandler "go-backend/internal/apps/razorpay/subscription/handler"
 	razorpayRepository "go-backend/internal/apps/razorpay/subscription/repository"
 	razorpayService "go-backend/internal/apps/razorpay/subscription/service"
@@ -120,6 +126,16 @@ func main() {
 	userRepo := userRepository.NewUserRepository(db)
 	crushRepo := crushRepository.NewCrushRepository(db)
 
+	// Initialize Recurring Payment dependencies
+	recurringPaymentRepo := recurringPaymentRepository.NewRecurringPaymentRepository(db)
+	posthogConfigRepo := posthogConfigRepository.NewPostHogConfigRepository(db)
+	recurringPaymentSvc := recurringPaymentService.NewRecurringPaymentService(recurringPaymentRepo, configRepo, userRepo, metaDatasetRepo, posthogConfigRepo)
+	recurringPaymentH := recurringPaymentHandler.NewRecurringPaymentHandler(recurringPaymentSvc)
+
+	// Initialize PostHog Config dependencies
+	posthogConfigSvc := posthogConfigService.NewPostHogConfigService(posthogConfigRepo)
+	posthogConfigH := posthogConfigHandler.NewPostHogConfigHandler(posthogConfigSvc)
+
 	// Initialize services
 	crushSvc := crushService.NewCrushService(crushRepo, userRepo)
 	userSvc := userService.NewUserService(userRepo, crushRepo, r2ClientFactory)
@@ -184,6 +200,9 @@ func main() {
 	newsPosterSvc := dailystoryService.NewNewsPosterService(newsPosterRepo)
 	newsPosterH := dailystoryHandler.NewNewsPosterHandler(newsPosterSvc)
 
+	// Initialize Combined Subscription Status handler (dailystory)
+	dailystoryH := dailystoryHandler.NewDailystoryHandler(subscriptionRepo, recurringPaymentRepo)
+
 	// Initialize Agora Chat dependencies
 	chatSvc := agoraChatService.NewChatService()
 	chatH := agoraChatHandler.NewChatHandler(chatSvc)
@@ -214,6 +233,9 @@ func main() {
 	// Razorpay config creation endpoint (before CORS middleware for admin access)
 	router.POST("/api/v1/razorpay-configs", configH.CreateRazorpayConfig)
 
+	// PostHog config creation endpoint (before CORS middleware for admin access)
+	router.POST("/api/v1/posthog-configs", posthogConfigH.CreatePostHogConfig)
+
 	// Setup CORS middleware
 	router.Use(middleware.SetupCORS(env))
 
@@ -226,8 +248,14 @@ func main() {
 		// Register R2 Config management routes
 		r2ConfigHandler.RegisterR2ConfigRoutes(v1, r2ConfigH)
 
+		// Register PostHog Config management routes
+		posthogConfigHandler.RegisterPostHogConfigRoutes(v1, posthogConfigH)
+
 		// Register Razorpay subscription routes
 		razorpayHandler.RegisterSubscriptionRoutes(v1, subscriptionHandler)
+
+		// Register Recurring Payment routes
+		recurringPaymentHandler.RegisterRecurringPaymentRoutes(v1, recurringPaymentH)
 
 		// Register User management routes
 		userHandler.RegisterUserRoutes(v1, userH)
@@ -251,6 +279,9 @@ func main() {
 
 		// Register News routes (within DailyStory)
 		dailystoryHandler.RegisterNewsRoutes(v1, newsH, newsPosterH)
+
+		// Register Combined Subscription Status routes (dailystory)
+		dailystoryHandler.SetupDailystoryRouter(v1, dailystoryH)
 
 		// Register Agora routes
 		agoraChatHandler.RegisterChatRoutes(v1, chatH)

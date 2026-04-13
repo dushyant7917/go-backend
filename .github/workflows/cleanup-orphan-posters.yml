@@ -1,9 +1,10 @@
 name: Cleanup Orphan Posters
 
 on:
-  schedule:
-    # Runs at 4:00 AM IST (10:30 PM UTC previous day) every Wednesday
-    - cron: "30 22 * * 2"
+  # Disabled - no longer needed
+  # schedule:
+  #   # Runs at 4:00 AM IST (10:30 PM UTC previous day) every Wednesday
+  #   - cron: "30 22 * * 2"
   workflow_dispatch: # Allows manual triggering
 
 jobs:

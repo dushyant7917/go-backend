@@ -1,9 +1,10 @@
 name: Cleanup Orphan Templates
 
 on:
-  schedule:
-    # Runs at 3:30 AM IST (10:00 PM UTC previous day) every Wednesday
-    - cron: "0 22 * * 2"
+  # Disabled - no longer needed
+  # schedule:
+  #   # Runs at 3:30 AM IST (10:00 PM UTC previous day) every Wednesday
+  #   - cron: "0 22 * * 2"
   workflow_dispatch: # Allows manual triggering
 
 jobs:

@@ -1,9 +1,10 @@
 name: Cleanup Rejected Templates
 
 on:
-  schedule:
-    # Runs at 2:00 AM IST (8:30 PM UTC previous day) every Tuesday and Thursday
-    - cron: "30 20 * * 2,4"
+  # Disabled - no longer needed
+  # schedule:
+  #   # Runs at 2:00 AM IST (8:30 PM UTC previous day) every Tuesday and Thursday
+  #   - cron: "30 20 * * 2,4"
   workflow_dispatch: # Allows manual triggering
 
 jobs:

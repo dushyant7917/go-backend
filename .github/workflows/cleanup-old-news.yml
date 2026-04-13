@@ -1,10 +1,9 @@
-name: Cleanup Old Templates
+name: Cleanup Old News
 
 on:
-  # Disabled - no longer needed
-  # schedule:
-  #   # Runs at 3:30 AM IST (10:00 PM UTC previous day) every Monday
-  #   - cron: "0 22 * * 1"
+  schedule:
+    # Runs at 4:30 AM IST (11:00 PM UTC previous day) every day
+    - cron: "0 23 * * *"
   workflow_dispatch: # Allows manual triggering
 
 jobs:
@@ -31,7 +30,7 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Run cleanup script for templates older than 14 days
+      - name: Run cleanup script for news older than 7 days
         env:
           GO_ENV: ${{ secrets.GO_ENV }}
           DB_HOST: ${{ secrets.DB_HOST }}
@@ -43,10 +42,10 @@ jobs:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_DS_TEMPLATES_BUCKET_NAME: ${{ secrets.R2_DS_TEMPLATES_BUCKET_NAME }}
+          R2_DS_NEWS_BUCKET_NAME: ${{ secrets.R2_DS_NEWS_BUCKET_NAME }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
         run: |
-          cd cron-jobs/cleanup_old_templates
+          cd cron-jobs/cleanup_old_news
           go run main.go 7
 
       - name: Notify on failure

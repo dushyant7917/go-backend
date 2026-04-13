@@ -65,3 +65,25 @@
 # 4. Test your script manually before adding to crontab
 # 5. Use tools like https://crontab.guru/ to validate cron expressions
 # 6. For security, consider using a .env file or secret management system for DB_PASSWORD
+
+# ----- Recurring Payment Cron Jobs -----
+
+# Cron A: Process NEW billing cycles (every hour)
+# Finds recurring payments where next_charge_at is 48-72 hours away and latest billing cycle is paid
+# Creates new billing cycle, payment attempt, and sends pre-debit notification via Razorpay order
+0 * * * * cd /Users/dushyant7917/D7/go-backend && go run cron-jobs/process_new_billing_cycles/main.go >> /var/log/process-new-billing-cycles.log 2>&1
+
+# Cron B: Retry FAILED billing cycles (every hour)
+# Finds billing cycles with pending status and next_attempt_at 48-72 hours away, max 8 attempts
+# Creates new payment attempt and sends notification for retry
+0 * * * * cd /Users/dushyant7917/D7/go-backend && go run cron-jobs/retry_failed_billing_cycles/main.go >> /var/log/retry-failed-billing-cycles.log 2>&1
+
+# Cron C: Charge PENDING PAYMENTS via SDK (every hour)
+# Finds payment attempts in created/pending state created 25+ hours ago
+# Creates recurring payment via Razorpay SDK to charge the user
+0 * * * * cd /Users/dushyant7917/D7/go-backend && go run cron-jobs/charge_pending_payments/main.go >> /var/log/charge-pending-payments.log 2>&1
+
+# Cron D: RECONCILE payments with Razorpay (every hour)
+# Fetches payment/order status from Razorpay for pending attempts created 24+ hours ago
+# Syncs local state to handle missed webhook events
+0 * * * * cd /Users/dushyant7917/D7/go-backend && go run cron-jobs/reconcile_payments/main.go >> /var/log/reconcile-payments.log 2>&1

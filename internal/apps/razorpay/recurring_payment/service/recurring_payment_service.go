@@ -1,0 +1,1921 @@
+package service
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	metaDatasetModels "go-backend/internal/apps/metadataset/config/models"
+	metaDatasetRepository "go-backend/internal/apps/metadataset/config/repository"
+	posthogModels "go-backend/internal/apps/posthog/config/models"
+	"go-backend/internal/apps/posthog/config/repository"
+	clientModels "go-backend/internal/apps/razorpay/config/models"
+	razorpayConfigRepository "go-backend/internal/apps/razorpay/config/repository"
+	"go-backend/internal/apps/razorpay/recurring_payment/models"
+	repo "go-backend/internal/apps/razorpay/recurring_payment/repository"
+	userModels "go-backend/internal/apps/user/models"
+	userRepo "go-backend/internal/apps/user/repository"
+	"go-backend/internal/common/constants"
+	"go-backend/pkg/analytics"
+	"go-backend/pkg/notification"
+	"go-backend/pkg/utils"
+
+	"github.com/google/uuid"
+	razorpay "github.com/razorpay/razorpay-go"
+	"gorm.io/gorm"
+)
+
+// RecurringPaymentService defines the interface for recurring payment business logic
+type RecurringPaymentService interface {
+	// API endpoints
+	CreateAuthorizationOrder(req models.CreateAuthorizationOrderRequest) (*models.AuthorizationOrderResponse, error)
+	CreateRegistrationLink(req models.CreateRegistrationLinkRequest) (*models.RegistrationLinkResponse, error)
+	VerifyAuthorizationPayment(req models.VerifyAuthorizationPaymentRequest) (*models.RecurringPaymentResponse, error)
+	GetRecurringPaymentByID(id uuid.UUID) (*models.RecurringPaymentResponse, error)
+	GetRecurringPaymentStatus(userID uuid.UUID, appName string) (*models.RecurringPaymentStatusResponse, error)
+	HandleWebhook(payload []byte, signature string) error
+
+	// Cron job methods
+	ProcessNewBillingCycles() error  // Cron A: Create new billing cycles and send notifications
+	RetryFailedBillingCycles() error // Cron B: Retry failed billing cycles
+	ChargePendingPayments() error    // Cron C: Charge pending payment attempts via Razorpay SDK
+	ReconcilePayments() error        // Cron D: Sync state from Razorpay for missed webhooks
+}
+
+// recurringPaymentService implements RecurringPaymentService interface
+type recurringPaymentService struct {
+	repo              repo.RecurringPaymentRepository
+	configRepo        razorpayConfigRepository.RazorpayConfigRepository
+	userRepo          userRepo.UserRepository
+	metaDatasetRepo   metaDatasetRepository.MetaDatasetConfigRepository
+	posthogConfigRepo repository.PostHogConfigRepository
+	clientCache       map[string]*razorpay.Client
+	configCache       map[string]*clientModels.RazorpayConfig
+	cacheMutex        sync.RWMutex
+	metaDatasetClient *notification.MetaDatasetClient
+	posthogClient     *analytics.PostHogClient
+}
+
+// NewRecurringPaymentService creates a new instance of RecurringPaymentService
+func NewRecurringPaymentService(
+	repo repo.RecurringPaymentRepository,
+	configRepo razorpayConfigRepository.RazorpayConfigRepository,
+	userRepo userRepo.UserRepository,
+	metaDatasetRepo metaDatasetRepository.MetaDatasetConfigRepository,
+	posthogConfigRepo repository.PostHogConfigRepository,
+) RecurringPaymentService {
+	return &recurringPaymentService{
+		repo:              repo,
+		configRepo:        configRepo,
+		userRepo:          userRepo,
+		metaDatasetRepo:   metaDatasetRepo,
+		posthogConfigRepo: posthogConfigRepo,
+		clientCache:       make(map[string]*razorpay.Client),
+		configCache:       make(map[string]*clientModels.RazorpayConfig),
+		metaDatasetClient: notification.NewMetaDatasetClient(),
+		posthogClient:     analytics.NewPostHogClient(),
+	}
+}
+
+// ==================== Cache Helpers ====================
+
+// getRazorpayClient returns a cached Razorpay client or creates a new one
+func (s *recurringPaymentService) getRazorpayClient(config *clientModels.RazorpayConfig) *razorpay.Client {
+	cacheKey := config.AppName + ":" + config.Environment
+
+	s.cacheMutex.RLock()
+	cachedClient, exists := s.clientCache[cacheKey]
+	s.cacheMutex.RUnlock()
+
+	if exists {
+		return cachedClient
+	}
+
+	s.cacheMutex.Lock()
+	defer s.cacheMutex.Unlock()
+
+	if cachedClient, exists := s.clientCache[cacheKey]; exists {
+		return cachedClient
+	}
+
+	newClient := razorpay.NewClient(config.RazorpayKeyID, config.RazorpayKeySecret)
+	s.clientCache[cacheKey] = newClient
+
+	fmt.Printf("[getRazorpayClient] Created and cached new Razorpay client for app: %s\n", config.AppName)
+	return newClient
+}
+
+// getConfig returns a cached Razorpay config or fetches from database
+func (s *recurringPaymentService) getConfig(appName string) (*clientModels.RazorpayConfig, error) {
+	env := utils.GetRazorpayEnvironment()
+	cacheKey := appName + ":" + env
+
+	s.cacheMutex.RLock()
+	cachedConfig, exists := s.configCache[cacheKey]
+	s.cacheMutex.RUnlock()
+
+	if exists {
+		return cachedConfig, nil
+	}
+
+	s.cacheMutex.Lock()
+	defer s.cacheMutex.Unlock()
+
+	if cachedConfig, exists := s.configCache[cacheKey]; exists {
+		return cachedConfig, nil
+	}
+
+	config, err := s.configRepo.FindByAppNameAndEnv(appName, env)
+	if err != nil {
+		return nil, err
+	}
+
+	s.configCache[cacheKey] = config
+	fmt.Printf("[getConfig] Fetched and cached config for app: %s\n", appName)
+	return config, nil
+}
+
+// ==================== Generic Helpers ====================
+
+const maxConcurrency = 20
+
+// processInParallel runs a processor function in parallel over items with bounded concurrency
+func processInParallel[T any](items []T, processor func(T) error, logPrefix string) {
+	sem := make(chan struct{}, maxConcurrency)
+	var wg sync.WaitGroup
+
+	for _, item := range items {
+		wg.Add(1)
+		sem <- struct{}{} // acquire semaphore
+
+		go func(item T) {
+			defer wg.Done()
+			defer func() { <-sem }() // release semaphore
+
+			if err := processor(item); err != nil {
+				fmt.Printf("[%s] ERROR: %v\n", logPrefix, err)
+			}
+		}(item)
+	}
+	wg.Wait()
+}
+
+// scheduleRetry calculates and sets the next retry time for a billing cycle
+// Retry pattern: T+3, T+6, T+9... days from start
+func scheduleRetry(billingCycle *models.BillingCycle) {
+	attemptNum := billingCycle.ChargeAttempts
+	retryDays := attemptNum * 3
+	nextRetry := billingCycle.StartAt.AddDate(0, 0, retryDays)
+	billingCycle.NextAttemptAt = &nextRetry
+}
+
+// handlePaymentCaptured updates records for a captured payment, schedules next charge, and emits Meta event
+func (s *recurringPaymentService) handlePaymentCaptured(
+	paymentAttempt *models.PaymentAttempt,
+	billingCycle *models.BillingCycle,
+	recurringPayment *models.RecurringPayment,
+) {
+	// Idempotency: skip if already captured
+	if paymentAttempt.Status == models.PaymentAttemptStatusCaptured {
+		return
+	}
+
+	now := time.Now().UTC()
+
+	paymentAttempt.Status = models.PaymentAttemptStatusCaptured
+	billingCycle.Status = models.BillingCycleStatusPaid
+
+	// Use scheduled time if available, otherwise now
+	if billingCycle.NextAttemptAt != nil {
+		recurringPayment.LastChargedAt = billingCycle.NextAttemptAt
+	} else {
+		recurringPayment.LastChargedAt = &now
+	}
+	billingCycle.NextAttemptAt = nil // No more attempts needed - cycle is paid
+
+	// Schedule next charge
+	nextCharge := s.calculateNextChargeDate(*recurringPayment)
+	recurringPayment.NextChargeAt = &nextCharge
+
+	// Emit Meta event for new capture
+	go s.sendMetaDatasetRecurringPaymentCapturedEvent(recurringPayment, paymentAttempt, billingCycle)
+
+	// Emit PostHog event for payment captured
+	user, err := s.userRepo.FindByID(recurringPayment.UserID)
+	if err == nil {
+		go s.sendPostHogRecurringPaymentCapturedEvent(recurringPayment, paymentAttempt, user)
+	}
+}
+
+// handlePaymentFailed updates records for a failed payment
+func (s *recurringPaymentService) handlePaymentFailed(
+	paymentAttempt *models.PaymentAttempt,
+	billingCycle *models.BillingCycle,
+	recurringPayment *models.RecurringPayment,
+	paymentEntity map[string]interface{},
+) {
+	// Idempotency: skip if already in a terminal state
+	if paymentAttempt.Status == models.PaymentAttemptStatusFailed {
+		return
+	}
+
+	paymentAttempt.Status = models.PaymentAttemptStatusFailed
+
+	// Extract error details
+	if errorCode, ok := paymentEntity["error_code"].(string); ok {
+		paymentAttempt.ErrorCode = errorCode
+	}
+	if errorDesc, ok := paymentEntity["error_description"].(string); ok {
+		paymentAttempt.ErrorDescription = errorDesc
+	}
+
+	// Emit PostHog event for payment failed
+	user, err := s.userRepo.FindByID(recurringPayment.UserID)
+	if err == nil {
+		go s.sendPostHogRecurringPaymentFailedEvent(recurringPayment, paymentAttempt, user)
+	}
+
+	// Skip retry scheduling for authorization payment (cycle 0)
+	if billingCycle.CycleNumber == 0 {
+		return
+	}
+
+	// Mark expired if max attempts reached (8)
+	if billingCycle.ChargeAttempts >= 8 {
+		billingCycle.Status = models.BillingCycleStatusFailed
+		recurringPayment.Status = models.RecurringPaymentStatusExpired
+		return
+	}
+
+	// Schedule next retry
+	scheduleRetry(billingCycle)
+}
+
+// isTokenError checks if an error is related to token/mandate issues
+func isTokenError(errMsg string) bool {
+	lowerMsg := strings.ToLower(errMsg)
+	return strings.Contains(lowerMsg, "token") || strings.Contains(lowerMsg, "mandate")
+}
+
+// calculateAttemptAmount calculates the amount to charge based on attempt number
+// First 3 attempts: maxAmount (full amount)
+// 4th attempt onwards: maxAmount - 5 rupees (500 paise) per attempt above 3
+func calculateAttemptAmount(maxAmount int64, attemptNumber int) int64 {
+	if attemptNumber <= 3 {
+		return maxAmount
+	}
+	// Decrease by 5 rupees (500 paise) for each attempt above 3
+	discount := int64((attemptNumber - 3) * 500)
+	if discount >= maxAmount {
+		return 100 // Minimum 1 rupee (100 paise)
+	}
+	return maxAmount - discount
+}
+
+// saveRecordsInTransaction saves all records in a single transaction
+func (s *recurringPaymentService) saveRecordsInTransaction(
+	paymentAttempt *models.PaymentAttempt,
+	billingCycle *models.BillingCycle,
+	recurringPayment *models.RecurringPayment,
+) error {
+	tx := s.repo.BeginTransaction()
+
+	if err := s.repo.UpdatePaymentAttempt(tx, paymentAttempt); err != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to update payment attempt: %w", err)
+	}
+	if err := s.repo.UpdateBillingCycle(tx, billingCycle); err != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to update billing cycle: %w", err)
+	}
+	if err := s.repo.UpdateRecurringPayment(tx, recurringPayment); err != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to update recurring payment: %w", err)
+	}
+
+	if err := s.repo.CommitTransaction(tx); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// ==================== API Endpoints ====================
+
+// CreateAuthorizationOrder creates a customer, order, and initializes recurring payment records
+func (s *recurringPaymentService) CreateAuthorizationOrder(req models.CreateAuthorizationOrderRequest) (*models.AuthorizationOrderResponse, error) {
+	// Get user details for email and phone
+	user, err := s.userRepo.FindByID(req.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find user: %w", err)
+	}
+
+	config, err := s.getConfig(req.AppName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find razorpay config: %w", err)
+	}
+
+	if !config.IsActive {
+		return nil, errors.New("razorpay config is not active")
+	}
+
+	// Validate StartAt is at least 4 days in the future
+	// ProcessNewBillingCycles cron looks for next_charge_at in 48-72 hour window
+	// If StartAt is too close, the cron will miss creating the first billing cycle
+	minStartAt := time.Now().UTC().Add(4 * 24 * time.Hour)
+	if req.StartAt.Before(minStartAt) {
+		return nil, fmt.Errorf("start_at must be at least 4 days in the future")
+	}
+
+	// Validate authorization_amount <= max_amount (Razorpay requirement for UPI recurring)
+	if req.AuthorizationAmount > req.MaxAmount {
+		return nil, fmt.Errorf("authorization_amount (%d) cannot be greater than max_amount (%d)", req.AuthorizationAmount, req.MaxAmount)
+	}
+
+	razorpayClient := s.getRazorpayClient(config)
+
+	// Create customer in Razorpay
+	customerID, err := s.createRazorpayCustomer(razorpayClient, user)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create authorization order in Razorpay
+	orderID, err := s.createAuthorizationRazorpayOrder(razorpayClient, customerID, req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create database records
+	recurringPayment, billingCycle, paymentAttempt, err := s.createAuthorizationDBRecords(req, customerID, orderID)
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Printf("[CreateAuthorizationOrder] Created RecurringPayment: %s, BillingCycle: %s, PaymentAttempt: %s\n",
+		recurringPayment.ID, billingCycle.ID, paymentAttempt.ID)
+
+	return &models.AuthorizationOrderResponse{
+		RecurringPaymentID: recurringPayment.ID,
+		RazorpayOrderID:    orderID,
+		RazorpayCustomerID: customerID,
+		Amount:             req.AuthorizationAmount,
+		Currency:           "INR",
+		KeyID:              config.RazorpayKeyID,
+	}, nil
+}
+
+// CreateRegistrationLink creates a Razorpay registration link for UPI recurring authorization
+// Uses Razorpay's Invoice.CreateRegistrationLink API which handles customer + order internally
+// https://razorpay.com/docs/api/payments/recurring-payments/upi/create-authorization-transaction/#121-create-a-registration-link
+func (s *recurringPaymentService) CreateRegistrationLink(req models.CreateRegistrationLinkRequest) (*models.RegistrationLinkResponse, error) {
+	// Get user details for email and phone
+	user, err := s.userRepo.FindByID(req.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find user: %w", err)
+	}
+
+	// Validate required user fields
+	if user.Email == nil || *user.Email == "" {
+		return nil, errors.New("user email is required")
+	}
+	if user.CountryCode == nil || *user.CountryCode == "" {
+		return nil, errors.New("user country_code is required")
+	}
+	if user.Phone == nil || *user.Phone == "" {
+		return nil, errors.New("user phone is required")
+	}
+
+	config, err := s.getConfig(req.AppName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find razorpay config: %w", err)
+	}
+
+	if !config.IsActive {
+		return nil, errors.New("razorpay config is not active")
+	}
+
+	// Validate StartAt is at least 4 days in the future
+	minStartAt := time.Now().UTC().Add(4 * 24 * time.Hour)
+	if req.StartAt.Before(minStartAt) {
+		return nil, fmt.Errorf("start_at must be at least 4 days in the future")
+	}
+
+	// Validate authorization_amount <= max_amount (Razorpay requirement for UPI recurring)
+	if req.AuthorizationAmount > req.MaxAmount {
+		return nil, fmt.Errorf("authorization_amount (%d) cannot be greater than max_amount (%d)", req.AuthorizationAmount, req.MaxAmount)
+	}
+
+	razorpayClient := s.getRazorpayClient(config)
+
+	contact := "+" + *user.CountryCode + *user.Phone
+	expireBy := time.Now().UTC().Add(24 * time.Hour).Unix()
+
+	// Create registration link via Razorpay Invoice API
+	// This API creates customer, order, and returns a hosted link in one call
+	linkData := map[string]interface{}{
+		"customer": map[string]interface{}{
+			"email":   *user.Email,
+			"contact": contact,
+		},
+		"type":         "link",
+		"amount":       req.AuthorizationAmount,
+		"currency":     "INR",
+		"description":  "UPI Recurring Authorization",
+		"expire_by":    expireBy,
+		"sms_notify":   0,
+		"email_notify": 0,
+		"subscription_registration": map[string]interface{}{
+			"method":     "upi",
+			"max_amount": req.MaxAmount,
+			"expire_at":  time.Now().UTC().AddDate(1, 0, 0).Unix(), // 1 year
+			"frequency":  req.Frequency,
+		},
+		"notes": map[string]interface{}{
+			"app_name": req.AppName,
+		},
+	}
+
+	link, err := razorpayClient.Invoice.CreateRegistrationLink(linkData, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create registration link: %w", err)
+	}
+
+	shortURL := link["short_url"].(string)
+	orderID := link["order_id"].(string)
+	customerID := link["customer_id"].(string)
+	fmt.Printf("[CreateRegistrationLink] Created registration link: %s, order: %s, customer: %s\n", shortURL, orderID, customerID)
+
+	// Create database records using the customer_id and order_id from Razorpay
+	authReq := models.CreateAuthorizationOrderRequest{
+		UserID:              req.UserID,
+		AppName:             req.AppName,
+		AuthorizationAmount: req.AuthorizationAmount,
+		MaxAmount:           req.MaxAmount,
+		StartAt:             req.StartAt,
+		Frequency:           req.Frequency,
+	}
+	_, _, _, err = s.createAuthorizationDBRecords(authReq, customerID, orderID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &models.RegistrationLinkResponse{
+		ShortURL: shortURL,
+	}, nil
+}
+
+// createRazorpayCustomer creates a customer in Razorpay, or fetches existing if already exists
+func (s *recurringPaymentService) createRazorpayCustomer(razorpayClient *razorpay.Client, user *userModels.User) (string, error) {
+	// Validate required user fields
+	if user.Email == nil || *user.Email == "" {
+		return "", errors.New("user email is required")
+	}
+	if user.CountryCode == nil || *user.CountryCode == "" {
+		return "", errors.New("user country_code is required")
+	}
+	if user.Phone == nil || *user.Phone == "" {
+		return "", errors.New("user phone is required")
+	}
+
+	contact := "+" + *user.CountryCode + *user.Phone
+	customerData := map[string]interface{}{
+		"email":         *user.Email,
+		"contact":       contact,
+		"fail_existing": 0,
+	}
+
+	customer, err := razorpayClient.Customer.Create(customerData, nil)
+	if err != nil {
+		// If customer already exists, fetch by phone
+		if strings.Contains(strings.ToLower(err.Error()), "already exists") {
+			contact := "+" + *user.CountryCode + *user.Phone
+			existingID, fetchErr := s.fetchCustomerByPhone(razorpayClient, contact)
+			if fetchErr != nil {
+				return "", fmt.Errorf("failed to fetch existing customer: %w", fetchErr)
+			}
+			fmt.Printf("[CreateAuthorizationOrder] Using existing customer: %s\n", existingID)
+			return existingID, nil
+		}
+		return "", fmt.Errorf("failed to create razorpay customer: %w", err)
+	}
+
+	customerID := customer["id"].(string)
+	fmt.Printf("[CreateAuthorizationOrder] Created customer: %s\n", customerID)
+	return customerID, nil
+}
+
+// fetchCustomerByPhone fetches an existing Razorpay customer by phone contact
+func (s *recurringPaymentService) fetchCustomerByPhone(razorpayClient *razorpay.Client, contact string) (string, error) {
+	response, err := razorpayClient.Customer.All(map[string]interface{}{"contact": contact}, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to query customers: %w", err)
+	}
+	items, ok := response["items"].([]interface{})
+	if !ok || len(items) == 0 {
+		return "", errors.New("no customer found with phone")
+	}
+	customer, ok := items[0].(map[string]interface{})
+	if !ok {
+		return "", errors.New("invalid customer response")
+	}
+	customerID, ok := customer["id"].(string)
+	if !ok {
+		return "", errors.New("invalid customer id")
+	}
+	return customerID, nil
+}
+
+// createAuthorizationRazorpayOrder creates an authorization order in Razorpay
+func (s *recurringPaymentService) createAuthorizationRazorpayOrder(
+	razorpayClient *razorpay.Client,
+	customerID string,
+	req models.CreateAuthorizationOrderRequest,
+) (string, error) {
+	orderData := map[string]interface{}{
+		"amount":          req.AuthorizationAmount,
+		"currency":        "INR",
+		"customer_id":     customerID,
+		"method":          "upi",
+		"payment_capture": true,
+		"token": map[string]interface{}{
+			"max_amount": req.MaxAmount,
+			"expire_at":  time.Now().UTC().AddDate(1, 0, 0).Unix(), // 1 year
+			"frequency":  req.Frequency,
+		},
+		"notes": map[string]interface{}{
+			"purpose":  "authorization",
+			"app_name": req.AppName,
+		},
+	}
+
+	order, err := razorpayClient.Order.Create(orderData, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create razorpay order: %w", err)
+	}
+
+	orderID := order["id"].(string)
+	fmt.Printf("[CreateAuthorizationOrder] Created order: %s\n", orderID)
+	return orderID, nil
+}
+
+// createAuthorizationDBRecords creates the database records for authorization
+func (s *recurringPaymentService) createAuthorizationDBRecords(
+	req models.CreateAuthorizationOrderRequest,
+	customerID, orderID string,
+) (*models.RecurringPayment, *models.BillingCycle, *models.PaymentAttempt, error) {
+	tx := s.repo.BeginTransaction()
+
+	// Create RecurringPayment record
+	endAt := req.StartAt.AddDate(1, 0, 0) // One year from start
+	recurringPayment := &models.RecurringPayment{
+		UserID:             req.UserID,
+		AppName:            req.AppName,
+		RazorpayCustomerID: &customerID,
+		Status:             models.RecurringPaymentStatusCreated,
+		MaxAmount:          req.MaxAmount,
+		Frequency:          req.Frequency,
+		StartAt:            &req.StartAt,
+		EndAt:              &endAt,
+		Metadata:           make(utils.Metadata),
+	}
+
+	if err := s.repo.CreateRecurringPayment(tx, recurringPayment); err != nil {
+		s.repo.RollbackTransaction(tx)
+		return nil, nil, nil, fmt.Errorf("failed to create recurring payment: %w", err)
+	}
+
+	// Create BillingCycle (cycle 0 for authorization)
+	now := time.Now().UTC()
+	bcEndAt := req.StartAt.Add(-24 * time.Hour)
+	billingCycle := &models.BillingCycle{
+		RecurringPaymentID: recurringPayment.ID,
+		CycleNumber:        0,
+		StartAt:            now,
+		EndAt:              &bcEndAt,
+		Amount:             req.AuthorizationAmount,
+		Status:             models.BillingCycleStatusPending,
+		ChargeAttempts:     1,
+		Metadata:           make(utils.Metadata),
+	}
+
+	if err := s.repo.CreateBillingCycle(tx, billingCycle); err != nil {
+		s.repo.RollbackTransaction(tx)
+		return nil, nil, nil, fmt.Errorf("failed to create billing cycle: %w", err)
+	}
+
+	// Create PaymentAttempt
+	paymentAttempt := &models.PaymentAttempt{
+		BillingCycleID:  billingCycle.ID,
+		AttemptNumber:   1,
+		RazorpayOrderID: &orderID,
+		Status:          models.PaymentAttemptStatusCreated,
+		Amount:          req.AuthorizationAmount,
+		Metadata:        make(utils.Metadata),
+	}
+
+	if err := s.repo.CreatePaymentAttempt(tx, paymentAttempt); err != nil {
+		s.repo.RollbackTransaction(tx)
+		return nil, nil, nil, fmt.Errorf("failed to create payment attempt: %w", err)
+	}
+
+	if err := s.repo.CommitTransaction(tx); err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return recurringPayment, billingCycle, paymentAttempt, nil
+}
+
+// VerifyAuthorizationPayment verifies the authorization payment and activates the mandate
+func (s *recurringPaymentService) VerifyAuthorizationPayment(req models.VerifyAuthorizationPaymentRequest) (*models.RecurringPaymentResponse, error) {
+	paymentAttempt, err := s.repo.FindPaymentAttemptByOrderID(req.RazorpayOrderID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("payment attempt not found")
+		}
+		return nil, err
+	}
+
+	billingCycle, recurringPayment, config, err := s.getPaymentRelatedRecords(paymentAttempt.BillingCycleID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Verify signature
+	if !s.verifySignature(req.RazorpayOrderID+"|"+req.RazorpayPaymentID, req.RazorpaySignature, config.RazorpayKeySecret) {
+		return nil, errors.New("invalid signature")
+	}
+
+	// Fetch payment details from Razorpay
+	razorpayClient := s.getRazorpayClient(config)
+	payment, err := razorpayClient.Payment.Fetch(req.RazorpayPaymentID, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch payment: %w", err)
+	}
+
+	// Activate mandate using the same helper as webhook
+	if err := s.activateMandateFromPayment(payment, paymentAttempt, billingCycle, recurringPayment); err != nil {
+		return nil, err
+	}
+
+	fmt.Printf("[VerifyAuthorizationPayment] Activated mandate: recurring_payment_id=%s\n",
+		recurringPayment.ID)
+
+	response := recurringPayment.ToResponse()
+	return &response, nil
+}
+
+// getPaymentRelatedRecords fetches billing cycle, recurring payment, and config
+func (s *recurringPaymentService) getPaymentRelatedRecords(billingCycleID uuid.UUID) (*models.BillingCycle, *models.RecurringPayment, *clientModels.RazorpayConfig, error) {
+	billingCycle, err := s.repo.FindBillingCycleByID(billingCycleID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to find billing cycle: %w", err)
+	}
+
+	recurringPayment, err := s.repo.FindRecurringPaymentByID(billingCycle.RecurringPaymentID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to find recurring payment: %w", err)
+	}
+
+	config, err := s.getConfig(recurringPayment.AppName)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to find razorpay config: %w", err)
+	}
+
+	return billingCycle, recurringPayment, config, nil
+}
+
+// fetchTokenIDFromPayment fetches payment details and extracts token_id
+func (s *recurringPaymentService) fetchTokenIDFromPayment(razorpayClient *razorpay.Client, paymentID string) (string, error) {
+	payment, err := razorpayClient.Payment.Fetch(paymentID, nil, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch payment: %w", err)
+	}
+
+	tokenID, ok := payment["token_id"].(string)
+	if !ok || tokenID == "" {
+		return "", errors.New("token_id not found in payment")
+	}
+
+	return tokenID, nil
+}
+
+// updateAuthorizationPaymentRecords updates all records for verified authorization payment
+func (s *recurringPaymentService) updateAuthorizationPaymentRecords(
+	paymentAttempt *models.PaymentAttempt,
+	billingCycle *models.BillingCycle,
+	recurringPayment *models.RecurringPayment,
+	paymentID, tokenID string,
+) error {
+	// Idempotency: skip if already processed
+	if paymentAttempt.Status == models.PaymentAttemptStatusCaptured {
+		return nil
+	}
+
+	tx := s.repo.BeginTransaction()
+
+	now := time.Now().UTC()
+
+	paymentAttempt.RazorpayPaymentID = &paymentID
+	paymentAttempt.Status = models.PaymentAttemptStatusCaptured
+	if err := s.repo.UpdatePaymentAttempt(tx, paymentAttempt); err != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to update payment attempt: %w", err)
+	}
+
+	billingCycle.Status = models.BillingCycleStatusPaid
+	billingCycle.LastAttemptAt = &now
+	if err := s.repo.UpdateBillingCycle(tx, billingCycle); err != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to update billing cycle: %w", err)
+	}
+
+	recurringPayment.TokenID = &tokenID
+	recurringPayment.Status = models.RecurringPaymentStatusActive
+	recurringPayment.LastChargedAt = &now
+	recurringPayment.NextChargeAt = recurringPayment.StartAt
+	recurringPayment.Metadata["authorized_at"] = now.Format(time.RFC3339)
+	if err := s.repo.UpdateRecurringPayment(tx, recurringPayment); err != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to update recurring payment: %w", err)
+	}
+
+	return s.repo.CommitTransaction(tx)
+}
+
+// GetRecurringPaymentByID retrieves a recurring payment by ID
+func (s *recurringPaymentService) GetRecurringPaymentByID(id uuid.UUID) (*models.RecurringPaymentResponse, error) {
+	rp, err := s.repo.FindRecurringPaymentByID(id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("recurring payment not found")
+		}
+		return nil, err
+	}
+
+	response := rp.ToResponse()
+	return &response, nil
+}
+
+// GetRecurringPaymentStatus checks if user has active recurring payment and completed authorization
+func (s *recurringPaymentService) GetRecurringPaymentStatus(userID uuid.UUID, appName string) (*models.RecurringPaymentStatusResponse, error) {
+	// Check for active recurring payment
+	hasActive, err := s.hasActiveRecurringPayment(userID, appName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if user has ever completed authorization payment (availed free trial)
+	hasCompletedAuth, err := s.repo.HasCompletedAuthorizationPayment(userID, appName)
+	if err != nil {
+		return nil, err
+	}
+
+	return &models.RecurringPaymentStatusResponse{
+		ActiveSubscription: hasActive,
+		UsedFreeTrial:      hasCompletedAuth,
+	}, nil
+}
+
+// hasActiveRecurringPayment checks if user has an active recurring payment mandate
+func (s *recurringPaymentService) hasActiveRecurringPayment(userID uuid.UUID, appName string) (bool, error) {
+	_, err := s.repo.FindActiveRecurringPaymentByUserID(userID, appName)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// ==================== Webhook Handling ====================
+
+// HandleWebhook processes Razorpay webhook events
+func (s *recurringPaymentService) HandleWebhook(payload []byte, signature string) error {
+	fmt.Printf("[Webhook] ========== New Recurring Payment Webhook ==========\n")
+
+	var event map[string]interface{}
+	if err := json.Unmarshal(payload, &event); err != nil {
+		return fmt.Errorf("failed to parse webhook payload: %w", err)
+	}
+
+	eventType, ok := event["event"].(string)
+	if !ok {
+		return errors.New("invalid webhook payload: missing event type")
+	}
+
+	payloadData, ok := event["payload"].(map[string]interface{})
+	if !ok {
+		return errors.New("invalid webhook payload: missing payload data")
+	}
+
+	fmt.Printf("[Webhook] Event type: %s\n", eventType)
+
+	switch eventType {
+	case "payment.captured", "payment.failed":
+		return s.handlePaymentWebhook(eventType, payloadData, payload, signature)
+	default:
+		fmt.Printf("[Webhook] Unknown event type (ignoring): %s\n", eventType)
+		return nil
+	}
+}
+
+// handlePaymentWebhook handles payment-related webhook events
+func (s *recurringPaymentService) handlePaymentWebhook(eventType string, payloadData map[string]interface{}, rawPayload []byte, signature string) error {
+	paymentEntity, err := extractPaymentEntity(payloadData)
+	if err != nil {
+		return err
+	}
+
+	paymentAttempt, err := s.findPaymentAttemptFromEntity(paymentEntity)
+	if err != nil {
+		return fmt.Errorf("failed to find payment attempt: %w", err)
+	}
+
+	billingCycle, recurringPayment, config, err := s.getPaymentRelatedRecords(paymentAttempt.BillingCycleID)
+	if err != nil {
+		return err
+	}
+
+	if !s.verifyWebhookSignature(rawPayload, signature, config.RazorpayWebhookSecret) {
+		return errors.New("invalid webhook signature")
+	}
+
+	return s.processPaymentEvent(eventType, paymentEntity, paymentAttempt, billingCycle, recurringPayment)
+}
+
+// extractPaymentEntity extracts the payment entity from webhook payload
+func extractPaymentEntity(payloadData map[string]interface{}) (map[string]interface{}, error) {
+	paymentWrap, ok := payloadData["payment"].(map[string]interface{})
+	if !ok {
+		return nil, errors.New("invalid payment webhook payload")
+	}
+
+	paymentEntity, ok := paymentWrap["entity"].(map[string]interface{})
+	if !ok {
+		return nil, errors.New("invalid payment entity in webhook")
+	}
+
+	return paymentEntity, nil
+}
+
+// findPaymentAttemptFromEntity finds payment attempt from webhook payment entity
+func (s *recurringPaymentService) findPaymentAttemptFromEntity(paymentEntity map[string]interface{}) (*models.PaymentAttempt, error) {
+	if orderID, ok := paymentEntity["order_id"].(string); ok && orderID != "" {
+		return s.repo.FindPaymentAttemptByOrderID(orderID)
+	}
+	if paymentID, ok := paymentEntity["id"].(string); ok {
+		return s.repo.FindPaymentAttemptByPaymentID(paymentID)
+	}
+	return nil, errors.New("no order_id or payment_id in payment entity")
+}
+
+// processPaymentEvent updates records based on payment event
+func (s *recurringPaymentService) processPaymentEvent(
+	eventType string,
+	paymentEntity map[string]interface{},
+	paymentAttempt *models.PaymentAttempt,
+	billingCycle *models.BillingCycle,
+	recurringPayment *models.RecurringPayment,
+) error {
+	if paymentID, ok := paymentEntity["id"].(string); ok {
+		paymentAttempt.RazorpayPaymentID = &paymentID
+	}
+
+	switch eventType {
+	case "payment.captured":
+		// Handle authorization payment (cycle 0) - activate mandate
+		if billingCycle.CycleNumber == 0 {
+			if err := s.activateMandateFromPayment(paymentEntity, paymentAttempt, billingCycle, recurringPayment); err != nil {
+				return err
+			}
+		} else {
+			s.handlePaymentCaptured(paymentAttempt, billingCycle, recurringPayment)
+		}
+	case "payment.failed":
+		s.handlePaymentFailed(paymentAttempt, billingCycle, recurringPayment, paymentEntity)
+	}
+
+	if err := s.saveRecordsInTransaction(paymentAttempt, billingCycle, recurringPayment); err != nil {
+		return err
+	}
+
+	fmt.Printf("[Webhook] Processed %s: payment_attempt=%s, status=%s\n",
+		eventType, paymentAttempt.ID, paymentAttempt.Status)
+
+	return nil
+}
+
+// activateMandateFromPayment activates the mandate from payment data
+// Used by both webhook and VerifyAuthorizationPayment
+func (s *recurringPaymentService) activateMandateFromPayment(
+	paymentEntity map[string]interface{},
+	paymentAttempt *models.PaymentAttempt,
+	billingCycle *models.BillingCycle,
+	recurringPayment *models.RecurringPayment,
+) error {
+	// Idempotency: skip if already processed
+	if paymentAttempt.Status == models.PaymentAttemptStatusCaptured {
+		return nil
+	}
+
+	// Extract token_id from payment entity
+	tokenID, err := extractTokenIDFromPaymentEntity(paymentEntity)
+	if err != nil {
+		return fmt.Errorf("failed to extract token_id: %w", err)
+	}
+
+	// Get user for Meta event
+	user, err := s.userRepo.FindByID(recurringPayment.UserID)
+	if err != nil {
+		return fmt.Errorf("failed to find user: %w", err)
+	}
+
+	// Get payment ID
+	paymentID := ""
+	if pid, ok := paymentEntity["id"].(string); ok {
+		paymentID = pid
+	}
+
+	// Update all records using the same function as VerifyAuthorizationPayment
+	if err := s.updateAuthorizationPaymentRecords(paymentAttempt, billingCycle, recurringPayment, paymentID, tokenID); err != nil {
+		return err
+	}
+
+	// Emit Meta pixel event for recurring payment started
+	go s.sendMetaDatasetRecurringPaymentStartedEvent(recurringPayment, paymentAttempt, user)
+
+	// Emit PostHog event for recurring payment started
+	go s.sendPostHogRecurringPaymentStartedEvent(recurringPayment, paymentAttempt, user)
+
+	fmt.Printf("[activateMandateFromPayment] Activated mandate: token_id=%s, recurring_payment_id=%s\n",
+		tokenID, recurringPayment.ID)
+
+	return nil
+}
+
+// extractTokenIDFromPaymentEntity extracts token_id from payment entity
+func extractTokenIDFromPaymentEntity(paymentEntity map[string]interface{}) (string, error) {
+	tokenID, ok := paymentEntity["token_id"].(string)
+	if !ok || tokenID == "" {
+		return "", errors.New("token_id not found in payment entity")
+	}
+	return tokenID, nil
+}
+
+// ==================== Cron Jobs ====================
+
+// RetryFailedBillingCycles processes billing cycles that need retry attempts
+func (s *recurringPaymentService) RetryFailedBillingCycles() error {
+	fmt.Printf("[RetryFailedBillingCycles] Starting\n")
+
+	now := time.Now().UTC()
+	windowStart := now.Add(48 * time.Hour)
+	windowEnd := now.Add(72 * time.Hour)
+
+	recurringPayments, err := s.repo.FindRecurringPaymentsForRetry(windowStart, windowEnd)
+	if err != nil {
+		return fmt.Errorf("failed to find recurring payments for retry: %w", err)
+	}
+
+	fmt.Printf("[RetryFailedBillingCycles] Found %d recurring payments needing retry\n", len(recurringPayments))
+
+	processInParallel(recurringPayments, s.processPendingBillingCycleRetry, "RetryFailedBillingCycles")
+	return nil
+}
+
+// ProcessNewBillingCycles sends pre-debit notifications for NEW billing cycles
+func (s *recurringPaymentService) ProcessNewBillingCycles() error {
+	fmt.Printf("[SendPreDebitNotifications] Starting\n")
+
+	now := time.Now().UTC()
+	windowStart := now.Add(48 * time.Hour)
+	windowEnd := now.Add(72 * time.Hour)
+
+	recurringPayments, err := s.repo.FindRecurringPaymentsForNewBillingCycle(windowStart, windowEnd)
+	if err != nil {
+		return fmt.Errorf("failed to find recurring payments for notification: %w", err)
+	}
+
+	fmt.Printf("[SendPreDebitNotifications] Found %d recurring payments needing notification\n", len(recurringPayments))
+
+	processInParallel(recurringPayments, s.processNewBillingCycleForPayment, "ProcessNewBillingCycles")
+	return nil
+}
+
+// processPendingBillingCycleRetry processes retry for a recurring payment's pending billing cycle
+func (s *recurringPaymentService) processPendingBillingCycleRetry(rp models.RecurringPayment) error {
+	bc, err := s.repo.FindLatestBillingCycleByRecurringPayment(rp.ID)
+	if err != nil {
+		return fmt.Errorf("failed to find latest billing cycle: %w", err)
+	}
+
+	if bc.Status != models.BillingCycleStatusPending {
+		return fmt.Errorf("latest billing cycle is not pending")
+	}
+
+	if bc.ChargeAttempts >= 8 {
+		return s.markBillingCycleAsFailed(bc, &rp)
+	}
+
+	hasPending, err := s.repo.HasPendingPaymentAttemptForBillingCycle(bc.ID)
+	if err != nil {
+		return fmt.Errorf("failed to check pending attempts: %w", err)
+	}
+	if hasPending {
+		fmt.Printf("[processPendingBillingCycleRetry] Skipping billing_cycle %s: pending attempt already exists\n", bc.ID)
+		return nil
+	}
+
+	config, err := s.getConfig(rp.AppName)
+	if err != nil {
+		return fmt.Errorf("failed to find config: %w", err)
+	}
+
+	razorpayClient := s.getRazorpayClient(config)
+
+	newChargeAttempts := bc.ChargeAttempts + 1
+	orderID, err := s.createRetryOrder(razorpayClient, &rp, bc, newChargeAttempts)
+	if err != nil {
+		return s.handleOrderCreationError(err, &rp)
+	}
+
+	if err := s.createRetryDBRecords(bc, &rp, orderID, newChargeAttempts); err != nil {
+		return err
+	}
+
+	fmt.Printf("[processPendingBillingCycleRetry] Created retry order %s for billing_cycle=%s, cycle=%d, attempt=%d\n",
+		orderID, bc.ID, bc.CycleNumber, bc.ChargeAttempts)
+
+	return nil
+}
+
+// markBillingCycleAsFailed marks a billing cycle and recurring payment as failed
+func (s *recurringPaymentService) markBillingCycleAsFailed(bc *models.BillingCycle, rp *models.RecurringPayment) error {
+	tx := s.repo.BeginTransaction()
+	bc.Status = models.BillingCycleStatusFailed
+	rp.Status = models.RecurringPaymentStatusExpired
+	if err := s.repo.UpdateBillingCycle(tx, bc); err != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to update billing cycle: %w", err)
+	}
+	if err := s.repo.UpdateRecurringPayment(tx, rp); err != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to update recurring payment: %w", err)
+	}
+	if err := s.repo.CommitTransaction(tx); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return fmt.Errorf("max charge attempts (8) reached for billing cycle")
+}
+
+// createRetryOrder creates a Razorpay order for retry
+func (s *recurringPaymentService) createRetryOrder(
+	razorpayClient *razorpay.Client,
+	rp *models.RecurringPayment,
+	bc *models.BillingCycle,
+	attemptNumber int,
+) (string, error) {
+	// Nil check to prevent panic
+	if bc.NextAttemptAt == nil {
+		return "", fmt.Errorf("billing cycle next_attempt_at is nil")
+	}
+
+	amount := calculateAttemptAmount(rp.MaxAmount, attemptNumber)
+	orderData := map[string]interface{}{
+		"amount":          amount,
+		"currency":        "INR",
+		"payment_capture": true,
+		"notification": map[string]interface{}{
+			"token_id":      rp.TokenID,
+			"payment_after": bc.NextAttemptAt.Unix(),
+		},
+		"notes": map[string]interface{}{
+			"recurring_payment_id": rp.ID.String(),
+			"cycle_number":         bc.CycleNumber,
+			"attempt_number":       attemptNumber,
+		},
+	}
+
+	order, err := razorpayClient.Order.Create(orderData, nil)
+	if err != nil {
+		return "", err
+	}
+
+	return order["id"].(string), nil
+}
+
+// handleOrderCreationError handles errors during order creation
+func (s *recurringPaymentService) handleOrderCreationError(err error, rp *models.RecurringPayment) error {
+	if isTokenError(err.Error()) {
+		rp.Status = models.RecurringPaymentStatusExpired
+		if updateErr := s.repo.UpdateRecurringPayment(nil, rp); updateErr != nil {
+			return fmt.Errorf("token invalid, failed to update recurring payment: %w", updateErr)
+		}
+		return fmt.Errorf("token invalid, marked as expired: %w", err)
+	}
+	return fmt.Errorf("failed to create order: %w", err)
+}
+
+// createRetryDBRecords creates database records for retry
+func (s *recurringPaymentService) createRetryDBRecords(
+	bc *models.BillingCycle,
+	rp *models.RecurringPayment,
+	orderID string,
+	attemptNumber int,
+) error {
+	tx := s.repo.BeginTransaction()
+
+	bc.ChargeAttempts = attemptNumber
+	if err := s.repo.UpdateBillingCycle(tx, bc); err != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to update billing cycle: %w", err)
+	}
+
+	amount := calculateAttemptAmount(rp.MaxAmount, attemptNumber)
+	paymentAttempt := &models.PaymentAttempt{
+		BillingCycleID:  bc.ID,
+		AttemptNumber:   attemptNumber,
+		RazorpayOrderID: &orderID,
+		Status:          models.PaymentAttemptStatusCreated,
+		Amount:          amount,
+		Metadata:        make(utils.Metadata),
+	}
+	if err := s.repo.CreatePaymentAttempt(tx, paymentAttempt); err != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to create payment attempt: %w", err)
+	}
+
+	if err := s.repo.CommitTransaction(tx); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// processNewBillingCycleForPayment creates a new billing cycle
+func (s *recurringPaymentService) processNewBillingCycleForPayment(rp models.RecurringPayment) error {
+	config, err := s.getConfig(rp.AppName)
+	if err != nil {
+		return fmt.Errorf("failed to find config: %w", err)
+	}
+
+	razorpayClient := s.getRazorpayClient(config)
+
+	billingCycles, err := s.repo.FindBillingCyclesByRecurringPayment(rp.ID)
+	if err != nil {
+		return fmt.Errorf("failed to find billing cycles: %w", err)
+	}
+
+	nextCycleNumber := len(billingCycles)
+	amount := calculateAttemptAmount(rp.MaxAmount, 1) // First attempt of new cycle
+	nextChargeAt := s.calculateNextChargeDate(rp)
+	endAt := nextChargeAt.Add(-24 * time.Hour)
+
+	// Check if billing cycle would extend beyond mandate expiry BEFORE creating order
+	if rp.EndAt != nil && endAt.After(*rp.EndAt) {
+		// Mark as expired - mandate ends before this billing cycle would complete
+		rp.Status = models.RecurringPaymentStatusExpired
+		if err := s.repo.UpdateRecurringPayment(nil, &rp); err != nil {
+			return fmt.Errorf("failed to update recurring payment: %w", err)
+		}
+		return fmt.Errorf("billing cycle end_at (%s) would exceed mandate end_at (%s)", endAt.Format(time.RFC3339), rp.EndAt.Format(time.RFC3339))
+	}
+
+	orderID, err := s.createNewCycleOrder(razorpayClient, &rp, nextCycleNumber, amount)
+	if err != nil {
+		return s.handleOrderCreationError(err, &rp)
+	}
+
+	if err := s.createNewCycleDBRecords(&rp, orderID, nextCycleNumber, amount, endAt); err != nil {
+		return err
+	}
+
+	fmt.Printf("[processNewBillingCycleForPayment] Created order %s for recurring_payment=%s, cycle=%d, attempt=%d\n",
+		orderID, rp.ID, nextCycleNumber, 1)
+
+	return nil
+}
+
+// createNewCycleOrder creates a Razorpay order for a new billing cycle
+func (s *recurringPaymentService) createNewCycleOrder(
+	razorpayClient *razorpay.Client,
+	rp *models.RecurringPayment,
+	cycleNumber int,
+	amount int64,
+) (string, error) {
+	// Nil check to prevent panic
+	if rp.NextChargeAt == nil {
+		return "", fmt.Errorf("recurring payment next_charge_at is nil")
+	}
+
+	orderData := map[string]interface{}{
+		"amount":          amount,
+		"currency":        "INR",
+		"payment_capture": true,
+		"notification": map[string]interface{}{
+			"token_id":      rp.TokenID,
+			"payment_after": rp.NextChargeAt.Unix(),
+		},
+		"notes": map[string]interface{}{
+			"recurring_payment_id": rp.ID.String(),
+			"cycle_number":         cycleNumber,
+			"attempt_number":       1,
+		},
+	}
+
+	order, err := razorpayClient.Order.Create(orderData, nil)
+	if err != nil {
+		return "", err
+	}
+
+	return order["id"].(string), nil
+}
+
+// createNewCycleDBRecords creates database records for a new billing cycle
+func (s *recurringPaymentService) createNewCycleDBRecords(
+	rp *models.RecurringPayment,
+	orderID string,
+	cycleNumber int,
+	amount int64,
+	endAt time.Time,
+) error {
+	tx := s.repo.BeginTransaction()
+
+	// Nil check for NextChargeAt to prevent panic
+	if rp.NextChargeAt == nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("recurring payment next_charge_at is nil")
+	}
+
+	billingCycle := &models.BillingCycle{
+		RecurringPaymentID: rp.ID,
+		CycleNumber:        cycleNumber,
+		StartAt:            *rp.NextChargeAt,
+		EndAt:              &endAt,
+		Amount:             amount,
+		Status:             models.BillingCycleStatusPending,
+		ChargeAttempts:     1,
+		NextAttemptAt:      rp.NextChargeAt,
+		Metadata:           make(utils.Metadata),
+	}
+	if err := s.repo.CreateBillingCycle(tx, billingCycle); err != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to create billing cycle: %w", err)
+	}
+
+	paymentAttempt := &models.PaymentAttempt{
+		BillingCycleID:  billingCycle.ID,
+		AttemptNumber:   1,
+		RazorpayOrderID: &orderID,
+		Status:          models.PaymentAttemptStatusCreated,
+		Amount:          amount,
+		Metadata:        make(utils.Metadata),
+	}
+	if err := s.repo.CreatePaymentAttempt(tx, paymentAttempt); err != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to create payment attempt: %w", err)
+	}
+
+	if err := s.repo.CommitTransaction(tx); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// ChargePendingPayments charges pending payment attempts via Razorpay SDK
+func (s *recurringPaymentService) ChargePendingPayments() error {
+	fmt.Printf("[ChargePendingPayments] Starting\n")
+
+	now := time.Now().UTC()
+	paymentAttempts, err := s.repo.FindPendingPaymentAttempts(now)
+	if err != nil {
+		return fmt.Errorf("failed to find pending payment attempts: %w", err)
+	}
+
+	fmt.Printf("[ChargePendingPayments] Found %d pending payment attempts\n", len(paymentAttempts))
+
+	processInParallel(paymentAttempts, s.createRazorpayRecurringPayment, "ChargePendingPayments")
+	return nil
+}
+
+// createRazorpayRecurringPayment creates a recurring payment via Razorpay SDK
+func (s *recurringPaymentService) createRazorpayRecurringPayment(pa models.PaymentAttempt) error {
+	billingCycle, recurringPayment, user, config, err := s.getChargeRelatedRecords(&pa)
+	if err != nil {
+		return err
+	}
+
+	razorpayClient := s.getRazorpayClient(config)
+
+	order, err := razorpayClient.Order.Fetch(*pa.RazorpayOrderID, nil, nil)
+	if err != nil {
+		return fmt.Errorf("failed to fetch order: %w", err)
+	}
+
+	if orderStatus, ok := order["status"].(string); ok && orderStatus == "paid" {
+		fmt.Printf("[createRazorpayRecurringPayment] Order %s already paid, updating records\n", pa.RazorpayOrderID)
+		// Update all records to reflect paid status
+		s.handlePaymentCaptured(&pa, billingCycle, recurringPayment)
+		if err := s.saveRecordsInTransaction(&pa, billingCycle, recurringPayment); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	// Validate required user fields
+	if user.Email == nil || *user.Email == "" {
+		return errors.New("user email is required")
+	}
+	if user.CountryCode == nil || *user.CountryCode == "" {
+		return errors.New("user country_code is required")
+	}
+	if user.Phone == nil || *user.Phone == "" {
+		return errors.New("user phone is required")
+	}
+
+	contact := "+" + *user.CountryCode + *user.Phone
+	recurringData := map[string]interface{}{
+		"email":       *user.Email,
+		"contact":     contact,
+		"amount":      pa.Amount,
+		"currency":    "INR",
+		"order_id":    pa.RazorpayOrderID,
+		"customer_id": recurringPayment.RazorpayCustomerID,
+		"token":       recurringPayment.TokenID,
+		"recurring":   true,
+		"notes": map[string]interface{}{
+			"recurring_payment_id": recurringPayment.ID.String(),
+			"cycle_number":         billingCycle.CycleNumber,
+			"attempt_number":       pa.AttemptNumber,
+		},
+	}
+
+	payment, err := razorpayClient.Payment.CreateRecurringPayment(recurringData, nil)
+	if err != nil {
+		return s.handleRecurringPaymentError(err, &pa, billingCycle, recurringPayment, user)
+	}
+
+	if paymentID, ok := payment["razorpay_payment_id"].(string); ok {
+		pa.RazorpayPaymentID = &paymentID
+	}
+	pa.Status = models.PaymentAttemptStatusPending
+
+	now := time.Now().UTC()
+	billingCycle.LastAttemptAt = &now
+
+	// Update both records in a single transaction
+	tx := s.repo.BeginTransaction()
+	if err := s.repo.UpdatePaymentAttempt(tx, &pa); err != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to update payment attempt: %w", err)
+	}
+	if err := s.repo.UpdateBillingCycle(tx, billingCycle); err != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to update billing cycle: %w", err)
+	}
+	if err := s.repo.CommitTransaction(tx); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	fmt.Printf("[createRazorpayRecurringPayment] Created recurring payment: payment_id=%s, order_id=%s\n",
+		pa.RazorpayPaymentID, pa.RazorpayOrderID)
+
+	return nil
+}
+
+// getChargeRelatedRecords fetches all records needed for charging
+func (s *recurringPaymentService) getChargeRelatedRecords(pa *models.PaymentAttempt) (*models.BillingCycle, *models.RecurringPayment, *userModels.User, *clientModels.RazorpayConfig, error) {
+	billingCycle, err := s.repo.FindBillingCycleByID(pa.BillingCycleID)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("failed to find billing cycle: %w", err)
+	}
+
+	recurringPayment, err := s.repo.FindRecurringPaymentByID(billingCycle.RecurringPaymentID)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("failed to find recurring payment: %w", err)
+	}
+
+	user, err := s.userRepo.FindByID(recurringPayment.UserID)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("failed to find user: %w", err)
+	}
+
+	config, err := s.getConfig(recurringPayment.AppName)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("failed to find config: %w", err)
+	}
+
+	return billingCycle, recurringPayment, user, config, nil
+}
+
+// handleRecurringPaymentError handles errors during recurring payment creation
+func (s *recurringPaymentService) handleRecurringPaymentError(
+	err error,
+	pa *models.PaymentAttempt,
+	billingCycle *models.BillingCycle,
+	recurringPayment *models.RecurringPayment,
+	user *userModels.User,
+) error {
+	errMsg := err.Error()
+	now := time.Now().UTC()
+
+	// Emit PostHog event for recurring payment creation failure
+	if user != nil {
+		go s.sendPostHogRecurringPaymentCreationFailedEvent(recurringPayment, pa.Amount, user)
+	}
+
+	// Use transaction for atomic updates
+	tx := s.repo.BeginTransaction()
+
+	pa.Status = models.PaymentAttemptStatusFailed
+	pa.ErrorDescription = errMsg
+	if updateErr := s.repo.UpdatePaymentAttempt(tx, pa); updateErr != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to update payment attempt: %w", updateErr)
+	}
+
+	billingCycle.LastAttemptAt = &now
+	if updateErr := s.repo.UpdateBillingCycle(tx, billingCycle); updateErr != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to update billing cycle: %w", updateErr)
+	}
+
+	if isTokenError(errMsg) {
+		recurringPayment.Status = models.RecurringPaymentStatusExpired
+		if updateErr := s.repo.UpdateRecurringPayment(tx, recurringPayment); updateErr != nil {
+			s.repo.RollbackTransaction(tx)
+			return fmt.Errorf("failed to update recurring payment: %w", updateErr)
+		}
+	}
+
+	if commitErr := s.repo.CommitTransaction(tx); commitErr != nil {
+		return fmt.Errorf("failed to commit transaction: %w", commitErr)
+	}
+
+	if isTokenError(errMsg) {
+		return fmt.Errorf("token invalid, marked as expired: %w", err)
+	}
+	return fmt.Errorf("failed to create recurring payment: %w", err)
+}
+
+// ReconcilePayments reconciles stale pending payments with Razorpay
+func (s *recurringPaymentService) ReconcilePayments() error {
+	fmt.Printf("[ReconcilePayments] Starting\n")
+
+	now := time.Now().UTC()
+	paymentAttempts, err := s.repo.FindPendingPaymentAttempts(now)
+	if err != nil {
+		return fmt.Errorf("failed to find stale payment attempts: %w", err)
+	}
+
+	fmt.Printf("[ReconcilePayments] Found %d stale payment attempts\n", len(paymentAttempts))
+
+	processInParallel(paymentAttempts, s.reconcilePayment, "ReconcilePayments")
+	return nil
+}
+
+// reconcilePayment reconciles a single payment attempt with Razorpay
+func (s *recurringPaymentService) reconcilePayment(pa models.PaymentAttempt) error {
+	billingCycle, recurringPayment, config, err := s.getPaymentRelatedRecords(pa.BillingCycleID)
+	if err != nil {
+		return err
+	}
+
+	razorpayClient := s.getRazorpayClient(config)
+
+	if pa.RazorpayPaymentID != nil && *pa.RazorpayPaymentID != "" {
+		if err := s.reconcileFromPaymentID(razorpayClient, &pa, billingCycle, recurringPayment); err != nil {
+			return err
+		}
+	} else if pa.RazorpayOrderID != nil && *pa.RazorpayOrderID != "" {
+		if err := s.reconcileFromOrderID(razorpayClient, &pa, billingCycle, recurringPayment); err != nil {
+			return err
+		}
+	}
+
+	if err := s.saveRecordsInTransaction(&pa, billingCycle, recurringPayment); err != nil {
+		return err
+	}
+
+	fmt.Printf("[reconcilePayment] Reconciled payment_attempt=%s, status=%s\n", pa.ID, pa.Status)
+
+	return nil
+}
+
+// reconcileFromPaymentID reconciles using payment ID
+func (s *recurringPaymentService) reconcileFromPaymentID(
+	razorpayClient *razorpay.Client,
+	pa *models.PaymentAttempt,
+	billingCycle *models.BillingCycle,
+	recurringPayment *models.RecurringPayment,
+) error {
+	payment, err := razorpayClient.Payment.Fetch(*pa.RazorpayPaymentID, nil, nil)
+	if err != nil {
+		return fmt.Errorf("failed to fetch payment: %w", err)
+	}
+
+	status, ok := payment["status"].(string)
+	if !ok {
+		return nil
+	}
+
+	switch status {
+	case "captured":
+		s.handlePaymentCaptured(pa, billingCycle, recurringPayment)
+	case "failed":
+		s.handlePaymentFailed(pa, billingCycle, recurringPayment, payment)
+	}
+
+	return nil
+}
+
+// reconcileFromOrderID reconciles using order ID
+func (s *recurringPaymentService) reconcileFromOrderID(
+	razorpayClient *razorpay.Client,
+	pa *models.PaymentAttempt,
+	billingCycle *models.BillingCycle,
+	recurringPayment *models.RecurringPayment,
+) error {
+	order, err := razorpayClient.Order.Fetch(*pa.RazorpayOrderID, nil, nil)
+	if err != nil {
+		return fmt.Errorf("failed to fetch order: %w", err)
+	}
+
+	if status, ok := order["status"].(string); ok && status == "paid" {
+		s.handlePaymentCaptured(pa, billingCycle, recurringPayment)
+	}
+
+	return nil
+}
+
+// ==================== Signature Verification ====================
+
+// verifySignature verifies Razorpay signature
+func (s *recurringPaymentService) verifySignature(message, signature, keySecret string) bool {
+	mac := hmac.New(sha256.New, []byte(keySecret))
+	mac.Write([]byte(message))
+	expectedMAC := hex.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(signature), []byte(expectedMAC))
+}
+
+// verifyWebhookSignature verifies webhook signature
+func (s *recurringPaymentService) verifyWebhookSignature(payload []byte, signature, webhookSecret string) bool {
+	mac := hmac.New(sha256.New, []byte(webhookSecret))
+	mac.Write(payload)
+	expectedMAC := hex.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(signature), []byte(expectedMAC))
+}
+
+// ==================== Date Calculation ====================
+
+// calculateNextChargeDate calculates the next charge date based on frequency
+func (s *recurringPaymentService) calculateNextChargeDate(rp models.RecurringPayment) time.Time {
+	baseTime := time.Now().UTC()
+	if rp.NextChargeAt != nil {
+		baseTime = *rp.NextChargeAt
+	}
+
+	switch rp.Frequency {
+	case "daily":
+		return baseTime.AddDate(0, 0, 1)
+	case "weekly":
+		return baseTime.AddDate(0, 0, 7)
+	case "fortnightly":
+		return baseTime.AddDate(0, 0, 15)
+	case "bimonthly":
+		return baseTime.AddDate(0, 0, 15)
+	case "monthly":
+		return baseTime.AddDate(0, 1, 0)
+	case "quarterly":
+		return baseTime.AddDate(0, 3, 0)
+	case "half_yearly":
+		return baseTime.AddDate(0, 6, 0)
+	case "yearly":
+		return baseTime.AddDate(1, 0, 0)
+	default:
+		return baseTime.AddDate(0, 1, 0)
+	}
+}
+
+// ==================== Meta Dataset Events ====================
+
+// metaEventParams contains parameters for sending a Meta event
+type metaEventParams struct {
+	eventName     string
+	contentName   string
+	eventIDSource string // ID used for deduplication
+}
+
+// getMetaConfig fetches and validates the Meta dataset config for an app
+func (s *recurringPaymentService) getMetaConfig(appName string) (*metaDatasetModels.MetaDatasetConfig, bool) {
+	env := utils.GetEnv("GO_ENV", "local")
+	metaConfig, err := s.metaDatasetRepo.FindByAppNameAndEnv(appName, env)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			fmt.Printf("[Meta Dataset] No meta dataset config found for app: %s, environment: %s. Skipping event.\n", appName, env)
+		} else {
+			fmt.Printf("[Meta Dataset ERROR] Failed to get meta dataset config: %v\n", err)
+		}
+		return nil, false
+	}
+
+	if !metaConfig.IsActive {
+		fmt.Printf("[Meta Dataset] Meta dataset config is inactive for app: %s. Skipping event.\n", appName)
+		return nil, false
+	}
+
+	if metaConfig.DatasetID == "" {
+		fmt.Printf("[Meta Dataset ERROR] dataset_id is empty for app: %s, environment: %s\n", appName, env)
+		return nil, false
+	}
+
+	return metaConfig, true
+}
+
+// getPhoneFromUser extracts phone number from user (without + prefix for Meta API)
+func (s *recurringPaymentService) getPhoneFromUser(userID uuid.UUID) string {
+	user, err := s.userRepo.FindByID(userID)
+	if err != nil {
+		fmt.Printf("[Meta Dataset ERROR] Failed to find user for phone hash: %v\n", err)
+		return ""
+	}
+
+	if user.CountryCode != nil && user.Phone != nil {
+		return *user.CountryCode + *user.Phone
+	}
+	return ""
+}
+
+// sendMetaEvent sends a Meta Conversions API event
+func (s *recurringPaymentService) sendMetaEvent(
+	recurringPayment *models.RecurringPayment,
+	paymentAttempt *models.PaymentAttempt,
+	params metaEventParams,
+	metaConfig *metaDatasetModels.MetaDatasetConfig,
+	phone string,
+) {
+	value := float64(paymentAttempt.Amount) / 100.0
+
+	eventData := notification.SubscriptionEventData{
+		DatasetID:    metaConfig.DatasetID,
+		AccessToken:  metaConfig.AccessToken,
+		EventName:    params.eventName,
+		EventTime:    time.Now().Unix(),
+		ActionSource: "other",
+		UserData: notification.UserData{
+			Phone:      notification.HashPhone(phone),
+			ExternalID: recurringPayment.UserID.String(),
+		},
+		CustomData: notification.CustomData{
+			Currency:    "INR",
+			Value:       value,
+			ContentName: params.contentName,
+			ContentType: "product",
+			Contents: []notification.Content{
+				{
+					ID:       params.eventIDSource,
+					Quantity: 1,
+					Price:    value,
+				},
+			},
+		},
+	}
+
+	eventData.EventID = notification.GenerateEventID(params.eventIDSource, eventData.EventTime)
+
+	if err := s.metaDatasetClient.SendSubscriptionEvent(eventData); err != nil {
+		fmt.Printf("[Meta Dataset ERROR] Failed to send %s event: %v\n", params.eventName, err)
+		return
+	}
+
+	fmt.Printf("[Meta Dataset] Successfully sent %s event for recurring_payment %s (%.2f INR) to dataset_id %s\n",
+		params.eventName, recurringPayment.ID, value, metaConfig.DatasetID)
+}
+
+// sendMetaDatasetRecurringPaymentStartedEvent sends RecurringPaymentStarted event to Meta
+func (s *recurringPaymentService) sendMetaDatasetRecurringPaymentStartedEvent(
+	recurringPayment *models.RecurringPayment,
+	paymentAttempt *models.PaymentAttempt,
+	user *userModels.User,
+) {
+	fmt.Printf("[Meta Dataset] Processing RecurringPaymentStarted event for recurring_payment: %s\n", recurringPayment.ID)
+
+	metaConfig, ok := s.getMetaConfig(recurringPayment.AppName)
+	if !ok {
+		return
+	}
+
+	var phone string
+	if user.CountryCode != nil && user.Phone != nil {
+		phone = *user.CountryCode + *user.Phone
+	}
+
+	s.sendMetaEvent(recurringPayment, paymentAttempt, metaEventParams{
+		eventName:     "RecurringPaymentStarted",
+		contentName:   fmt.Sprintf("%s Recurring Payment", recurringPayment.AppName),
+		eventIDSource: recurringPayment.ID.String(),
+	}, metaConfig, phone)
+}
+
+// sendMetaDatasetRecurringPaymentCapturedEvent sends RecurringPaymentCaptured event to Meta
+func (s *recurringPaymentService) sendMetaDatasetRecurringPaymentCapturedEvent(
+	recurringPayment *models.RecurringPayment,
+	paymentAttempt *models.PaymentAttempt,
+	billingCycle *models.BillingCycle,
+) {
+	fmt.Printf("[Meta Dataset] Processing RecurringPaymentCaptured event for recurring_payment: %s\n", recurringPayment.ID)
+
+	metaConfig, ok := s.getMetaConfig(recurringPayment.AppName)
+	if !ok {
+		return
+	}
+
+	phone := s.getPhoneFromUser(recurringPayment.UserID)
+
+	s.sendMetaEvent(recurringPayment, paymentAttempt, metaEventParams{
+		eventName:     "RecurringPaymentCaptured",
+		contentName:   fmt.Sprintf("%s Recurring Payment - Cycle %d", recurringPayment.AppName, billingCycle.CycleNumber),
+		eventIDSource: paymentAttempt.ID.String(),
+	}, metaConfig, phone)
+}
+
+// ==================== PostHog Analytics Events ====================
+
+const (
+	// PostHog event names
+	PostHogEventRecurringPaymentStarted        = "RECURRING_PAYMENT_STARTED"
+	PostHogEventRecurringPaymentCaptured       = "RECURRING_PAYMENT_CAPTURED"
+	PostHogEventRecurringPaymentFailed         = "RECURRING_PAYMENT_FAILED"
+	PostHogEventRecurringPaymentCreationFailed = "RECURRING_PAYMENT_CREATION_FAILED"
+)
+
+// getPostHogConfig fetches and validates the PostHog config for an app
+func (s *recurringPaymentService) getPostHogConfig(appName string) (*posthogModels.PostHogConfig, bool) {
+	env := utils.GetEnv("GO_ENV", "local")
+	config, err := s.posthogConfigRepo.FindByAppNameAndEnv(appName, env)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			fmt.Printf("[PostHog] No config found for app: %s, environment: %s. Skipping event.\n", appName, env)
+		} else {
+			fmt.Printf("[PostHog ERROR] Failed to get config: %v\n", err)
+		}
+		return nil, false
+	}
+
+	if !config.IsActive {
+		fmt.Printf("[PostHog] Config is inactive for app: %s. Skipping event.\n", appName)
+		return nil, false
+	}
+
+	return config, true
+}
+
+// extractStateAndLanguageCode extracts state_id and language_code from user metadata for DailyStoryApp
+func extractStateAndLanguageCode(user *userModels.User, appName string) (stateID *string, languageCode *string) {
+	if appName != constants.AppNameDailyStory || user == nil {
+		return nil, nil
+	}
+
+	if user.Metadata != nil {
+		if stateIDVal, ok := user.Metadata["state_id"].(string); ok && stateIDVal != "" {
+			stateID = &stateIDVal
+		}
+		if languageCodeVal, ok := user.Metadata["language_code"].(string); ok && languageCodeVal != "" {
+			languageCode = &languageCodeVal
+		}
+	}
+	return stateID, languageCode
+}
+
+// sendPostHogEvent sends a PostHog analytics event
+func (s *recurringPaymentService) sendPostHogEvent(
+	eventName string,
+	userID uuid.UUID,
+	appName string,
+	amount float64,
+	stateID *string,
+	languageCode *string,
+	errorCode *string,
+) {
+	config, ok := s.getPostHogConfig(appName)
+	if !ok {
+		return
+	}
+
+	props := analytics.RecurringPaymentEventProperties{
+		UserID:       userID,
+		AppName:      appName,
+		Amount:       amount,
+		StateID:      stateID,
+		LanguageCode: languageCode,
+		ErrorCode:    errorCode,
+	}
+
+	go func() {
+		if err := s.posthogClient.SendEvent(config.Host, config.APIKey, eventName, userID.String(), props.ToProperties()); err != nil {
+			fmt.Printf("[PostHog ERROR] Failed to send %s event: %v\n", eventName, err)
+		}
+	}()
+}
+
+// sendPostHogRecurringPaymentStartedEvent sends RECURRING_PAYMENT_STARTED event to PostHog
+func (s *recurringPaymentService) sendPostHogRecurringPaymentStartedEvent(
+	recurringPayment *models.RecurringPayment,
+	paymentAttempt *models.PaymentAttempt,
+	user *userModels.User,
+) {
+	fmt.Printf("[PostHog] Processing RECURRING_PAYMENT_STARTED event for recurring_payment: %s\n", recurringPayment.ID)
+
+	stateID, languageCode := extractStateAndLanguageCode(user, recurringPayment.AppName)
+	amount := float64(paymentAttempt.Amount) / 100.0
+
+	s.sendPostHogEvent(
+		PostHogEventRecurringPaymentStarted,
+		recurringPayment.UserID,
+		recurringPayment.AppName,
+		amount,
+		stateID,
+		languageCode,
+		nil,
+	)
+}
+
+// sendPostHogRecurringPaymentCapturedEvent sends RECURRING_PAYMENT_CAPTURED event to PostHog
+func (s *recurringPaymentService) sendPostHogRecurringPaymentCapturedEvent(
+	recurringPayment *models.RecurringPayment,
+	paymentAttempt *models.PaymentAttempt,
+	user *userModels.User,
+) {
+	fmt.Printf("[PostHog] Processing RECURRING_PAYMENT_CAPTURED event for recurring_payment: %s\n", recurringPayment.ID)
+
+	stateID, languageCode := extractStateAndLanguageCode(user, recurringPayment.AppName)
+	amount := float64(paymentAttempt.Amount) / 100.0
+
+	s.sendPostHogEvent(
+		PostHogEventRecurringPaymentCaptured,
+		recurringPayment.UserID,
+		recurringPayment.AppName,
+		amount,
+		stateID,
+		languageCode,
+		nil,
+	)
+}
+
+// sendPostHogRecurringPaymentFailedEvent sends RECURRING_PAYMENT_FAILED event to PostHog
+func (s *recurringPaymentService) sendPostHogRecurringPaymentFailedEvent(
+	recurringPayment *models.RecurringPayment,
+	paymentAttempt *models.PaymentAttempt,
+	user *userModels.User,
+) {
+	fmt.Printf("[PostHog] Processing RECURRING_PAYMENT_FAILED event for recurring_payment: %s\n", recurringPayment.ID)
+
+	stateID, languageCode := extractStateAndLanguageCode(user, recurringPayment.AppName)
+	amount := float64(paymentAttempt.Amount) / 100.0
+
+	var errorCode *string
+	if paymentAttempt.ErrorCode != "" {
+		errorCode = &paymentAttempt.ErrorCode
+	}
+
+	s.sendPostHogEvent(
+		PostHogEventRecurringPaymentFailed,
+		recurringPayment.UserID,
+		recurringPayment.AppName,
+		amount,
+		stateID,
+		languageCode,
+		errorCode,
+	)
+}
+
+// sendPostHogRecurringPaymentCreationFailedEvent sends RECURRING_PAYMENT_CREATION_FAILED event to PostHog
+func (s *recurringPaymentService) sendPostHogRecurringPaymentCreationFailedEvent(
+	recurringPayment *models.RecurringPayment,
+	amount int64,
+	user *userModels.User,
+) {
+	fmt.Printf("[PostHog] Processing RECURRING_PAYMENT_CREATION_FAILED event for recurring_payment: %s\n", recurringPayment.ID)
+
+	stateID, languageCode := extractStateAndLanguageCode(user, recurringPayment.AppName)
+	amountInr := float64(amount) / 100.0
+
+	s.sendPostHogEvent(
+		PostHogEventRecurringPaymentCreationFailed,
+		recurringPayment.UserID,
+		recurringPayment.AppName,
+		amountInr,
+		stateID,
+		languageCode,
+		nil, // error_code only sent for RECURRING_PAYMENT_FAILED
+	)
+}

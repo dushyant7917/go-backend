@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 // R2Client wraps the S3 client for Cloudflare R2 operations
@@ -200,6 +201,56 @@ func (r *R2Client) DeleteFile(bucketName, fileKey string) error {
 	}
 
 	return nil
+}
+
+// DeleteFiles deletes multiple files from an R2 bucket in a single request
+//
+// Parameters:
+//   - bucketName: Name of the R2 bucket
+//   - fileKeys: Slice of object keys to delete (max 1000 per request)
+//
+// Returns:
+//   - Slice of file keys that failed to delete (empty if all succeeded)
+//   - Error if the bulk delete operation fails
+func (r *R2Client) DeleteFiles(bucketName string, fileKeys []string) ([]string, error) {
+	if bucketName == "" {
+		return nil, fmt.Errorf("bucket name is required")
+	}
+	if len(fileKeys) == 0 {
+		return nil, nil
+	}
+	if len(fileKeys) > 1000 {
+		return nil, fmt.Errorf("maximum 1000 files can be deleted per request, got %d", len(fileKeys))
+	}
+
+	// Build the object identifiers
+	objects := make([]types.ObjectIdentifier, len(fileKeys))
+	for i, key := range fileKeys {
+		objects[i] = types.ObjectIdentifier{Key: aws.String(key)}
+	}
+
+	// Create DeleteObjects request
+	deleteObjectsInput := &s3.DeleteObjectsInput{
+		Bucket: aws.String(bucketName),
+		Delete: &types.Delete{
+			Objects: objects,
+			Quiet:   aws.Bool(true), // Only return errors, not successful deletions
+		},
+	}
+
+	// Delete the objects
+	result, err := r.client.DeleteObjects(context.Background(), deleteObjectsInput)
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete files: %w", err)
+	}
+
+	// Extract failed keys
+	var failedKeys []string
+	for _, err := range result.Errors {
+		failedKeys = append(failedKeys, aws.ToString(err.Key))
+	}
+
+	return failedKeys, nil
 }
 
 // GetClient returns the underlying S3 client for advanced operations
