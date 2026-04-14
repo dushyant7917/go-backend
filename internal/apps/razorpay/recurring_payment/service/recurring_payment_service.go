@@ -706,6 +706,69 @@ func (s *recurringPaymentService) fetchTokenIDFromPayment(razorpayClient *razorp
 	return tokenID, nil
 }
 
+// fetchTokenByCustomerID fetches tokens by customer ID and returns the latest confirmed recurring token
+// https://razorpay.com/docs/api/payments/recurring-payments/upi/tokens/#22-fetch-tokens-by-customer-id
+func (s *recurringPaymentService) fetchTokenByCustomerID(customerID string, config *clientModels.RazorpayConfig) (string, error) {
+	razorpayClient := s.getRazorpayClient(config)
+
+	// Fetch tokens for the customer using All method
+	tokensData, err := razorpayClient.Token.All(customerID, nil, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch tokens for customer: %w", err)
+	}
+
+	// Extract items array
+	items, ok := tokensData["items"].([]interface{})
+	if !ok || len(items) == 0 {
+		return "", errors.New("no tokens found for customer")
+	}
+
+	var latestToken string
+	var latestCreatedAt int64
+
+	for _, item := range items {
+		token, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		// Check if token is recurring
+		recurring, _ := token["recurring"].(bool)
+		if !recurring {
+			continue
+		}
+
+		// Check recurring_details.status is confirmed
+		recurringDetails, ok := token["recurring_details"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		status, _ := recurringDetails["status"].(string)
+		if status != "confirmed" {
+			continue
+		}
+
+		// Get token ID
+		tokenID, ok := token["id"].(string)
+		if !ok || tokenID == "" {
+			continue
+		}
+
+		// Get created_at timestamp to find the latest token
+		createdAt, _ := token["created_at"].(float64)
+		if createdAt > float64(latestCreatedAt) {
+			latestCreatedAt = int64(createdAt)
+			latestToken = tokenID
+		}
+	}
+
+	if latestToken == "" {
+		return "", errors.New("no confirmed recurring token found for customer")
+	}
+
+	return latestToken, nil
+}
+
 // updateAuthorizationPaymentRecords updates all records for verified authorization payment
 func (s *recurringPaymentService) updateAuthorizationPaymentRecords(
 	paymentAttempt *models.PaymentAttempt,
@@ -831,22 +894,47 @@ func (s *recurringPaymentService) HandleWebhook(payload []byte, signature string
 func (s *recurringPaymentService) handlePaymentWebhook(eventType string, payloadData map[string]interface{}, rawPayload []byte, signature string) error {
 	paymentEntity, err := extractPaymentEntity(payloadData)
 	if err != nil {
+		fmt.Printf("[Webhook ERROR] Failed to extract payment entity: %v\n", err)
 		return err
+	}
+
+	// Log payment entity details for debugging
+	if orderID, ok := paymentEntity["order_id"].(string); ok {
+		fmt.Printf("[Webhook] Payment entity order_id: %s\n", orderID)
+	}
+	if paymentID, ok := paymentEntity["id"].(string); ok {
+		fmt.Printf("[Webhook] Payment entity id: %s\n", paymentID)
 	}
 
 	paymentAttempt, err := s.findPaymentAttemptFromEntity(paymentEntity)
 	if err != nil {
+		fmt.Printf("[Webhook ERROR] Failed to find payment attempt: %v\n", err)
 		return fmt.Errorf("failed to find payment attempt: %w", err)
 	}
 
-	billingCycle, recurringPayment, config, err := s.getPaymentRelatedRecords(paymentAttempt.BillingCycleID)
-	if err != nil {
-		return err
+	// If paymentAttempt is nil, the order/payment doesn't belong to recurring_payment module
+	// This can happen if the webhook is for a subscription or other payment type
+	// Return nil to acknowledge the webhook without processing
+	if paymentAttempt == nil {
+		fmt.Printf("[Webhook] Payment not found in recurring_payment module, ignoring webhook\n")
+		return nil
 	}
 
+	fmt.Printf("[Webhook] Found payment attempt: id=%s, billing_cycle_id=%s\n", paymentAttempt.ID, paymentAttempt.BillingCycleID)
+
+	billingCycle, recurringPayment, config, err := s.getPaymentRelatedRecords(paymentAttempt.BillingCycleID)
+	if err != nil {
+		fmt.Printf("[Webhook ERROR] Failed to get payment related records: %v\n", err)
+		return err
+	}
+	fmt.Printf("[Webhook] Found billing_cycle=%s, recurring_payment=%s, config_app=%s\n", billingCycle.ID, recurringPayment.ID, config.AppName)
+
+	fmt.Printf("[Webhook] Verifying webhook signature...\n")
 	if !s.verifyWebhookSignature(rawPayload, signature, config.RazorpayWebhookSecret) {
+		fmt.Printf("[Webhook ERROR] Signature verification failed\n")
 		return errors.New("invalid webhook signature")
 	}
+	fmt.Printf("[Webhook] Signature verified successfully\n")
 
 	return s.processPaymentEvent(eventType, paymentEntity, paymentAttempt, billingCycle, recurringPayment)
 }
@@ -869,10 +957,26 @@ func extractPaymentEntity(payloadData map[string]interface{}) (map[string]interf
 // findPaymentAttemptFromEntity finds payment attempt from webhook payment entity
 func (s *recurringPaymentService) findPaymentAttemptFromEntity(paymentEntity map[string]interface{}) (*models.PaymentAttempt, error) {
 	if orderID, ok := paymentEntity["order_id"].(string); ok && orderID != "" {
-		return s.repo.FindPaymentAttemptByOrderID(orderID)
+		pa, err := s.repo.FindPaymentAttemptByOrderID(orderID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				fmt.Printf("[Webhook] Order %s not found in payment_attempts (not a recurring_payment order, ignoring)\n", orderID)
+				return nil, nil // Return nil without error to acknowledge webhook
+			}
+			return nil, err
+		}
+		return pa, nil
 	}
 	if paymentID, ok := paymentEntity["id"].(string); ok {
-		return s.repo.FindPaymentAttemptByPaymentID(paymentID)
+		pa, err := s.repo.FindPaymentAttemptByPaymentID(paymentID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				fmt.Printf("[Webhook] Payment %s not found in payment_attempts (not a recurring_payment payment, ignoring)\n", paymentID)
+				return nil, nil // Return nil without error to acknowledge webhook
+			}
+			return nil, err
+		}
+		return pa, nil
 	}
 	return nil, errors.New("no order_id or payment_id in payment entity")
 }
@@ -885,6 +989,9 @@ func (s *recurringPaymentService) processPaymentEvent(
 	billingCycle *models.BillingCycle,
 	recurringPayment *models.RecurringPayment,
 ) error {
+	fmt.Printf("[processPaymentEvent] Processing %s for billing_cycle=%s, cycle_number=%d\n",
+		eventType, billingCycle.ID, billingCycle.CycleNumber)
+
 	if paymentID, ok := paymentEntity["id"].(string); ok {
 		paymentAttempt.RazorpayPaymentID = &paymentID
 	}
@@ -893,17 +1000,23 @@ func (s *recurringPaymentService) processPaymentEvent(
 	case "payment.captured":
 		// Handle authorization payment (cycle 0) - activate mandate
 		if billingCycle.CycleNumber == 0 {
+			fmt.Printf("[processPaymentEvent] Activating mandate for cycle 0 authorization\n")
 			if err := s.activateMandateFromPayment(paymentEntity, paymentAttempt, billingCycle, recurringPayment); err != nil {
+				fmt.Printf("[processPaymentEvent ERROR] Failed to activate mandate: %v\n", err)
 				return err
 			}
 		} else {
+			fmt.Printf("[processPaymentEvent] Handling payment captured for cycle %d\n", billingCycle.CycleNumber)
 			s.handlePaymentCaptured(paymentAttempt, billingCycle, recurringPayment)
 		}
 	case "payment.failed":
+		fmt.Printf("[processPaymentEvent] Handling payment failed for cycle %d\n", billingCycle.CycleNumber)
 		s.handlePaymentFailed(paymentAttempt, billingCycle, recurringPayment, paymentEntity)
 	}
 
+	fmt.Printf("[processPaymentEvent] Saving records to database...\n")
 	if err := s.saveRecordsInTransaction(paymentAttempt, billingCycle, recurringPayment); err != nil {
+		fmt.Printf("[processPaymentEvent ERROR] Failed to save records: %v\n", err)
 		return err
 	}
 
@@ -929,12 +1042,36 @@ func (s *recurringPaymentService) activateMandateFromPayment(
 	// Extract token_id from payment entity
 	tokenID, err := extractTokenIDFromPaymentEntity(paymentEntity)
 	if err != nil {
-		return fmt.Errorf("failed to extract token_id: %w", err)
+		config, configErr := s.getConfig(recurringPayment.AppName)
+		if configErr != nil {
+			return fmt.Errorf("failed to get config to fetch token: %w", configErr)
+		}
+
+		// Try to get customer_id from payment entity or recurring payment
+		customerID := ""
+		if cid, ok := paymentEntity["customer_id"].(string); ok && cid != "" {
+			customerID = cid
+		} else if recurringPayment.RazorpayCustomerID != nil {
+			customerID = *recurringPayment.RazorpayCustomerID
+		}
+
+		if customerID == "" {
+			return fmt.Errorf("failed to extract token_id and customer_id is missing: %w", err)
+		}
+
+		// Fetch token from Razorpay using customer ID
+		var tokenErr error
+		tokenID, tokenErr = s.fetchTokenByCustomerID(customerID, config)
+		if tokenErr != nil {
+			fmt.Printf("[activateMandateFromPayment ERROR] Failed to fetch token by customer ID: %v\n", tokenErr)
+			return fmt.Errorf("failed to fetch token by customer ID: %w", tokenErr)
+		}
 	}
 
 	// Get user for Meta event
 	user, err := s.userRepo.FindByID(recurringPayment.UserID)
 	if err != nil {
+		fmt.Printf("[activateMandateFromPayment ERROR] Failed to find user: %v\n", err)
 		return fmt.Errorf("failed to find user: %w", err)
 	}
 
@@ -946,6 +1083,7 @@ func (s *recurringPaymentService) activateMandateFromPayment(
 
 	// Update all records using the same function as VerifyAuthorizationPayment
 	if err := s.updateAuthorizationPaymentRecords(paymentAttempt, billingCycle, recurringPayment, paymentID, tokenID); err != nil {
+		fmt.Printf("[activateMandateFromPayment ERROR] Failed to update authorization payment records: %v\n", err)
 		return err
 	}
 
@@ -955,9 +1093,6 @@ func (s *recurringPaymentService) activateMandateFromPayment(
 	// Emit PostHog event for recurring payment started
 	go s.sendPostHogRecurringPaymentStartedEvent(recurringPayment, paymentAttempt, user)
 
-	fmt.Printf("[activateMandateFromPayment] Activated mandate: token_id=%s, recurring_payment_id=%s\n",
-		tokenID, recurringPayment.ID)
-
 	return nil
 }
 
@@ -965,6 +1100,12 @@ func (s *recurringPaymentService) activateMandateFromPayment(
 func extractTokenIDFromPaymentEntity(paymentEntity map[string]interface{}) (string, error) {
 	tokenID, ok := paymentEntity["token_id"].(string)
 	if !ok || tokenID == "" {
+		// Also check for "token" key (Razorpay sometimes uses different key names)
+		if tokenData, ok := paymentEntity["token"].(map[string]interface{}); ok {
+			if tokenID, ok := tokenData["id"].(string); ok && tokenID != "" {
+				return tokenID, nil
+			}
+		}
 		return "", errors.New("token_id not found in payment entity")
 	}
 	return tokenID, nil
