@@ -116,7 +116,7 @@ func (r *recurringPaymentRepository) FindRecurringPaymentsForNotification(window
 func (r *recurringPaymentRepository) FindRecurringPaymentsForNewBillingCycle(windowStart, windowEnd time.Time) ([]models.RecurringPayment, error) {
 	var rps []models.RecurringPayment
 	// Find active recurring payments where:
-	// 1. next_charge_at is in the notification window (48-72 hours away)
+	// 1. next_charge_at is in the notification window (25-50 hours away)
 	// 2. Latest billing cycle is paid (cycle 0 authorization is always paid, so first billing cycle qualifies)
 	// 3. Mandate hasn't expired (end_at is null OR end_at > window_end)
 	err := r.db.Raw(`
@@ -143,12 +143,12 @@ func (r *recurringPaymentRepository) FindRecurringPaymentsForNewBillingCycle(win
 }
 
 // FindRecurringPaymentsForRetry finds active recurring payments whose latest billing cycle is pending
-// and has next_attempt_at in the notification window (48-72 hours away)
+// and has next_attempt_at in the notification window (25-50 hours away)
 func (r *recurringPaymentRepository) FindRecurringPaymentsForRetry(windowStart, windowEnd time.Time) ([]models.RecurringPayment, error) {
 	var rps []models.RecurringPayment
 	// Find active recurring payments where:
 	// 1. Latest billing cycle status is pending
-	// 2. Latest billing cycle's next_attempt_at is in the notification window (48-72 hours away)
+	// 2. Latest billing cycle's next_attempt_at is in the notification window (25-50 hours away)
 	err := r.db.Raw(`
 		SELECT rp.*
 		FROM recurring_payments rp

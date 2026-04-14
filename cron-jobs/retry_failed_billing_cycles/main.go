@@ -56,7 +56,7 @@ func main() {
 	recurringPaymentService := service.NewRecurringPaymentService(recurringPaymentRepository, razorpayConfigRepo, userRepository, metaDatasetConfigRepo, posthogConfigRepo)
 
 	// Cron B: Retry failed billing cycles - send notification for retry attempt
-	// Filters billing cycles with pending status and next_attempt_at 48-72 hours away, max 8 attempts
+	// Filters billing cycles with pending status and next_attempt_at 25-50 hours away, max 8 attempts
 	if err := recurringPaymentService.RetryFailedBillingCycles(); err != nil {
 		log.Printf("[%s] ✗ Retry failed billing cycles job failed: %v\n", timestamp, err)
 	} else {

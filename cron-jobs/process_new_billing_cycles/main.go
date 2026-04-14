@@ -56,7 +56,7 @@ func main() {
 	recurringPaymentService := service.NewRecurringPaymentService(recurringPaymentRepository, razorpayConfigRepo, userRepository, metaDatasetConfigRepo, posthogConfigRepo)
 
 	// Cron A: Process new billing cycles - create billing cycle and send notification
-	// Filters recurring payments where next_charge_at is 48-72 hours away and no pending billing cycle
+	// Filters recurring payments where next_charge_at is 25-50 hours away and no pending billing cycle
 	if err := recurringPaymentService.ProcessNewBillingCycles(); err != nil {
 		log.Printf("[%s] ✗ Process new billing cycles job failed: %v\n", timestamp, err)
 	} else {

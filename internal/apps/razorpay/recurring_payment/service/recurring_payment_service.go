@@ -1118,8 +1118,8 @@ func (s *recurringPaymentService) RetryFailedBillingCycles() error {
 	fmt.Printf("[RetryFailedBillingCycles] Starting\n")
 
 	now := time.Now().UTC()
-	windowStart := now.Add(48 * time.Hour)
-	windowEnd := now.Add(72 * time.Hour)
+	windowStart := now.Add(25 * time.Hour)
+	windowEnd := now.Add(50 * time.Hour)
 
 	recurringPayments, err := s.repo.FindRecurringPaymentsForRetry(windowStart, windowEnd)
 	if err != nil {
@@ -1137,8 +1137,8 @@ func (s *recurringPaymentService) ProcessNewBillingCycles() error {
 	fmt.Printf("[SendPreDebitNotifications] Starting\n")
 
 	now := time.Now().UTC()
-	windowStart := now.Add(48 * time.Hour)
-	windowEnd := now.Add(72 * time.Hour)
+	windowStart := now.Add(25 * time.Hour)
+	windowEnd := now.Add(50 * time.Hour)
 
 	recurringPayments, err := s.repo.FindRecurringPaymentsForNewBillingCycle(windowStart, windowEnd)
 	if err != nil {
