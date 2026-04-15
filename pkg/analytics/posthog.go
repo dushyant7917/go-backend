@@ -134,3 +134,34 @@ func (p RecurringPaymentEventProperties) ToProperties() map[string]interface{} {
 
 	return props
 }
+
+// OrderCreationFailedProperties contains properties for order creation failed events
+type OrderCreationFailedProperties struct {
+	UserID       uuid.UUID
+	AppName      string
+	Amount       float64 // Amount in INR (not paise)
+	StateID      *string
+	LanguageCode *string
+	ErrorCode    *string
+}
+
+// ToProperties converts OrderCreationFailedProperties to a map
+func (p OrderCreationFailedProperties) ToProperties() map[string]interface{} {
+	props := map[string]interface{}{
+		"user_id":  p.UserID.String(),
+		"app_name": p.AppName,
+		"amount":   p.Amount,
+	}
+
+	if p.StateID != nil {
+		props["state_id"] = *p.StateID
+	}
+	if p.LanguageCode != nil {
+		props["language_code"] = *p.LanguageCode
+	}
+	if p.ErrorCode != nil {
+		props["error_code"] = *p.ErrorCode
+	}
+
+	return props
+}

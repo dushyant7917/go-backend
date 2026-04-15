@@ -257,10 +257,81 @@ func (s *recurringPaymentService) handlePaymentFailed(
 	scheduleRetry(billingCycle)
 }
 
-// isTokenError checks if an error is related to token/mandate issues
-func isTokenError(errMsg string) bool {
-	lowerMsg := strings.ToLower(errMsg)
-	return strings.Contains(lowerMsg, "token") || strings.Contains(lowerMsg, "mandate")
+// razorpayErrorInfo contains extracted error information from Razorpay error response
+type razorpayErrorInfo struct {
+	Code        string
+	Description string
+}
+
+// extractRazorpayError extracts code and description from Razorpay error response
+// Razorpay errors have structure: {"error": {"code": "BAD_REQUEST_ERROR", "description": "...", ...}}
+func extractRazorpayError(err error) razorpayErrorInfo {
+	if err == nil {
+		return razorpayErrorInfo{}
+	}
+
+	errMsg := err.Error()
+	info := razorpayErrorInfo{}
+
+	// Try to parse as JSON
+	var errorResponse map[string]interface{}
+	if jsonErr := json.Unmarshal([]byte(errMsg), &errorResponse); jsonErr != nil {
+		// Not a JSON error, use raw error message as description
+		info.Description = errMsg
+		return info
+	}
+
+	// Extract nested error object
+	errorObj, ok := errorResponse["error"].(map[string]interface{})
+	if !ok {
+		// No nested error object, use raw error message as description
+		info.Description = errMsg
+		return info
+	}
+
+	// Extract code
+	if code, ok := errorObj["code"].(string); ok {
+		info.Code = code
+	}
+
+	// Extract description
+	if desc, ok := errorObj["description"].(string); ok {
+		info.Description = desc
+	} else if info.Code == "" {
+		// No description and no code, use raw error message
+		info.Description = errMsg
+	}
+
+	return info
+}
+
+// extractRazorpayErrorCode extracts only the error code from Razorpay error response
+func extractRazorpayErrorCode(err error) *string {
+	info := extractRazorpayError(err)
+	if info.Code == "" {
+		return nil
+	}
+	return &info.Code
+}
+
+// extractRazorpayErrorCodeFromInfo extracts error code pointer from errorInfo
+func extractRazorpayErrorCodeFromInfo(errorInfo razorpayErrorInfo) *string {
+	if errorInfo.Code == "" {
+		return nil
+	}
+	return &errorInfo.Code
+}
+
+// isTokenError checks if an error description is related to token issues
+func isTokenError(errorDescription string) bool {
+	lowerMsg := strings.ToLower(errorDescription)
+	return strings.Contains(lowerMsg, "token")
+}
+
+// isMandateError checks if an error description is related to mandate issues
+func isMandateError(errorDescription string) bool {
+	lowerMsg := strings.ToLower(errorDescription)
+	return strings.Contains(lowerMsg, "mandate")
 }
 
 // calculateAttemptAmount calculates the amount to charge based on attempt number
@@ -1183,9 +1254,11 @@ func (s *recurringPaymentService) processPendingBillingCycleRetry(rp models.Recu
 	razorpayClient := s.getRazorpayClient(config)
 
 	newChargeAttempts := bc.ChargeAttempts + 1
-	orderID, err := s.createRetryOrder(razorpayClient, &rp, bc, newChargeAttempts)
+	user, _ := s.userRepo.FindByID(rp.UserID)
+	orderID, err := s.createRetryOrder(razorpayClient, &rp, bc, newChargeAttempts, user)
 	if err != nil {
-		return s.handleOrderCreationError(err, &rp)
+		errorInfo := extractRazorpayError(err)
+		return s.handleOrderCreationError(err, &rp, errorInfo.Description)
 	}
 
 	if err := s.createRetryDBRecords(bc, &rp, orderID, newChargeAttempts); err != nil {
@@ -1223,6 +1296,7 @@ func (s *recurringPaymentService) createRetryOrder(
 	rp *models.RecurringPayment,
 	bc *models.BillingCycle,
 	attemptNumber int,
+	user *userModels.User,
 ) (string, error) {
 	// Nil check to prevent panic
 	if bc.NextAttemptAt == nil {
@@ -1247,6 +1321,9 @@ func (s *recurringPaymentService) createRetryOrder(
 
 	order, err := razorpayClient.Order.Create(orderData, nil)
 	if err != nil {
+		// Emit PostHog event for order creation failure
+		errorInfo := extractRazorpayError(err)
+		go s.sendPostHogOrderCreationFailedEvent(rp, amount, extractRazorpayErrorCodeFromInfo(errorInfo), user)
 		return "", err
 	}
 
@@ -1254,8 +1331,12 @@ func (s *recurringPaymentService) createRetryOrder(
 }
 
 // handleOrderCreationError handles errors during order creation
-func (s *recurringPaymentService) handleOrderCreationError(err error, rp *models.RecurringPayment) error {
-	if isTokenError(err.Error()) {
+func (s *recurringPaymentService) handleOrderCreationError(
+	err error,
+	rp *models.RecurringPayment,
+	errorDescription string,
+) error {
+	if isTokenError(errorDescription) || isMandateError(errorDescription) {
 		rp.Status = models.RecurringPaymentStatusExpired
 		if updateErr := s.repo.UpdateRecurringPayment(nil, rp); updateErr != nil {
 			return fmt.Errorf("token invalid, failed to update recurring payment: %w", updateErr)
@@ -1330,9 +1411,11 @@ func (s *recurringPaymentService) processNewBillingCycleForPayment(rp models.Rec
 		return fmt.Errorf("billing cycle end_at (%s) would exceed mandate end_at (%s)", endAt.Format(time.RFC3339), rp.EndAt.Format(time.RFC3339))
 	}
 
-	orderID, err := s.createNewCycleOrder(razorpayClient, &rp, nextCycleNumber, amount)
+	user, _ := s.userRepo.FindByID(rp.UserID)
+	orderID, err := s.createNewCycleOrder(razorpayClient, &rp, nextCycleNumber, amount, user)
 	if err != nil {
-		return s.handleOrderCreationError(err, &rp)
+		errorInfo := extractRazorpayError(err)
+		return s.handleOrderCreationError(err, &rp, errorInfo.Description)
 	}
 
 	if err := s.createNewCycleDBRecords(&rp, orderID, nextCycleNumber, amount, endAt); err != nil {
@@ -1351,6 +1434,7 @@ func (s *recurringPaymentService) createNewCycleOrder(
 	rp *models.RecurringPayment,
 	cycleNumber int,
 	amount int64,
+	user *userModels.User,
 ) (string, error) {
 	// Nil check to prevent panic
 	if rp.NextChargeAt == nil {
@@ -1374,6 +1458,9 @@ func (s *recurringPaymentService) createNewCycleOrder(
 
 	order, err := razorpayClient.Order.Create(orderData, nil)
 	if err != nil {
+		// Emit PostHog event for order creation failure
+		errorInfo := extractRazorpayError(err)
+		go s.sendPostHogOrderCreationFailedEvent(rp, amount, extractRazorpayErrorCodeFromInfo(errorInfo), user)
 		return "", err
 	}
 
@@ -1506,7 +1593,10 @@ func (s *recurringPaymentService) createRazorpayRecurringPayment(pa models.Payme
 
 	payment, err := razorpayClient.Payment.CreateRecurringPayment(recurringData, nil)
 	if err != nil {
-		return s.handleRecurringPaymentError(err, &pa, billingCycle, recurringPayment, user)
+		errorInfo := extractRazorpayError(err)
+		// Emit PostHog event for recurring payment creation failure
+		go s.sendPostHogRecurringPaymentCreationFailedEvent(recurringPayment, pa.Amount, user, extractRazorpayErrorCodeFromInfo(errorInfo))
+		return s.handleRecurringPaymentError(err, &pa, billingCycle, recurringPayment, errorInfo.Code, errorInfo.Description, user)
 	}
 
 	if paymentID, ok := payment["razorpay_payment_id"].(string); ok {
@@ -1568,21 +1658,17 @@ func (s *recurringPaymentService) handleRecurringPaymentError(
 	pa *models.PaymentAttempt,
 	billingCycle *models.BillingCycle,
 	recurringPayment *models.RecurringPayment,
+	errorCode string,
+	errorDescription string,
 	user *userModels.User,
 ) error {
-	errMsg := err.Error()
 	now := time.Now().UTC()
-
-	// Emit PostHog event for recurring payment creation failure
-	if user != nil {
-		go s.sendPostHogRecurringPaymentCreationFailedEvent(recurringPayment, pa.Amount, user)
-	}
 
 	// Use transaction for atomic updates
 	tx := s.repo.BeginTransaction()
 
 	pa.Status = models.PaymentAttemptStatusFailed
-	pa.ErrorDescription = errMsg
+	pa.ErrorDescription = errorDescription
 	if updateErr := s.repo.UpdatePaymentAttempt(tx, pa); updateErr != nil {
 		s.repo.RollbackTransaction(tx)
 		return fmt.Errorf("failed to update payment attempt: %w", updateErr)
@@ -1594,7 +1680,19 @@ func (s *recurringPaymentService) handleRecurringPaymentError(
 		return fmt.Errorf("failed to update billing cycle: %w", updateErr)
 	}
 
-	if isTokenError(errMsg) {
+	// Check for mandate_cancelled error code or token/mandate errors
+	isMandateCancelled := strings.ToLower(errorCode) == "mandate_cancelled"
+	isTokenOrMandateError := isTokenError(errorDescription) || isMandateError(errorDescription)
+
+	if isMandateCancelled {
+		// Emit PostHog event for recurring payment cancelled
+		go s.sendPostHogRecurringPaymentCancelledEvent(recurringPayment, pa.Amount, user)
+		recurringPayment.Status = models.RecurringPaymentStatusCancelled
+		if updateErr := s.repo.UpdateRecurringPayment(tx, recurringPayment); updateErr != nil {
+			s.repo.RollbackTransaction(tx)
+			return fmt.Errorf("failed to update recurring payment: %w", updateErr)
+		}
+	} else if isTokenOrMandateError {
 		recurringPayment.Status = models.RecurringPaymentStatusExpired
 		if updateErr := s.repo.UpdateRecurringPayment(tx, recurringPayment); updateErr != nil {
 			s.repo.RollbackTransaction(tx)
@@ -1606,7 +1704,11 @@ func (s *recurringPaymentService) handleRecurringPaymentError(
 		return fmt.Errorf("failed to commit transaction: %w", commitErr)
 	}
 
-	if isTokenError(errMsg) {
+	// Return appropriate error message
+	if isMandateCancelled {
+		return fmt.Errorf("mandate cancelled: %w", err)
+	}
+	if isTokenOrMandateError {
 		return fmt.Errorf("token invalid, marked as expired: %w", err)
 	}
 	return fmt.Errorf("failed to create recurring payment: %w", err)
@@ -1927,6 +2029,8 @@ const (
 	PostHogEventRecurringPaymentCaptured       = "RECURRING_PAYMENT_CAPTURED"
 	PostHogEventRecurringPaymentFailed         = "RECURRING_PAYMENT_FAILED"
 	PostHogEventRecurringPaymentCreationFailed = "RECURRING_PAYMENT_CREATION_FAILED"
+	PostHogEventRecurringPaymentCancelled      = "RECURRING_PAYMENT_CANCELLED"
+	PostHogEventOrderCreationFailed            = "ORDER_CREATION_FAILED"
 )
 
 // getPostHogConfig fetches and validates the PostHog config for an app
@@ -2074,6 +2178,7 @@ func (s *recurringPaymentService) sendPostHogRecurringPaymentCreationFailedEvent
 	recurringPayment *models.RecurringPayment,
 	amount int64,
 	user *userModels.User,
+	errorCode *string,
 ) {
 	fmt.Printf("[PostHog] Processing RECURRING_PAYMENT_CREATION_FAILED event for recurring_payment: %s\n", recurringPayment.ID)
 
@@ -2087,6 +2192,61 @@ func (s *recurringPaymentService) sendPostHogRecurringPaymentCreationFailedEvent
 		amountInr,
 		stateID,
 		languageCode,
-		nil, // error_code only sent for RECURRING_PAYMENT_FAILED
+		errorCode,
 	)
+}
+
+// sendPostHogRecurringPaymentCancelledEvent sends RECURRING_PAYMENT_CANCELLED event to PostHog
+func (s *recurringPaymentService) sendPostHogRecurringPaymentCancelledEvent(
+	recurringPayment *models.RecurringPayment,
+	amount int64,
+	user *userModels.User,
+) {
+	fmt.Printf("[PostHog] Processing RECURRING_PAYMENT_CANCELLED event for recurring_payment: %s\n", recurringPayment.ID)
+
+	stateID, languageCode := extractStateAndLanguageCode(user, recurringPayment.AppName)
+	amountInr := float64(amount) / 100.0
+
+	s.sendPostHogEvent(
+		PostHogEventRecurringPaymentCancelled,
+		recurringPayment.UserID,
+		recurringPayment.AppName,
+		amountInr,
+		stateID,
+		languageCode,
+		nil, // no error code for cancelled event
+	)
+}
+
+// sendPostHogOrderCreationFailedEvent sends ORDER_CREATION_FAILED event to PostHog
+func (s *recurringPaymentService) sendPostHogOrderCreationFailedEvent(
+	recurringPayment *models.RecurringPayment,
+	amount int64,
+	errorCode *string,
+	user *userModels.User,
+) {
+	fmt.Printf("[PostHog] Processing ORDER_CREATION_FAILED event for recurring_payment: %s\n", recurringPayment.ID)
+
+	stateID, languageCode := extractStateAndLanguageCode(user, recurringPayment.AppName)
+	amountInr := float64(amount) / 100.0
+
+	config, ok := s.getPostHogConfig(recurringPayment.AppName)
+	if !ok {
+		return
+	}
+
+	props := analytics.OrderCreationFailedProperties{
+		UserID:       recurringPayment.UserID,
+		AppName:      recurringPayment.AppName,
+		Amount:       amountInr,
+		StateID:      stateID,
+		LanguageCode: languageCode,
+		ErrorCode:    errorCode,
+	}
+
+	go func() {
+		if err := s.posthogClient.SendEvent(config.Host, config.APIKey, PostHogEventOrderCreationFailed, recurringPayment.UserID.String(), props.ToProperties()); err != nil {
+			fmt.Printf("[PostHog ERROR] Failed to send %s event: %v\n", PostHogEventOrderCreationFailed, err)
+		}
+	}()
 }
