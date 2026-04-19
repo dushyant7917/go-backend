@@ -13,10 +13,13 @@ import (
 	"sync"
 	"time"
 
+	posthogModels "go-backend/internal/apps/posthog/config/models"
+	posthogRepository "go-backend/internal/apps/posthog/config/repository"
 	"go-backend/internal/apps/r2/config/repository"
 	"go-backend/internal/apps/r2/config/service"
 	"go-backend/internal/common/constants"
 	"go-backend/internal/common/database"
+	"go-backend/pkg/analytics"
 	"go-backend/pkg/storage"
 	"go-backend/pkg/utils"
 
@@ -125,6 +128,10 @@ func getLanguagesForCategory(category string) []string {
 const (
 	geminiModel        = "gemini-2.5-flash-lite"
 	rateLimitPerMinute = 1000
+
+	// PostHog event names for news parsing
+	PostHogEventNewsParsingFailed    = "NEWS_PARSING_FAILED"
+	PostHogEventNewsParsingSucceeded = "NEWS_PARSING_SUCCEEDED"
 )
 
 // llmGuidelines contains the shared guidelines for LLM headline conversion
@@ -214,6 +221,14 @@ func main() {
 	r2Client, err := r2ClientFactory.GetClient(constants.AppNameDailyStory)
 	if err != nil {
 		log.Fatalf("[%s] ✗ Failed to get R2 client: %v\n", timestamp, err)
+	}
+
+	// Initialize PostHog client and fetch config once
+	posthogConfigRepo := posthogRepository.NewPostHogConfigRepository(db)
+	posthogClient := analytics.NewPostHogClient()
+	posthogConfig := getPostHogConfig(posthogConfigRepo)
+	if posthogConfig != nil {
+		log.Printf("[%s] ✓ PostHog config loaded for app: %s\n", timestamp, constants.AppNameDailyStory)
 	}
 
 	// Get R2 bucket name from environment
@@ -398,6 +413,10 @@ func main() {
 						countersMutex.Lock()
 						totalFailed++
 						countersMutex.Unlock()
+
+						// Emit PostHog event for news parsing failure
+						go sendPostHogNewsParsingEvent(posthogClient, posthogConfig, item.Title, category, extractDomain(rssFeed.URL), PostHogEventNewsParsingFailed, err)
+
 						return
 					}
 
@@ -429,6 +448,9 @@ func main() {
 					countersMutex.Lock()
 					totalProcessed++
 					countersMutex.Unlock()
+
+					// Emit PostHog event for successful news parsing
+					go sendPostHogNewsParsingEvent(posthogClient, posthogConfig, item.Title, category, extractDomain(rssFeed.URL), PostHogEventNewsParsingSucceeded, nil)
 				}(item, mediaLink, publishedAt, rssFeed.Category, targetLanguages)
 			}
 
@@ -814,4 +836,104 @@ func uploadMediaToR2(r2Client *storage.R2Client, bucketName, mediaURL string, ht
 	}
 
 	return fileKey, nil
+}
+
+// extractDomain extracts the domain name from a URL
+// e.g., "https://www.bhaskar.com/rss-v1--category-1061.xml" -> "bhaskar.com"
+func extractDomain(urlStr string) string {
+	urlStr = strings.TrimSpace(urlStr)
+	// Remove protocol
+	if idx := strings.Index(urlStr, "://"); idx != -1 {
+		urlStr = urlStr[idx+3:]
+	}
+	// Remove path
+	if idx := strings.Index(urlStr, "/"); idx != -1 {
+		urlStr = urlStr[:idx]
+	}
+	// Remove port if present
+	if idx := strings.Index(urlStr, ":"); idx != -1 {
+		urlStr = urlStr[:idx]
+	}
+	// Remove www. prefix
+	urlStr = strings.TrimPrefix(urlStr, "www.")
+	return urlStr
+}
+
+// ==================== PostHog Analytics Events ====================
+
+// NewsParsingEventProperties contains properties for news parsing events
+type NewsParsingEventProperties struct {
+	Category     string
+	RSSSource    string
+	ErrorMessage string
+}
+
+// ToProperties converts NewsParsingEventProperties to a map
+func (p NewsParsingEventProperties) ToProperties() map[string]interface{} {
+	props := map[string]interface{}{
+		"category":  p.Category,
+		"rssSource": p.RSSSource,
+	}
+
+	if p.ErrorMessage != "" {
+		props["error_message"] = p.ErrorMessage
+	}
+
+	return props
+}
+
+// getPostHogConfig fetches PostHog config once at startup
+func getPostHogConfig(configRepo posthogRepository.PostHogConfigRepository) *posthogModels.PostHogConfig {
+	env := utils.GetEnv("GO_ENV", "local")
+	config, err := configRepo.FindByAppNameAndEnv(constants.AppNameDailyStory, env)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			log.Printf("[PostHog] No config found for app: %s, environment: %s. Events will be skipped.\n", constants.AppNameDailyStory, env)
+		} else {
+			log.Printf("[PostHog ERROR] Failed to get config: %v. Events will be skipped.\n", err)
+		}
+		return nil
+	}
+
+	if !config.IsActive {
+		log.Printf("[PostHog] Config is inactive for app: %s. Events will be skipped.\n", constants.AppNameDailyStory)
+		return nil
+	}
+
+	return config
+}
+
+// sendPostHogNewsParsingEvent sends NEWS_PARSING_FAILED or NEWS_PARSING_SUCCEEDED event to PostHog
+func sendPostHogNewsParsingEvent(
+	client *analytics.PostHogClient,
+	config *posthogModels.PostHogConfig,
+	title string,
+	category string,
+	rssSource string,
+	eventName string,
+	err error,
+) {
+	if config == nil {
+		return
+	}
+
+	props := NewsParsingEventProperties{
+		Category:  category,
+		RSSSource: rssSource,
+	}
+
+	if err != nil {
+		props.ErrorMessage = err.Error()
+	}
+
+	// Use a hash of the title as distinct_id since we don't have a user_id
+	distinctID := uuid.NewMD5(uuid.NameSpaceDNS, []byte(title)).String()
+
+	log.Printf("[PostHog] Processing %s event for title: %s\n", eventName, title)
+
+	go func() {
+		if sendErr := client.SendEvent(config.Host, config.APIKey, eventName, distinctID, props.ToProperties()); sendErr != nil {
+			log.Printf("[PostHog ERROR] Failed to send %s event: %v\n", eventName, sendErr)
+		}
+	}()
 }

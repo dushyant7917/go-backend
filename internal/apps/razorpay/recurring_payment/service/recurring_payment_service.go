@@ -397,12 +397,12 @@ func (s *recurringPaymentService) CreateAuthorizationOrder(req models.CreateAuth
 		return nil, errors.New("razorpay config is not active")
 	}
 
-	// Validate StartAt is at least 4 days in the future
-	// ProcessNewBillingCycles cron looks for next_charge_at in 48-72 hour window
+	// Validate StartAt is at least 45 hours in the future
+	// ProcessNewBillingCycles cron looks for next_charge_at in 25-50 hour window
 	// If StartAt is too close, the cron will miss creating the first billing cycle
-	minStartAt := time.Now().UTC().Add(4 * 24 * time.Hour)
+	minStartAt := time.Now().UTC().Add(45 * time.Hour)
 	if req.StartAt.Before(minStartAt) {
-		return nil, fmt.Errorf("start_at must be at least 4 days in the future")
+		return nil, fmt.Errorf("start_at must be at least 45 hours in the future")
 	}
 
 	// Validate authorization_amount <= max_amount (Razorpay requirement for UPI recurring)
@@ -473,10 +473,10 @@ func (s *recurringPaymentService) CreateRegistrationLink(req models.CreateRegist
 		return nil, errors.New("razorpay config is not active")
 	}
 
-	// Validate StartAt is at least 4 days in the future
-	minStartAt := time.Now().UTC().Add(4 * 24 * time.Hour)
+	// Validate StartAt is at least 45 hours in the future
+	minStartAt := time.Now().UTC().Add(45 * time.Hour)
 	if req.StartAt.Before(minStartAt) {
-		return nil, fmt.Errorf("start_at must be at least 4 days in the future")
+		return nil, fmt.Errorf("start_at must be at least 45 hours in the future")
 	}
 
 	// Validate authorization_amount <= max_amount (Razorpay requirement for UPI recurring)

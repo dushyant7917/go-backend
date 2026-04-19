@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"go-backend/internal/apps/user/models"
@@ -105,17 +103,12 @@ func buildUserMessages(users []models.User, timestamp string) []userMessage {
 	return userMessages
 }
 
-// sendBatchNotifications sends notifications in concurrent batches.
+// sendBatchNotifications sends notifications in sequential batches.
 func sendBatchNotifications(pushClient *notification.ExpoPushClient, messages []notification.ExpoMessage, targetTokens []string, timestamp string) (int64, int64, []string) {
 	const batchSize = 100
-	const maxConcurrentBatches = 5
 
 	var totalSuccess, totalFailed int64
 	var errorMessages []string
-	var errorMutex sync.Mutex
-	var wg sync.WaitGroup
-
-	sem := make(chan struct{}, maxConcurrentBatches)
 
 	for i := 0; i < len(messages); i += batchSize {
 		end := i + batchSize
@@ -123,39 +116,25 @@ func sendBatchNotifications(pushClient *notification.ExpoPushClient, messages []
 			end = len(messages)
 		}
 		batch := messages[i:end]
-		batchStartIndex := i
 
-		wg.Add(1)
-		go func(b []notification.ExpoMessage, startIndex int) {
-			defer wg.Done()
+		results, err := pushClient.SendBatch(batch)
+		if err != nil {
+			totalFailed += int64(len(batch))
+			errorMessages = append(errorMessages, fmt.Sprintf("Batch failed: %v", err))
+			log.Printf("[%s] Batch failed: %v\n", timestamp, err)
+			continue
+		}
 
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			results, err := pushClient.SendBatch(b)
-			if err != nil {
-				atomic.AddInt64(&totalFailed, int64(len(b)))
-				errorMutex.Lock()
-				errorMessages = append(errorMessages, fmt.Sprintf("Batch failed: %v", err))
-				errorMutex.Unlock()
-				log.Printf("[%s] Batch failed: %v\n", timestamp, err)
-				return
+		for j, result := range results {
+			if result != nil {
+				totalFailed++
+				errorMessages = append(errorMessages, fmt.Sprintf("Token %s: %v", targetTokens[i+j], result))
+			} else {
+				totalSuccess++
 			}
-
-			for j, result := range results {
-				if result != nil {
-					atomic.AddInt64(&totalFailed, 1)
-					errorMutex.Lock()
-					errorMessages = append(errorMessages, fmt.Sprintf("Token %s: %v", targetTokens[startIndex+j], result))
-					errorMutex.Unlock()
-				} else {
-					atomic.AddInt64(&totalSuccess, 1)
-				}
-			}
-		}(batch, batchStartIndex)
+		}
 	}
 
-	wg.Wait()
 	return totalSuccess, totalFailed, errorMessages
 }
 
@@ -240,7 +219,7 @@ func main() {
 		log.Printf("[%s] Language %s: %d users\n", timestamp, lang, count)
 	}
 
-	// Send notifications concurrently
+	// Send notifications in sequential batches
 	totalSuccess, totalFailed, errorMessages := sendBatchNotifications(pushClient, messages, targetTokens, timestamp)
 
 	log.Printf("[%s] ✓ Push notifications sent successfully!\n", timestamp)
