@@ -10,6 +10,7 @@ import (
 
 	r2ConfigService "go-backend/internal/apps/r2/config/service"
 	"go-backend/internal/common/constants"
+	commonResponse "go-backend/internal/common/response"
 	"go-backend/pkg/utils"
 
 	"github.com/gin-gonic/gin"
@@ -67,21 +68,21 @@ func (h *ProfilePictureHandler) GetUploadURL(c *gin.Context) {
 	// Get bucket name from environment (using the users bucket)
 	bucketName := os.Getenv("R2_DS_USERS_BUCKET_NAME")
 	if bucketName == "" {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "R2 bucket configuration missing"})
+		commonResponse.Error(c, http.StatusInternalServerError, nil, "R2 bucket configuration missing")
 		return
 	}
 
 	// Get R2 client dynamically from database config
 	r2Client, err := h.r2ClientFactory.GetClient(constants.AppNameDailyStory)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "R2 configuration not found for dailystory app"})
+		commonResponse.Error(c, http.StatusInternalServerError, err, "R2 configuration not found for dailystory app")
 		return
 	}
 
 	// Generate presigned upload URL (valid for 5 minutes)
 	presignedURL, err := r2Client.GetPresignedUploadURL(bucketName, fileKey, contentType, 5)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate upload URL"})
+		commonResponse.Error(c, http.StatusInternalServerError, err, "Failed to generate upload URL")
 		return
 	}
 
@@ -112,14 +113,14 @@ func (h *ProfilePictureHandler) GetViewURL(c *gin.Context) {
 	// Get bucket name from environment (using the users bucket)
 	bucketName := os.Getenv("R2_DS_USERS_BUCKET_NAME")
 	if bucketName == "" {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "R2 bucket configuration missing"})
+		commonResponse.Error(c, http.StatusInternalServerError, nil, "R2 bucket configuration missing")
 		return
 	}
 
 	// Get R2 client dynamically from database config
 	r2Client, err := h.r2ClientFactory.GetClient(constants.AppNameDailyStory)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "R2 configuration not found for dailystory app"})
+		commonResponse.Error(c, http.StatusInternalServerError, err, "R2 configuration not found for dailystory app")
 		return
 	}
 
@@ -127,7 +128,7 @@ func (h *ProfilePictureHandler) GetViewURL(c *gin.Context) {
 	expirationMinutes := 60
 	presignedURL, err := r2Client.GetPresignedViewURL(bucketName, fileKey, expirationMinutes)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate view URL"})
+		commonResponse.Error(c, http.StatusInternalServerError, err, "Failed to generate view URL")
 		return
 	}
 

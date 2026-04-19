@@ -8,6 +8,7 @@ import (
 
 	"go-backend/internal/apps/razorpay/subscription/models"
 	"go-backend/internal/apps/razorpay/subscription/service"
+	commonResponse "go-backend/internal/common/response"
 	"go-backend/pkg/utils"
 
 	"github.com/gin-gonic/gin"
@@ -44,7 +45,7 @@ func (h *SubscriptionHandler) CreateCheckoutURL(c *gin.Context) {
 			})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": errMsg})
+		commonResponse.Error(c, http.StatusInternalServerError, err, errMsg)
 		return
 	}
 
@@ -70,7 +71,7 @@ func (h *SubscriptionHandler) VerifyPayment(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -103,7 +104,7 @@ func (h *SubscriptionHandler) HandleWebhook(c *gin.Context) {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -126,7 +127,7 @@ func (h *SubscriptionHandler) GetSubscription(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -148,7 +149,7 @@ func (h *SubscriptionHandler) GetSubscriptionByRazorpayID(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -177,7 +178,7 @@ func (h *SubscriptionHandler) GetLatestSubscriptionByPhoneAndApp(c *gin.Context)
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -199,7 +200,7 @@ func (h *SubscriptionHandler) CancelSubscription(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -219,7 +220,7 @@ func (h *SubscriptionHandler) CheckAuthenticationStatus(c *gin.Context) {
 
 	response, err := h.service.CheckAuthenticationStatus(phone, appName)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -243,7 +244,7 @@ func (h *SubscriptionHandler) GetSubscriptionStatus(c *gin.Context) {
 
 	response, err := h.service.GetSubscriptionStatus(phone, appName)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -291,7 +292,7 @@ func (h *SubscriptionHandler) GetSubscriptionStats(c *gin.Context) {
 	// Get statistics from service
 	response, err := h.service.GetSubscriptionStats(appName, days, page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 

@@ -6,6 +6,7 @@ import (
 
 	"go-backend/internal/apps/razorpay/config/models"
 	"go-backend/internal/apps/razorpay/config/service"
+	commonResponse "go-backend/internal/common/response"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -35,7 +36,7 @@ func (h *RazorpayConfigHandler) CreateRazorpayConfig(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -57,7 +58,7 @@ func (h *RazorpayConfigHandler) GetRazorpayConfigByID(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -84,7 +85,7 @@ func (h *RazorpayConfigHandler) GetRazorpayConfigByAppNameAndEnv(c *gin.Context)
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -99,7 +100,7 @@ func (h *RazorpayConfigHandler) GetAllRazorpayConfigs(c *gin.Context) {
 
 	response, err := h.service.GetAllRazorpayConfigs(page, pageSize, activeOnly)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -127,7 +128,7 @@ func (h *RazorpayConfigHandler) UpdateRazorpayConfig(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -148,7 +149,7 @@ func (h *RazorpayConfigHandler) DeleteRazorpayConfig(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 

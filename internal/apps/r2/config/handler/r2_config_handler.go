@@ -6,6 +6,7 @@ import (
 
 	"go-backend/internal/apps/r2/config/models"
 	"go-backend/internal/apps/r2/config/service"
+	commonResponse "go-backend/internal/common/response"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -33,7 +34,7 @@ func (h *R2ConfigHandler) CreateR2Config(c *gin.Context) {
 
 	response, err := h.service.CreateConfig(req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -54,7 +55,11 @@ func (h *R2ConfigHandler) GetR2Config(c *gin.Context) {
 		if err.Error() == "r2 config not found" {
 			status = http.StatusNotFound
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		if status == http.StatusInternalServerError {
+			commonResponse.Error(c, status, err, err.Error())
+		} else {
+			c.JSON(status, gin.H{"error": err.Error()})
+		}
 		return
 	}
 
@@ -68,7 +73,7 @@ func (h *R2ConfigHandler) GetR2Configs(c *gin.Context) {
 
 	response, err := h.service.GetAllConfigs(page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -115,7 +120,11 @@ func (h *R2ConfigHandler) DeleteR2Config(c *gin.Context) {
 		if err.Error() == "r2 config not found" {
 			status = http.StatusNotFound
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		if status == http.StatusInternalServerError {
+			commonResponse.Error(c, status, err, err.Error())
+		} else {
+			c.JSON(status, gin.H{"error": err.Error()})
+		}
 		return
 	}
 

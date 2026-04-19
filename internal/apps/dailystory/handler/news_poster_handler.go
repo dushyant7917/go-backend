@@ -5,6 +5,7 @@ import (
 
 	"go-backend/internal/apps/dailystory/models"
 	"go-backend/internal/apps/dailystory/service"
+	commonResponse "go-backend/internal/common/response"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -54,7 +55,7 @@ func (h *NewsPosterHandler) CreateNewsPoster(c *gin.Context) {
 
 	newsPoster, err := h.service.CreateNewsPoster(&req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 

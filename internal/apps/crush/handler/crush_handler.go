@@ -6,6 +6,7 @@ import (
 
 	"go-backend/internal/apps/crush/models"
 	"go-backend/internal/apps/crush/service"
+	commonResponse "go-backend/internal/common/response"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -81,7 +82,7 @@ func (h *CrushHandler) ListCrushes(c *gin.Context) {
 
 	resp, err := h.service.ListCrushesByUserID(userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -102,7 +103,11 @@ func (h *CrushHandler) GetCrush(c *gin.Context) {
 		if err.Error() == "crush not found" {
 			status = http.StatusNotFound
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		if status == http.StatusInternalServerError {
+			commonResponse.Error(c, status, err, err.Error())
+		} else {
+			c.JSON(status, gin.H{"error": err.Error()})
+		}
 		return
 	}
 
@@ -129,7 +134,11 @@ func (h *CrushHandler) ListCrushesOnUser(c *gin.Context) {
 		if err.Error() == "user not found" {
 			status = http.StatusNotFound
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		if status == http.StatusInternalServerError {
+			commonResponse.Error(c, status, err, err.Error())
+		} else {
+			c.JSON(status, gin.H{"error": err.Error()})
+		}
 		return
 	}
 
@@ -158,7 +167,7 @@ func (h *CrushHandler) ListAllCrushes(c *gin.Context) {
 
 	resp, err := h.service.ListAllCrushesPaginated(page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 

@@ -12,6 +12,7 @@ import (
 	"go-backend/internal/apps/dailystory/service"
 	r2ConfigService "go-backend/internal/apps/r2/config/service"
 	"go-backend/internal/common/constants"
+	commonResponse "go-backend/internal/common/response"
 	"go-backend/pkg/utils"
 
 	"github.com/gin-gonic/gin"
@@ -52,7 +53,7 @@ func (h *ImagePosterHandler) CreatePoster(c *gin.Context) {
 
 	poster, err := h.service.CreatePoster(&req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -99,21 +100,21 @@ func (h *ImagePosterHandler) GetPosterUploadURL(c *gin.Context) {
 	// Get bucket name from environment
 	bucketName := os.Getenv("R2_DS_POSTERS_BUCKET_NAME")
 	if bucketName == "" {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "R2 bucket configuration missing"})
+		commonResponse.Error(c, http.StatusInternalServerError, nil, "R2 bucket configuration missing")
 		return
 	}
 
 	// Get R2 client dynamically from database config
 	r2Client, err := h.r2ClientFactory.GetClient(constants.AppNameDailyStory)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "R2 configuration not found for dailystory app"})
+		commonResponse.Error(c, http.StatusInternalServerError, err, "R2 configuration not found for dailystory app")
 		return
 	}
 
 	// Generate presigned upload URL (valid for 5 minutes)
 	presignedURL, err := r2Client.GetPresignedUploadURL(bucketName, fileKey, contentType, 5)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate upload URL"})
+		commonResponse.Error(c, http.StatusInternalServerError, err, "Failed to generate upload URL")
 		return
 	}
 
@@ -168,7 +169,7 @@ func (h *ImagePosterHandler) GetUserPosterStats(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 

@@ -6,6 +6,7 @@ import (
 
 	"go-backend/internal/apps/user/models"
 	"go-backend/internal/apps/user/service"
+	commonResponse "go-backend/internal/common/response"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -54,7 +55,11 @@ func (h *UserHandler) GetUserByAppAndPhone(c *gin.Context) {
 		if err.Error() == "user not found" {
 			status = http.StatusNotFound
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		if status == http.StatusInternalServerError {
+			commonResponse.Error(c, status, err, err.Error())
+		} else {
+			c.JSON(status, gin.H{"error": err.Error()})
+		}
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": resp})
@@ -75,7 +80,11 @@ func (h *UserHandler) GetUserByAppAndEmail(c *gin.Context) {
 		if err.Error() == "user not found" {
 			status = http.StatusNotFound
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		if status == http.StatusInternalServerError {
+			commonResponse.Error(c, status, err, err.Error())
+		} else {
+			c.JSON(status, gin.H{"error": err.Error()})
+		}
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": resp})
@@ -154,7 +163,7 @@ func (h *UserHandler) ListAllUsers(c *gin.Context) {
 
 	resp, err := h.service.ListAllUsersPaginated(appName, page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -198,7 +207,7 @@ func (h *UserHandler) GetUserCountByDay(c *gin.Context) {
 
 	resp, err := h.service.GetUserCountByDay(appName, days, page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 

@@ -7,6 +7,7 @@ import (
 
 	"go-backend/internal/apps/dailystory/models"
 	"go-backend/internal/apps/dailystory/service"
+	commonResponse "go-backend/internal/common/response"
 
 	"github.com/gin-gonic/gin"
 )
@@ -57,7 +58,7 @@ func (h *NewsHandler) ListNews(c *gin.Context) {
 
 	resp, err := h.service.ListNewsPaginated(category, languageCode, status, createdAtFrom, page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -80,7 +81,7 @@ func (h *NewsHandler) UpdateNews(c *gin.Context) {
 
 	news, err := h.service.UpdateNews(id, &req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 

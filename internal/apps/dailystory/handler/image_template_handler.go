@@ -13,6 +13,7 @@ import (
 	"go-backend/internal/apps/dailystory/service"
 	r2ConfigService "go-backend/internal/apps/r2/config/service"
 	"go-backend/internal/common/constants"
+	commonResponse "go-backend/internal/common/response"
 	"go-backend/pkg/utils"
 
 	"github.com/gin-gonic/gin"
@@ -146,7 +147,7 @@ func (h *ImageTemplateHandler) GetImageTemplates(c *gin.Context) {
 
 	resp, err := h.service.GetImageTemplatesWithFilters(category, subCategory, authorID, status, page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -193,21 +194,21 @@ func (h *ImageTemplateHandler) GetUploadURL(c *gin.Context) {
 	// Get bucket name from environment
 	bucketName := os.Getenv("R2_DS_TEMPLATES_BUCKET_NAME")
 	if bucketName == "" {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "R2 bucket configuration missing"})
+		commonResponse.Error(c, http.StatusInternalServerError, nil, "R2 bucket configuration missing")
 		return
 	}
 
 	// Get R2 client dynamically from database config
 	r2Client, err := h.r2ClientFactory.GetClient(constants.AppNameDailyStory)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "R2 configuration not found for dailystory app"})
+		commonResponse.Error(c, http.StatusInternalServerError, err, "R2 configuration not found for dailystory app")
 		return
 	}
 
 	// Generate presigned upload URL (valid for 5 minutes)
 	presignedURL, err := r2Client.GetPresignedUploadURL(bucketName, fileKey, contentType, 5)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate upload URL"})
+		commonResponse.Error(c, http.StatusInternalServerError, err, "Failed to generate upload URL")
 		return
 	}
 
@@ -243,21 +244,21 @@ func (h *ImageTemplateHandler) GetImageTemplateViewURL(c *gin.Context) {
 	// Get public URL base from environment
 	publicURLBase := os.Getenv("R2_DS_TEMPLATES_PUBLIC_URL")
 	if publicURLBase == "" {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "R2 bucket configuration missing"})
+		commonResponse.Error(c, http.StatusInternalServerError, nil, "R2 bucket configuration missing")
 		return
 	}
 
 	// Get R2 client dynamically from database config
 	r2Client, err := h.r2ClientFactory.GetClient(constants.AppNameDailyStory)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "R2 configuration not found for dailystory app"})
+		commonResponse.Error(c, http.StatusInternalServerError, err, "R2 configuration not found for dailystory app")
 		return
 	}
 
 	// Construct public URL
 	publicURL, err := r2Client.GetPublicFileURL(publicURLBase, resp.FileKey)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate view URL"})
+		commonResponse.Error(c, http.StatusInternalServerError, err, "Failed to generate view URL")
 		return
 	}
 
@@ -271,7 +272,7 @@ func (h *ImageTemplateHandler) GetImageTemplateViewURL(c *gin.Context) {
 func (h *ImageTemplateHandler) GetDesignerStats(c *gin.Context) {
 	resp, err := h.service.GetDesignerStats()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -300,7 +301,7 @@ func (h *ImageTemplateHandler) GetPosterCountByCount(c *gin.Context) {
 
 	resp, err := h.service.GetPosterCountByTemplate(true, page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -329,7 +330,7 @@ func (h *ImageTemplateHandler) GetPosterCountByDate(c *gin.Context) {
 
 	resp, err := h.service.GetPosterCountByTemplate(false, page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 

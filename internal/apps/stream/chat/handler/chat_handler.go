@@ -5,6 +5,7 @@ import (
 
 	"go-backend/internal/apps/stream/chat/models"
 	"go-backend/internal/apps/stream/chat/service"
+	commonResponse "go-backend/internal/common/response"
 
 	"github.com/gin-gonic/gin"
 )
@@ -29,7 +30,7 @@ func (h *ChatHandler) GenerateChatToken(c *gin.Context) {
 
 	resp, err := h.service.GenerateChatToken(req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 

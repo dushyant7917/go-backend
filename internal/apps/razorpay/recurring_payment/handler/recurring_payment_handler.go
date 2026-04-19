@@ -7,6 +7,7 @@ import (
 
 	"go-backend/internal/apps/razorpay/recurring_payment/models"
 	"go-backend/internal/apps/razorpay/recurring_payment/service"
+	commonResponse "go-backend/internal/common/response"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -38,7 +39,7 @@ func (h *RecurringPaymentHandler) CreateAuthorizationOrder(c *gin.Context) {
 	response, err := h.service.CreateAuthorizationOrder(req)
 	if err != nil {
 		log.Printf("[CreateAuthorizationOrder] Service error: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -61,7 +62,7 @@ func (h *RecurringPaymentHandler) CreateRegistrationLink(c *gin.Context) {
 	response, err := h.service.CreateRegistrationLink(req)
 	if err != nil {
 		log.Printf("[CreateRegistrationLink] Service error: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -92,7 +93,7 @@ func (h *RecurringPaymentHandler) VerifyAuthorizationPayment(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -121,7 +122,7 @@ func (h *RecurringPaymentHandler) GetRecurringPayment(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -157,7 +158,7 @@ func (h *RecurringPaymentHandler) GetRecurringPaymentStatus(c *gin.Context) {
 	response, err := h.service.GetRecurringPaymentStatus(userID, appName)
 	if err != nil {
 		log.Printf("[GetRecurringPaymentStatus] Service error: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -192,7 +193,7 @@ func (h *RecurringPaymentHandler) HandleWebhook(c *gin.Context) {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 

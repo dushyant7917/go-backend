@@ -5,6 +5,7 @@ import (
 
 	"go-backend/internal/apps/otp/models"
 	"go-backend/internal/apps/otp/service"
+	commonResponse "go-backend/internal/common/response"
 
 	"github.com/gin-gonic/gin"
 )
@@ -29,7 +30,7 @@ func (h *EmailOTPHandler) CreateOrUpdateOTP(c *gin.Context) {
 
 	otp, err := h.service.CreateOrUpdateOTP(req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{"data": otp})
@@ -49,7 +50,11 @@ func (h *EmailOTPHandler) VerifyOTP(c *gin.Context) {
 		if err.Error() == "otp not found" {
 			status = http.StatusNotFound
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		if status == http.StatusInternalServerError {
+			commonResponse.Error(c, status, err, err.Error())
+		} else {
+			c.JSON(status, gin.H{"error": err.Error()})
+		}
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"data": resp})

@@ -1,12 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"time"
 
 	"github.com/getsentry/sentry-go"
 	sentrygin "github.com/getsentry/sentry-go/gin"
+	commonResponse "go-backend/internal/common/response"
 
 	agoraChatHandler "go-backend/internal/apps/agora/chat/handler"
 	agoraChatService "go-backend/internal/apps/agora/chat/service"
@@ -219,7 +221,9 @@ func main() {
 
 	// Add Sentry middleware
 	if sentryDsn != "" {
-		router.Use(sentrygin.New(sentrygin.Options{}))
+		router.Use(sentrygin.New(sentrygin.Options{
+			Repanic: true,
+		}))
 	}
 
 	// Health check endpoint (before CORS middleware to allow access from any client)
@@ -228,6 +232,11 @@ func main() {
 			"status":  "ok",
 			"message": "Server is running",
 		})
+	})
+
+	// Sentry test endpoint - triggers a 500 error to verify Sentry capture
+	router.GET("/test-sentry", func(c *gin.Context) {
+		commonResponse.Error(c, 500, fmt.Errorf("test sentry error: %s", c.Query("message")), "intentional test error for sentry")
 	})
 
 	// Razorpay config creation endpoint (before CORS middleware for admin access)

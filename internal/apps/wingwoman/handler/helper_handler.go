@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"go-backend/internal/apps/wingwoman/service"
+	commonResponse "go-backend/internal/common/response"
 
 	"github.com/gin-gonic/gin"
 )
@@ -41,7 +42,7 @@ func (h *HelperHandler) ListHelpers(c *gin.Context) {
 
 	resp, err := h.service.ListHelpersPaginated(page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
