@@ -322,16 +322,17 @@ func extractRazorpayErrorCodeFromInfo(errorInfo razorpayErrorInfo) *string {
 	return &errorInfo.Code
 }
 
-// isTokenError checks if an error description is related to token issues
-func isTokenError(errorDescription string) bool {
-	lowerMsg := strings.ToLower(errorDescription)
-	return strings.Contains(lowerMsg, "token")
+// isTokenError checks if an error code indicates an invalid token
+func isTokenError(errorCode string) bool {
+	return strings.ToLower(errorCode) == "invalid_token"
 }
 
-// isMandateError checks if an error description is related to mandate issues
-func isMandateError(errorDescription string) bool {
-	lowerMsg := strings.ToLower(errorDescription)
-	return strings.Contains(lowerMsg, "mandate")
+// isMandateError checks if an error code indicates a mandate failure
+func isMandateError(errorCode string) bool {
+	lowerCode := strings.ToLower(errorCode)
+	return lowerCode == "mandate_cancelled" ||
+		lowerCode == "mandate_expired" ||
+		lowerCode == "mandate_not_active"
 }
 
 // calculateAttemptAmount calculates the amount to charge based on attempt number
@@ -505,7 +506,7 @@ func (s *recurringPaymentService) CreateRegistrationLink(req models.CreateRegist
 		"subscription_registration": map[string]interface{}{
 			"method":     "upi",
 			"max_amount": req.MaxAmount,
-			"expire_at":  time.Now().UTC().AddDate(1, 0, 0).Unix(), // 1 year
+			"expire_at":  req.StartAt.AddDate(1, 0, 0).Unix(), // 1 year from start date
 			"frequency":  req.Frequency,
 		},
 		"notes": map[string]interface{}{
@@ -617,7 +618,7 @@ func (s *recurringPaymentService) createAuthorizationRazorpayOrder(
 		"payment_capture": true,
 		"token": map[string]interface{}{
 			"max_amount": req.MaxAmount,
-			"expire_at":  time.Now().UTC().AddDate(1, 0, 0).Unix(), // 1 year
+			"expire_at":  req.StartAt.AddDate(1, 0, 0).Unix(), // 1 year from start date
 			"frequency":  req.Frequency,
 		},
 		"notes": map[string]interface{}{
@@ -1258,7 +1259,7 @@ func (s *recurringPaymentService) processPendingBillingCycleRetry(rp models.Recu
 	orderID, err := s.createRetryOrder(razorpayClient, &rp, bc, newChargeAttempts, user)
 	if err != nil {
 		errorInfo := extractRazorpayError(err)
-		return s.handleOrderCreationError(err, &rp, errorInfo.Description)
+		return s.handleOrderCreationError(err, &rp, errorInfo.Code)
 	}
 
 	if err := s.createRetryDBRecords(bc, &rp, orderID, newChargeAttempts); err != nil {
@@ -1334,9 +1335,9 @@ func (s *recurringPaymentService) createRetryOrder(
 func (s *recurringPaymentService) handleOrderCreationError(
 	err error,
 	rp *models.RecurringPayment,
-	errorDescription string,
+	errorCode string,
 ) error {
-	if isTokenError(errorDescription) || isMandateError(errorDescription) {
+	if isTokenError(errorCode) || isMandateError(errorCode) {
 		rp.Status = models.RecurringPaymentStatusExpired
 		if updateErr := s.repo.UpdateRecurringPayment(nil, rp); updateErr != nil {
 			return fmt.Errorf("token invalid, failed to update recurring payment: %w", updateErr)
@@ -1415,7 +1416,7 @@ func (s *recurringPaymentService) processNewBillingCycleForPayment(rp models.Rec
 	orderID, err := s.createNewCycleOrder(razorpayClient, &rp, nextCycleNumber, amount, user)
 	if err != nil {
 		errorInfo := extractRazorpayError(err)
-		return s.handleOrderCreationError(err, &rp, errorInfo.Description)
+		return s.handleOrderCreationError(err, &rp, errorInfo.Code)
 	}
 
 	if err := s.createNewCycleDBRecords(&rp, orderID, nextCycleNumber, amount, endAt); err != nil {
@@ -1682,7 +1683,7 @@ func (s *recurringPaymentService) handleRecurringPaymentError(
 
 	// Check for mandate_cancelled error code or token/mandate errors
 	isMandateCancelled := strings.ToLower(errorCode) == "mandate_cancelled"
-	isTokenOrMandateError := isTokenError(errorDescription) || isMandateError(errorDescription)
+	isTokenOrMandateError := isTokenError(errorCode) || isMandateError(errorCode)
 
 	if isMandateCancelled {
 		// Emit PostHog event for recurring payment cancelled
