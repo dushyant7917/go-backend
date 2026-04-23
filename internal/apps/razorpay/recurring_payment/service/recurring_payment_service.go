@@ -1,12 +1,15 @@
 package service
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -1593,6 +1596,7 @@ func (s *recurringPaymentService) createRazorpayRecurringPayment(pa models.Payme
 	}
 
 	payment, err := razorpayClient.Payment.CreateRecurringPayment(recurringData, nil)
+	// payment, err := s.createRecurringPaymentDirectHTTP(config, recurringData)
 	if err != nil {
 		errorInfo := extractRazorpayError(err)
 		// Emit PostHog event for recurring payment creation failure
@@ -1626,6 +1630,54 @@ func (s *recurringPaymentService) createRazorpayRecurringPayment(pa models.Payme
 		pa.RazorpayPaymentID, pa.RazorpayOrderID)
 
 	return nil
+}
+
+// createRecurringPaymentDirectHTTP makes a raw HTTP POST to Razorpay's create/recurring endpoint
+// to debug whether the 404 is from the SDK or the URL itself
+func (s *recurringPaymentService) createRecurringPaymentDirectHTTP(
+	config *clientModels.RazorpayConfig,
+	data map[string]interface{},
+) (map[string]interface{}, error) {
+	jsonBody, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request body: %w", err)
+	}
+
+	fmt.Printf("[DEBUG createRecurringPaymentDirectHTTP] Payload: %s\n", string(jsonBody))
+
+	url := "https://api.razorpay.com/v1/payments/create/recurring"
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+	}
+
+	req.SetBasicAuth(config.RazorpayKeyID, config.RazorpayKeySecret)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	fmt.Printf("[DEBUG createRecurringPaymentDirectHTTP] Status: %d, Body: %s\n", resp.StatusCode, string(body))
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response JSON: %w", err)
+	}
+
+	return result, nil
 }
 
 // getChargeRelatedRecords fetches all records needed for charging
@@ -1665,36 +1717,52 @@ func (s *recurringPaymentService) handleRecurringPaymentError(
 ) error {
 	now := time.Now().UTC()
 
-	// Use transaction for atomic updates
-	tx := s.repo.BeginTransaction()
-
+	// 1. Update payment attempt fields
 	pa.Status = models.PaymentAttemptStatusFailed
+	pa.ErrorCode = errorCode
 	pa.ErrorDescription = errorDescription
-	if updateErr := s.repo.UpdatePaymentAttempt(tx, pa); updateErr != nil {
-		s.repo.RollbackTransaction(tx)
-		return fmt.Errorf("failed to update payment attempt: %w", updateErr)
-	}
 
+	// 2. Update billing cycle fields
 	billingCycle.LastAttemptAt = &now
-	if updateErr := s.repo.UpdateBillingCycle(tx, billingCycle); updateErr != nil {
-		s.repo.RollbackTransaction(tx)
-		return fmt.Errorf("failed to update billing cycle: %w", updateErr)
-	}
 
-	// Check for mandate_cancelled error code or token/mandate errors
+	// 3. Determine error category and update records accordingly
 	isMandateCancelled := strings.ToLower(errorCode) == "mandate_cancelled"
 	isTokenOrMandateError := isTokenError(errorCode) || isMandateError(errorCode)
+	needsRPUpdate := false
 
 	if isMandateCancelled {
 		// Emit PostHog event for recurring payment cancelled
 		go s.sendPostHogRecurringPaymentCancelledEvent(recurringPayment, pa.Amount, user)
 		recurringPayment.Status = models.RecurringPaymentStatusCancelled
-		if updateErr := s.repo.UpdateRecurringPayment(tx, recurringPayment); updateErr != nil {
-			s.repo.RollbackTransaction(tx)
-			return fmt.Errorf("failed to update recurring payment: %w", updateErr)
-		}
+		needsRPUpdate = true
 	} else if isTokenOrMandateError {
 		recurringPayment.Status = models.RecurringPaymentStatusExpired
+		needsRPUpdate = true
+	} else if billingCycle.CycleNumber > 0 {
+		// Generic error on a billing cycle: schedule retry or mark expired
+		if billingCycle.ChargeAttempts >= 8 {
+			billingCycle.Status = models.BillingCycleStatusFailed
+			recurringPayment.Status = models.RecurringPaymentStatusExpired
+			needsRPUpdate = true
+		} else {
+			scheduleRetry(billingCycle)
+		}
+	}
+
+	// 4. Persist all changes in a single transaction
+	tx := s.repo.BeginTransaction()
+
+	if updateErr := s.repo.UpdatePaymentAttempt(tx, pa); updateErr != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to update payment attempt: %w", updateErr)
+	}
+
+	if updateErr := s.repo.UpdateBillingCycle(tx, billingCycle); updateErr != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to update billing cycle: %w", updateErr)
+	}
+
+	if needsRPUpdate {
 		if updateErr := s.repo.UpdateRecurringPayment(tx, recurringPayment); updateErr != nil {
 			s.repo.RollbackTransaction(tx)
 			return fmt.Errorf("failed to update recurring payment: %w", updateErr)
@@ -1705,7 +1773,7 @@ func (s *recurringPaymentService) handleRecurringPaymentError(
 		return fmt.Errorf("failed to commit transaction: %w", commitErr)
 	}
 
-	// Return appropriate error message
+	// 5. Return appropriate error message
 	if isMandateCancelled {
 		return fmt.Errorf("mandate cancelled: %w", err)
 	}
