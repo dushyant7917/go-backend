@@ -1096,7 +1096,8 @@ func (s *recurringPaymentService) handleTokenConfirmed(tokenEntity map[string]in
 	// If not found by token_id, try finding by customer_id
 	if rp == nil {
 		if customerID == "" {
-			return errors.New("invalid token entity: missing customer_id")
+			fmt.Printf("[Webhook] Token %s has no customer_id and no recurring payment found by token_id, ignoring token.confirmed\n", tokenID)
+			return nil
 		}
 		rp, err = s.repo.FindRecurringPaymentByCustomerID(customerID)
 		if err != nil {
