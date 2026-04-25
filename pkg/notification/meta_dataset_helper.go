@@ -68,9 +68,9 @@ func FormatPhoneE164(phone string) string {
 	return "+91" + digits
 }
 
-// GenerateEventID generates a deterministic event_id for deduplication using payment ID and timestamp
-func GenerateEventID(razorpayPaymentID string, timestamp int64) string {
-	base := fmt.Sprintf("%s:%d", razorpayPaymentID, timestamp)
+// GenerateEventID generates a deterministic event_id for deduplication using a source ID and timestamp
+func GenerateEventID(sourceID string, timestamp int64) string {
+	base := fmt.Sprintf("%s:%d", sourceID, timestamp)
 	hash := sha256.Sum256([]byte(base))
 	return hex.EncodeToString(hash[:])
 }

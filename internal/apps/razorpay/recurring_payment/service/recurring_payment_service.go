@@ -25,9 +25,12 @@ import (
 	userModels "go-backend/internal/apps/user/models"
 	userRepo "go-backend/internal/apps/user/repository"
 	"go-backend/internal/common/constants"
+
 	"go-backend/pkg/analytics"
 	"go-backend/pkg/notification"
 	"go-backend/pkg/utils"
+
+	"github.com/getsentry/sentry-go"
 
 	"github.com/google/uuid"
 	razorpay "github.com/razorpay/razorpay-go"
@@ -1374,6 +1377,17 @@ func (s *recurringPaymentService) activateMandateFromPayment(
 	// Emit PostHog event for recurring payment started
 	go s.sendPostHogRecurringPaymentStartedEvent(recurringPayment, paymentAttempt, user)
 
+	// If cycle 0 amount equals MaxAmount, this is a real charge — also emit captured events
+	if paymentAttempt.Amount == recurringPayment.MaxAmount {
+		fmt.Printf("[activateMandateFromPayment] Cycle 0 amount equals MaxAmount (%d), emitting captured events\n", paymentAttempt.Amount)
+
+		// Emit Meta pixel event for recurring payment captured
+		go s.sendMetaDatasetRecurringPaymentCapturedEvent(recurringPayment, paymentAttempt, billingCycle)
+
+		// Emit PostHog event for recurring payment captured
+		go s.sendPostHogRecurringPaymentCapturedEvent(recurringPayment, paymentAttempt, user)
+	}
+
 	return nil
 }
 
@@ -2170,19 +2184,35 @@ func (s *recurringPaymentService) getMetaConfig(appName string) (*metaDatasetMod
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			fmt.Printf("[Meta Dataset] No meta dataset config found for app: %s, environment: %s. Skipping event.\n", appName, env)
+			sentry.WithScope(func(scope *sentry.Scope) {
+				scope.SetTag("app_name", appName)
+				sentry.CaptureException(fmt.Errorf("[Meta Dataset] no config found for app %s, env %s", appName, env))
+			})
 		} else {
 			fmt.Printf("[Meta Dataset ERROR] Failed to get meta dataset config: %v\n", err)
+			sentry.WithScope(func(scope *sentry.Scope) {
+				scope.SetTag("app_name", appName)
+				sentry.CaptureException(fmt.Errorf("[Meta Dataset] failed to get config for app %s: %w", appName, err))
+			})
 		}
 		return nil, false
 	}
 
 	if !metaConfig.IsActive {
 		fmt.Printf("[Meta Dataset] Meta dataset config is inactive for app: %s. Skipping event.\n", appName)
+		sentry.WithScope(func(scope *sentry.Scope) {
+			scope.SetTag("app_name", appName)
+			sentry.CaptureException(fmt.Errorf("[Meta Dataset] config is inactive for app: %s, env: %s", appName, env))
+		})
 		return nil, false
 	}
 
 	if metaConfig.DatasetID == "" {
 		fmt.Printf("[Meta Dataset ERROR] dataset_id is empty for app: %s, environment: %s\n", appName, env)
+		sentry.WithScope(func(scope *sentry.Scope) {
+			scope.SetTag("app_name", appName)
+			sentry.CaptureException(fmt.Errorf("[Meta Dataset] dataset_id is empty for app: %s, env: %s", appName, env))
+		})
 		return nil, false
 	}
 
@@ -2194,6 +2224,11 @@ func (s *recurringPaymentService) getPhoneFromUser(userID uuid.UUID) string {
 	user, err := s.userRepo.FindByID(userID)
 	if err != nil {
 		fmt.Printf("[Meta Dataset ERROR] Failed to find user for phone hash: %v\n", err)
+		sentry.WithScope(func(scope *sentry.Scope) {
+			scope.SetTag("app_name", "recurring_payment")
+			scope.SetTag("user_id", userID.String())
+			sentry.CaptureException(fmt.Errorf("[Meta Dataset] failed to find user %s for phone hash: %w", userID, err))
+		})
 		return ""
 	}
 
@@ -2206,14 +2241,14 @@ func (s *recurringPaymentService) getPhoneFromUser(userID uuid.UUID) string {
 // sendMetaEvent sends a Meta Conversions API event
 func (s *recurringPaymentService) sendMetaEvent(
 	recurringPayment *models.RecurringPayment,
-	paymentAttempt *models.PaymentAttempt,
+	amount int64,
 	params metaEventParams,
 	metaConfig *metaDatasetModels.MetaDatasetConfig,
 	phone string,
 ) {
-	value := float64(paymentAttempt.Amount) / 100.0
+	value := float64(amount) / 100.0
 
-	eventData := notification.SubscriptionEventData{
+	eventData := notification.MetaEventData{
 		DatasetID:    metaConfig.DatasetID,
 		AccessToken:  metaConfig.AccessToken,
 		EventName:    params.eventName,
@@ -2240,8 +2275,14 @@ func (s *recurringPaymentService) sendMetaEvent(
 
 	eventData.EventID = notification.GenerateEventID(params.eventIDSource, eventData.EventTime)
 
-	if err := s.metaDatasetClient.SendSubscriptionEvent(eventData); err != nil {
+	if err := s.metaDatasetClient.SendEvent(eventData); err != nil {
 		fmt.Printf("[Meta Dataset ERROR] Failed to send %s event: %v\n", params.eventName, err)
+		sentry.WithScope(func(scope *sentry.Scope) {
+			scope.SetTag("app_name", recurringPayment.AppName)
+			scope.SetTag("recurring_payment_id", recurringPayment.ID.String())
+			scope.SetTag("event_name", params.eventName)
+			sentry.CaptureException(fmt.Errorf("[Meta Dataset] failed to send %s event for recurring_payment %s: %w", params.eventName, recurringPayment.ID, err))
+		})
 		return
 	}
 
@@ -2267,7 +2308,7 @@ func (s *recurringPaymentService) sendMetaDatasetRecurringPaymentStartedEvent(
 		phone = *user.CountryCode + *user.Phone
 	}
 
-	s.sendMetaEvent(recurringPayment, paymentAttempt, metaEventParams{
+	s.sendMetaEvent(recurringPayment, paymentAttempt.Amount, metaEventParams{
 		eventName:     "RecurringPaymentStarted",
 		contentName:   fmt.Sprintf("%s Recurring Payment", recurringPayment.AppName),
 		eventIDSource: recurringPayment.ID.String(),
@@ -2289,7 +2330,7 @@ func (s *recurringPaymentService) sendMetaDatasetRecurringPaymentCapturedEvent(
 
 	phone := s.getPhoneFromUser(recurringPayment.UserID)
 
-	s.sendMetaEvent(recurringPayment, paymentAttempt, metaEventParams{
+	s.sendMetaEvent(recurringPayment, paymentAttempt.Amount, metaEventParams{
 		eventName:     "RecurringPaymentCaptured",
 		contentName:   fmt.Sprintf("%s Recurring Payment - Cycle %d", recurringPayment.AppName, billingCycle.CycleNumber),
 		eventIDSource: paymentAttempt.ID.String(),
@@ -2315,14 +2356,26 @@ func (s *recurringPaymentService) getPostHogConfig(appName string) (*posthogMode
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			fmt.Printf("[PostHog] No config found for app: %s, environment: %s. Skipping event.\n", appName, env)
+			sentry.WithScope(func(scope *sentry.Scope) {
+				scope.SetTag("app_name", appName)
+				sentry.CaptureException(fmt.Errorf("[PostHog] no config found for app %s, env %s", appName, env))
+			})
 		} else {
 			fmt.Printf("[PostHog ERROR] Failed to get config: %v\n", err)
+			sentry.WithScope(func(scope *sentry.Scope) {
+				scope.SetTag("app_name", appName)
+				sentry.CaptureException(fmt.Errorf("[PostHog] failed to get config for app %s: %w", appName, err))
+			})
 		}
 		return nil, false
 	}
 
 	if !config.IsActive {
 		fmt.Printf("[PostHog] Config is inactive for app: %s. Skipping event.\n", appName)
+		sentry.WithScope(func(scope *sentry.Scope) {
+			scope.SetTag("app_name", appName)
+			sentry.CaptureException(fmt.Errorf("[PostHog] config is inactive for app: %s, env: %s", appName, env))
+		})
 		return nil, false
 	}
 
@@ -2373,6 +2426,12 @@ func (s *recurringPaymentService) sendPostHogEvent(
 	go func() {
 		if err := s.posthogClient.SendEvent(config.Host, config.APIKey, eventName, userID.String(), props.ToProperties()); err != nil {
 			fmt.Printf("[PostHog ERROR] Failed to send %s event: %v\n", eventName, err)
+			sentry.WithScope(func(scope *sentry.Scope) {
+				scope.SetTag("app_name", appName)
+				scope.SetTag("event_name", eventName)
+				scope.SetTag("user_id", userID.String())
+				sentry.CaptureException(fmt.Errorf("[PostHog] failed to send %s event for user %s: %w", eventName, userID, err))
+			})
 		}
 	}()
 }
@@ -2522,6 +2581,12 @@ func (s *recurringPaymentService) sendPostHogOrderCreationFailedEvent(
 	go func() {
 		if err := s.posthogClient.SendEvent(config.Host, config.APIKey, PostHogEventOrderCreationFailed, recurringPayment.UserID.String(), props.ToProperties()); err != nil {
 			fmt.Printf("[PostHog ERROR] Failed to send %s event: %v\n", PostHogEventOrderCreationFailed, err)
+			sentry.WithScope(func(scope *sentry.Scope) {
+				scope.SetTag("app_name", recurringPayment.AppName)
+				scope.SetTag("recurring_payment_id", recurringPayment.ID.String())
+				scope.SetTag("event_name", PostHogEventOrderCreationFailed)
+				sentry.CaptureException(fmt.Errorf("[PostHog] failed to send %s event for recurring_payment %s: %w", PostHogEventOrderCreationFailed, recurringPayment.ID, err))
+			})
 		}
 	}()
 }

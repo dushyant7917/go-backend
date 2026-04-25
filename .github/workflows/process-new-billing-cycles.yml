@@ -43,6 +43,7 @@ jobs:
           RAZORPAY_KEY_SECRET: ${{ secrets.RAZORPAY_KEY_SECRET }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
           EXPO_PUSH_TOKEN: ${{ secrets.EXPO_PUSH_TOKEN }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: |
           cd cron-jobs/process_new_billing_cycles
           go run main.go

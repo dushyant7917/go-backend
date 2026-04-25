@@ -27,8 +27,9 @@ func NewMetaDatasetClient() *MetaDatasetClient {
 	}
 }
 
-// SubscriptionEventData represents the data for a subscription event sent to Meta Conversions API
-type SubscriptionEventData struct {
+// MetaEventData represents the data for an event sent to Meta Conversions API
+// Used by both subscription and recurring payment services
+type MetaEventData struct {
 	DatasetID    string // Meta dataset_id (works for both web and mobile)
 	AccessToken  string // Meta Access Token
 	EventName    string // Event name (e.g., "Subscribe")
@@ -86,8 +87,8 @@ type conversionAPIResponse struct {
 	FBTRACE_ID     string   `json:"fbtrace_id,omitempty"`
 }
 
-// SendSubscriptionEvent sends a subscription-related event to Meta via Conversions API
-func (c *MetaDatasetClient) SendSubscriptionEvent(event SubscriptionEventData) error {
+// SendEvent sends an event to Meta via Conversions API
+func (c *MetaDatasetClient) SendEvent(event MetaEventData) error {
 	if event.DatasetID == "" {
 		return fmt.Errorf("dataset_id is required")
 	}
@@ -95,7 +96,7 @@ func (c *MetaDatasetClient) SendSubscriptionEvent(event SubscriptionEventData) e
 		return fmt.Errorf("access_token is required")
 	}
 	if event.EventName == "" {
-		event.EventName = "SubscriptionCharged"
+		return fmt.Errorf("event_name is required")
 	}
 	if event.ActionSource == "" {
 		event.ActionSource = "other"

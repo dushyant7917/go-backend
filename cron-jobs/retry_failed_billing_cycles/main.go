@@ -13,6 +13,7 @@ import (
 	"go-backend/internal/common/database"
 	"go-backend/pkg/utils"
 
+	"github.com/getsentry/sentry-go"
 	"github.com/joho/godotenv"
 )
 
@@ -29,6 +30,20 @@ func main() {
 
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	log.Printf("[%s] Starting retry failed billing cycles job (Cron B)\n", timestamp)
+
+	// Initialize Sentry
+	sentryDsn := utils.GetEnv("SENTRY_DSN", "")
+	if sentryDsn != "" {
+		if err := sentry.Init(sentry.ClientOptions{
+			Dsn:         sentryDsn,
+			Environment: env,
+		}); err != nil {
+			log.Printf("[%s] Sentry initialization failed: %v\n", timestamp, err)
+		} else {
+			log.Printf("[%s] ✓ Sentry initialized\n", timestamp)
+		}
+		defer sentry.Flush(2 * time.Second)
+	}
 
 	// Connect to database
 	dbConfig := database.Config{

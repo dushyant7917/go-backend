@@ -1036,7 +1036,7 @@ func (s *subscriptionService) sendMetaDatasetSubscribeEvent(subscription *models
 	value := float64(subscription.Amount) / 100.0
 
 	// Prepare event data
-	eventData := notification.SubscriptionEventData{
+	eventData := notification.MetaEventData{
 		DatasetID:    metaConfig.DatasetID,
 		AccessToken:  metaConfig.AccessToken,
 		EventName:    "SubscriptionCharged",
@@ -1067,7 +1067,7 @@ func (s *subscriptionService) sendMetaDatasetSubscribeEvent(subscription *models
 	}
 
 	// Send event to Meta Conversions API
-	if err := s.metaDatasetClient.SendSubscriptionEvent(eventData); err != nil {
+	if err := s.metaDatasetClient.SendEvent(eventData); err != nil {
 		fmt.Printf("[Meta Dataset ERROR] Failed to send Subscribe event: %v\n", err)
 		return
 	}
@@ -1106,7 +1106,7 @@ func (s *subscriptionService) sendMetaDatasetAuthenticatedEvent(subscription *mo
 	value := float64(subscription.Amount) / 100.0
 
 	// Prepare event data
-	eventData := notification.SubscriptionEventData{
+	eventData := notification.MetaEventData{
 		DatasetID:    metaConfig.DatasetID,
 		AccessToken:  metaConfig.AccessToken,
 		EventName:    "SubscriptionAuthenticated",
@@ -1135,7 +1135,7 @@ func (s *subscriptionService) sendMetaDatasetAuthenticatedEvent(subscription *mo
 	eventData.EventID = notification.GenerateEventID(subscription.RazorpaySubscriptionID, eventData.EventTime)
 
 	// Send event to Meta Conversions API
-	if err := s.metaDatasetClient.SendSubscriptionEvent(eventData); err != nil {
+	if err := s.metaDatasetClient.SendEvent(eventData); err != nil {
 		fmt.Printf("[Meta Dataset ERROR] Failed to send SubscriptionAuthenticated event: %v\n", err)
 		return
 	}
@@ -1174,7 +1174,7 @@ func (s *subscriptionService) sendMetaDatasetActivatedEvent(subscription *models
 	value := float64(subscription.Amount) / 100.0
 
 	// Prepare event data
-	eventData := notification.SubscriptionEventData{
+	eventData := notification.MetaEventData{
 		DatasetID:    metaConfig.DatasetID,
 		AccessToken:  metaConfig.AccessToken,
 		EventName:    "SubscriptionActivated",
@@ -1203,7 +1203,7 @@ func (s *subscriptionService) sendMetaDatasetActivatedEvent(subscription *models
 	eventData.EventID = notification.GenerateEventID(subscription.RazorpaySubscriptionID, eventData.EventTime)
 
 	// Send event to Meta Conversions API
-	if err := s.metaDatasetClient.SendSubscriptionEvent(eventData); err != nil {
+	if err := s.metaDatasetClient.SendEvent(eventData); err != nil {
 		fmt.Printf("[Meta Dataset ERROR] Failed to send SubscriptionActivated event: %v\n", err)
 		return
 	}
@@ -1242,7 +1242,7 @@ func (s *subscriptionService) sendMetaDatasetCancelledEvent(subscription *models
 	value := float64(subscription.Amount) / 100.0
 
 	// Prepare event data
-	eventData := notification.SubscriptionEventData{
+	eventData := notification.MetaEventData{
 		DatasetID:    metaConfig.DatasetID,
 		AccessToken:  metaConfig.AccessToken,
 		EventName:    "SubscriptionCancelled",
@@ -1271,7 +1271,7 @@ func (s *subscriptionService) sendMetaDatasetCancelledEvent(subscription *models
 	eventData.EventID = notification.GenerateEventID(subscription.RazorpaySubscriptionID, eventData.EventTime)
 
 	// Send event to Meta Conversions API
-	if err := s.metaDatasetClient.SendSubscriptionEvent(eventData); err != nil {
+	if err := s.metaDatasetClient.SendEvent(eventData); err != nil {
 		fmt.Printf("[Meta Dataset ERROR] Failed to send SubscriptionCancelled event: %v\n", err)
 		return
 	}
@@ -1310,7 +1310,7 @@ func (s *subscriptionService) sendMetaDatasetHaltedEvent(subscription *models.Su
 	value := float64(subscription.Amount) / 100.0
 
 	// Prepare event data
-	eventData := notification.SubscriptionEventData{
+	eventData := notification.MetaEventData{
 		DatasetID:    metaConfig.DatasetID,
 		AccessToken:  metaConfig.AccessToken,
 		EventName:    "SubscriptionHalted",
@@ -1339,7 +1339,7 @@ func (s *subscriptionService) sendMetaDatasetHaltedEvent(subscription *models.Su
 	eventData.EventID = notification.GenerateEventID(subscription.RazorpaySubscriptionID, eventData.EventTime)
 
 	// Send event to Meta Conversions API
-	if err := s.metaDatasetClient.SendSubscriptionEvent(eventData); err != nil {
+	if err := s.metaDatasetClient.SendEvent(eventData); err != nil {
 		fmt.Printf("[Meta Dataset ERROR] Failed to send SubscriptionHalted event: %v\n", err)
 		return
 	}
