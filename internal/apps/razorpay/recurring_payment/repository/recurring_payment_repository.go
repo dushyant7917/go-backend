@@ -23,6 +23,8 @@ type RecurringPaymentRepository interface {
 	FindRecurringPaymentsForNewBillingCycle(windowStart, windowEnd time.Time) ([]models.RecurringPayment, error)
 	FindRecurringPaymentsForRetry(windowStart, windowEnd time.Time) ([]models.RecurringPayment, error)
 	FindActiveRecurringPaymentByUserID(userID uuid.UUID, appName string) (*models.RecurringPayment, error)
+	FindRecurringPaymentByTokenID(tokenID string) (*models.RecurringPayment, error)
+	FindRecurringPaymentByCustomerID(customerID string) (*models.RecurringPayment, error)
 	HasCompletedAuthorizationPayment(userID uuid.UUID, appName string) (bool, error)
 	UpdateRecurringPayment(tx *gorm.DB, rp *models.RecurringPayment) error
 
@@ -190,6 +192,30 @@ func (r *recurringPaymentRepository) FindActiveRecurringPaymentByUserID(userID u
 	return &rp, nil
 }
 
+// FindRecurringPaymentByTokenID finds a recurring payment by its Razorpay token ID
+func (r *recurringPaymentRepository) FindRecurringPaymentByTokenID(tokenID string) (*models.RecurringPayment, error) {
+	var rp models.RecurringPayment
+	err := r.db.Where("token_id = ?", tokenID).First(&rp).Error
+	if err != nil {
+		return nil, err
+	}
+	return &rp, nil
+}
+
+// FindRecurringPaymentByCustomerID finds the most recent recurring payment by Razorpay customer ID
+// that is in 'created' status and does not yet have a token_id assigned.
+func (r *recurringPaymentRepository) FindRecurringPaymentByCustomerID(customerID string) (*models.RecurringPayment, error) {
+	var rp models.RecurringPayment
+	err := r.db.Where("razorpay_customer_id = ? AND status = ? AND (token_id IS NULL OR token_id = '')",
+		customerID, models.RecurringPaymentStatusCreated).
+		Order("created_at DESC").
+		First(&rp).Error
+	if err != nil {
+		return nil, err
+	}
+	return &rp, nil
+}
+
 // HasCompletedAuthorizationPayment checks if user has ever completed authorization
 // Checks for authorized_at key in metadata (set when cycle 0 payment is captured)
 func (r *recurringPaymentRepository) HasCompletedAuthorizationPayment(userID uuid.UUID, appName string) (bool, error) {
@@ -308,6 +334,7 @@ func (r *recurringPaymentRepository) FindPendingPaymentAttempts(chargeBefore tim
 		Select("pa.*").
 		Joins("JOIN billing_cycles bc ON bc.id = pa.billing_cycle_id").
 		Where("pa.status IN ?", []models.PaymentAttemptStatus{models.PaymentAttemptStatusCreated, models.PaymentAttemptStatusPending}).
+		Where("bc.status = ?", models.BillingCycleStatusPending).
 		Where("bc.next_attempt_at IS NOT NULL AND bc.next_attempt_at <= ?", chargeBefore).
 		Find(&pas).Error
 	if err != nil {

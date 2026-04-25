@@ -959,6 +959,8 @@ func (s *recurringPaymentService) HandleWebhook(payload []byte, signature string
 	switch eventType {
 	case "payment.captured", "payment.failed":
 		return s.handlePaymentWebhook(eventType, payloadData, payload, signature)
+	case "token.confirmed", "token.cancelled":
+		return s.handleTokenWebhook(eventType, payloadData, payload, signature)
 	default:
 		fmt.Printf("[Webhook] Unknown event type (ignoring): %s\n", eventType)
 		return nil
@@ -1027,6 +1029,209 @@ func extractPaymentEntity(payloadData map[string]interface{}) (map[string]interf
 	}
 
 	return paymentEntity, nil
+}
+
+// extractTokenEntity extracts the token entity from webhook payload
+func extractTokenEntity(payloadData map[string]interface{}) (map[string]interface{}, error) {
+	tokenWrap, ok := payloadData["token"].(map[string]interface{})
+	if !ok {
+		return nil, errors.New("invalid token webhook payload")
+	}
+
+	tokenEntity, ok := tokenWrap["entity"].(map[string]interface{})
+	if !ok {
+		return nil, errors.New("invalid token entity in webhook")
+	}
+
+	return tokenEntity, nil
+}
+
+// handleTokenWebhook handles token-related webhook events
+func (s *recurringPaymentService) handleTokenWebhook(eventType string, payloadData map[string]interface{}, rawPayload []byte, signature string) error {
+	tokenEntity, err := extractTokenEntity(payloadData)
+	if err != nil {
+		fmt.Printf("[Webhook ERROR] Failed to extract token entity: %v\n", err)
+		return err
+	}
+
+	tokenID, ok := tokenEntity["id"].(string)
+	if !ok || tokenID == "" {
+		return errors.New("invalid token entity: missing id")
+	}
+	fmt.Printf("[Webhook] Token entity id: %s\n", tokenID)
+
+	switch eventType {
+	case "token.confirmed":
+		return s.handleTokenConfirmed(tokenEntity, rawPayload, signature)
+	case "token.cancelled":
+		return s.handleTokenCancelled(tokenID, rawPayload, signature)
+	default:
+		fmt.Printf("[Webhook] Unknown token event type (ignoring): %s\n", eventType)
+		return nil
+	}
+}
+
+// handleTokenConfirmed processes a token.confirmed webhook event
+func (s *recurringPaymentService) handleTokenConfirmed(tokenEntity map[string]interface{}, rawPayload []byte, signature string) error {
+	tokenID, ok := tokenEntity["id"].(string)
+	if !ok || tokenID == "" {
+		return errors.New("invalid token entity: missing id")
+	}
+
+	// Defensive: only process recurring tokens
+	recurring, _ := tokenEntity["recurring"].(bool)
+	if !recurring {
+		fmt.Printf("[Webhook] Token %s is not recurring, ignoring token.confirmed\n", tokenID)
+		return nil
+	}
+
+	customerID, _ := tokenEntity["customer_id"].(string)
+
+	// Try finding recurring payment by token_id first
+	rp, err := s.repo.FindRecurringPaymentByTokenID(tokenID)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return fmt.Errorf("failed to find recurring payment by token: %w", err)
+	}
+
+	// If not found by token_id, try finding by customer_id
+	if rp == nil {
+		if customerID == "" {
+			return errors.New("invalid token entity: missing customer_id")
+		}
+		rp, err = s.repo.FindRecurringPaymentByCustomerID(customerID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				fmt.Printf("[Webhook] No recurring payment found for customer %s with unset token, ignoring\n", customerID)
+				return nil
+			}
+			return fmt.Errorf("failed to find recurring payment by customer: %w", err)
+		}
+		fmt.Printf("[Webhook] Found recurring_payment=%s for customer=%s, token not yet set\n", rp.ID, customerID)
+	}
+
+	// Get config for signature verification (must happen before any state changes)
+	config, err := s.getConfig(rp.AppName)
+	if err != nil {
+		return fmt.Errorf("failed to get config: %w", err)
+	}
+
+	// Verify webhook signature
+	if !s.verifyWebhookSignature(rawPayload, signature, config.RazorpayWebhookSecret) {
+		fmt.Printf("[Webhook ERROR] Signature verification failed\n")
+		return errors.New("invalid webhook signature")
+	}
+	fmt.Printf("[Webhook] Signature verified successfully\n")
+
+	// Idempotency: skip if token already linked to this recurring payment
+	if rp.TokenID != nil && *rp.TokenID == tokenID {
+		fmt.Printf("[Webhook] Token %s already linked to recurring_payment=%s, skipping token.confirmed\n", tokenID, rp.ID)
+		return nil
+	}
+
+	// Set the token_id
+	rp.TokenID = &tokenID
+	tx := s.repo.BeginTransaction()
+	if err := s.repo.UpdateRecurringPayment(tx, rp); err != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to update recurring payment with token: %w", err)
+	}
+	if err := s.repo.CommitTransaction(tx); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	fmt.Printf("[Webhook] Processed token.confirmed: recurring_payment=%s, token_id=%s\n", rp.ID, tokenID)
+	return nil
+}
+
+// handleTokenCancelled processes a token.cancelled webhook event
+func (s *recurringPaymentService) handleTokenCancelled(tokenID string, rawPayload []byte, signature string) error {
+	// Find recurring payment by token_id
+	rp, err := s.repo.FindRecurringPaymentByTokenID(tokenID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			fmt.Printf("[Webhook] Token %s not found in recurring_payments, ignoring\n", tokenID)
+			return nil
+		}
+		return fmt.Errorf("failed to find recurring payment by token: %w", err)
+	}
+
+	fmt.Printf("[Webhook] Found recurring_payment=%s, status=%s\n", rp.ID, rp.Status)
+
+	// Idempotency: skip if already in a terminal state
+	if rp.Status == models.RecurringPaymentStatusCancelled || rp.Status == models.RecurringPaymentStatusExpired {
+		fmt.Printf("[Webhook] Recurring payment %s already %s, skipping token.cancelled\n", rp.ID, rp.Status)
+		return nil
+	}
+
+	// Handle active, paused, or created recurring payments
+	if rp.Status != models.RecurringPaymentStatusActive &&
+		rp.Status != models.RecurringPaymentStatusPaused &&
+		rp.Status != models.RecurringPaymentStatusCreated {
+		fmt.Printf("[Webhook] Recurring payment %s status is %s, not handling token.cancelled\n", rp.ID, rp.Status)
+		return nil
+	}
+
+	// Get config for signature verification
+	config, err := s.getConfig(rp.AppName)
+	if err != nil {
+		return fmt.Errorf("failed to get config: %w", err)
+	}
+
+	// Verify webhook signature
+	if !s.verifyWebhookSignature(rawPayload, signature, config.RazorpayWebhookSecret) {
+		fmt.Printf("[Webhook ERROR] Signature verification failed\n")
+		return errors.New("invalid webhook signature")
+	}
+	fmt.Printf("[Webhook] Signature verified successfully\n")
+
+	// Find latest billing cycle for this recurring payment
+	bc, err := s.repo.FindLatestBillingCycleByRecurringPayment(rp.ID)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return fmt.Errorf("failed to find latest billing cycle: %w", err)
+	}
+
+	// Get user for PostHog event
+	user, _ := s.userRepo.FindByID(rp.UserID)
+
+	// Determine amount for PostHog event
+	var amount int64
+	if bc != nil {
+		amount = bc.Amount
+	} else {
+		amount = rp.MaxAmount
+	}
+
+	// Emit PostHog event before status change (following existing pattern)
+	if user != nil {
+		go s.sendPostHogRecurringPaymentCancelledEvent(rp, amount, user)
+	}
+
+	// Update records in a single transaction
+	tx := s.repo.BeginTransaction()
+
+	rp.Status = models.RecurringPaymentStatusCancelled
+	rp.NextChargeAt = nil
+	if err := s.repo.UpdateRecurringPayment(tx, rp); err != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to update recurring payment: %w", err)
+	}
+
+	// Cancel pending billing cycle if it exists
+	if bc != nil && bc.Status == models.BillingCycleStatusPending {
+		bc.Status = models.BillingCycleStatusCancelled
+		bc.NextAttemptAt = nil
+		if err := s.repo.UpdateBillingCycle(tx, bc); err != nil {
+			s.repo.RollbackTransaction(tx)
+			return fmt.Errorf("failed to update billing cycle: %w", err)
+		}
+	}
+
+	if err := s.repo.CommitTransaction(tx); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	fmt.Printf("[Webhook] Processed token.cancelled: recurring_payment=%s, status=cancelled\n", rp.ID)
+	return nil
 }
 
 // findPaymentAttemptFromEntity finds payment attempt from webhook payment entity
