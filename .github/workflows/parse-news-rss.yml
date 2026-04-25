@@ -2,8 +2,8 @@ name: Parse News RSS
 
 on:
   schedule:
-    # Runs at 12:00 AM IST (6:30 PM UTC previous day), 6:00 AM IST (12:30 AM UTC), 12:00 PM IST (6:30 AM UTC), and 6:00 PM IST (12:30 PM UTC) daily
-    - cron: "30 18,0,6,12 * * *"
+    # Runs at 6:00 AM IST (12:30 AM UTC), 12:00 PM IST (6:30 AM UTC), and 6:00 PM IST (12:30 PM UTC) daily
+    - cron: "30 0,6,12 * * *"
   workflow_dispatch: # Allows manual triggering
 
 jobs:
