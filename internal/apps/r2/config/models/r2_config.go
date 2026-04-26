@@ -3,8 +3,9 @@ package models
 import (
 	"time"
 
-	"github.com/google/uuid"
 	"go-backend/pkg/utils"
+
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
