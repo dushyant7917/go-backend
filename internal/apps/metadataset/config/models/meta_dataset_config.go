@@ -15,6 +15,7 @@ type MetaDatasetConfig struct {
 	AppName     string         `gorm:"not null;size:100" json:"app_name"`
 	Environment string         `gorm:"not null;size:20;default:'test'" json:"environment"`
 	DatasetID   string         `gorm:"not null;size:100" json:"dataset_id"`
+	AppID       string         `gorm:"size:100;default:''" json:"app_id"` // Facebook App ID for app event attribution
 	AccessToken string         `gorm:"not null;size:500" json:"access_token"`
 	IsActive    bool           `gorm:"default:true" json:"is_active"`
 	Metadata    utils.Metadata `gorm:"type:jsonb;not null;default:'{}'" json:"metadata"`
@@ -41,6 +42,7 @@ type CreateMetaDatasetConfigRequest struct {
 	AppName     string         `json:"app_name" binding:"required,min=1,max=100"`
 	Environment string         `json:"environment" binding:"required"`
 	DatasetID   string         `json:"dataset_id" binding:"required"`
+	AppID       string         `json:"app_id"` // Facebook App ID for app event attribution
 	AccessToken string         `json:"access_token" binding:"required"`
 	IsActive    *bool          `json:"is_active,omitempty"`
 	Metadata    utils.Metadata `json:"metadata,omitempty"`
@@ -49,6 +51,7 @@ type CreateMetaDatasetConfigRequest struct {
 // UpdateMetaDatasetConfigRequest represents the request body for updating a meta dataset config
 type UpdateMetaDatasetConfigRequest struct {
 	DatasetID   *string        `json:"dataset_id,omitempty"`
+	AppID       *string        `json:"app_id,omitempty"`
 	AccessToken *string        `json:"access_token,omitempty"`
 	IsActive    *bool          `json:"is_active,omitempty"`
 	Metadata    utils.Metadata `json:"metadata,omitempty"`
@@ -61,6 +64,7 @@ type MetaDatasetConfigResponse struct {
 	AppName     string         `json:"app_name"`
 	Environment string         `json:"environment"`
 	DatasetID   string         `json:"dataset_id"`
+	AppID       string         `json:"app_id"`
 	IsActive    bool           `json:"is_active"`
 	Metadata    utils.Metadata `json:"metadata"`
 	CreatedAt   time.Time      `json:"created_at"`
@@ -74,6 +78,7 @@ func (c *MetaDatasetConfig) ToResponse() MetaDatasetConfigResponse {
 		AppName:     c.AppName,
 		Environment: c.Environment,
 		DatasetID:   c.DatasetID,
+		AppID:       c.AppID,
 		IsActive:    c.IsActive,
 		Metadata:    c.Metadata,
 		CreatedAt:   c.CreatedAt,

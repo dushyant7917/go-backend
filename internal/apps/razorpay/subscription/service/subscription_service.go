@@ -1041,10 +1041,11 @@ func (s *subscriptionService) sendMetaDatasetSubscribeEvent(subscription *models
 		AccessToken:  metaConfig.AccessToken,
 		EventName:    "SubscriptionCharged",
 		EventTime:    time.Now().Unix(),
-		ActionSource: "other",
+		ActionSource: "app",
 		UserData: notification.UserData{
 			Phone:      notification.HashPhone(subscription.Phone),
 			ExternalID: subscription.UserID.String(),
+			AppSdkID:   metaConfig.AppID,
 		},
 		CustomData: notification.CustomData{
 			Currency:    subscription.Currency,
@@ -1111,10 +1112,11 @@ func (s *subscriptionService) sendMetaDatasetAuthenticatedEvent(subscription *mo
 		AccessToken:  metaConfig.AccessToken,
 		EventName:    "SubscriptionAuthenticated",
 		EventTime:    time.Now().Unix(),
-		ActionSource: "other",
+		ActionSource: "app",
 		UserData: notification.UserData{
 			Phone:      notification.HashPhone(subscription.Phone),
 			ExternalID: subscription.UserID.String(),
+			AppSdkID:   metaConfig.AppID,
 		},
 		CustomData: notification.CustomData{
 			Currency:    subscription.Currency,
@@ -1179,10 +1181,11 @@ func (s *subscriptionService) sendMetaDatasetActivatedEvent(subscription *models
 		AccessToken:  metaConfig.AccessToken,
 		EventName:    "SubscriptionActivated",
 		EventTime:    time.Now().Unix(),
-		ActionSource: "other",
+		ActionSource: "app",
 		UserData: notification.UserData{
 			Phone:      notification.HashPhone(subscription.Phone),
 			ExternalID: subscription.UserID.String(),
+			AppSdkID:   metaConfig.AppID,
 		},
 		CustomData: notification.CustomData{
 			Currency:    subscription.Currency,
@@ -1247,10 +1250,11 @@ func (s *subscriptionService) sendMetaDatasetCancelledEvent(subscription *models
 		AccessToken:  metaConfig.AccessToken,
 		EventName:    "SubscriptionCancelled",
 		EventTime:    time.Now().Unix(),
-		ActionSource: "other",
+		ActionSource: "app",
 		UserData: notification.UserData{
 			Phone:      notification.HashPhone(subscription.Phone),
 			ExternalID: subscription.UserID.String(),
+			AppSdkID:   metaConfig.AppID,
 		},
 		CustomData: notification.CustomData{
 			Currency:    subscription.Currency,
@@ -1315,10 +1319,11 @@ func (s *subscriptionService) sendMetaDatasetHaltedEvent(subscription *models.Su
 		AccessToken:  metaConfig.AccessToken,
 		EventName:    "SubscriptionHalted",
 		EventTime:    time.Now().Unix(),
-		ActionSource: "other",
+		ActionSource: "app",
 		UserData: notification.UserData{
 			Phone:      notification.HashPhone(subscription.Phone),
 			ExternalID: subscription.UserID.String(),
+			AppSdkID:   metaConfig.AppID,
 		},
 		CustomData: notification.CustomData{
 			Currency:    subscription.Currency,

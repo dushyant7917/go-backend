@@ -2253,10 +2253,11 @@ func (s *recurringPaymentService) sendMetaEvent(
 		AccessToken:  metaConfig.AccessToken,
 		EventName:    params.eventName,
 		EventTime:    time.Now().Unix(),
-		ActionSource: "other",
+		ActionSource: "app",
 		UserData: notification.UserData{
 			Phone:      notification.HashPhone(phone),
 			ExternalID: recurringPayment.UserID.String(),
+			AppSdkID:   metaConfig.AppID,
 		},
 		CustomData: notification.CustomData{
 			Currency:    "INR",

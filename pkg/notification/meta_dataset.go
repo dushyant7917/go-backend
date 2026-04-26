@@ -45,6 +45,7 @@ type UserData struct {
 	Email           string `json:"em,omitempty"`          // Hashed email (SHA256)
 	Phone           string `json:"ph,omitempty"`          // Hashed phone with country code (SHA256)
 	ExternalID      string `json:"external_id,omitempty"` // User ID from your system
+	AppSdkID        string `json:"app_sdk_id,omitempty"`  // Facebook App ID (required for action_source=app)
 	ClientIPAddress string `json:"client_ip_address,omitempty"`
 	ClientUserAgent string `json:"client_user_agent,omitempty"`
 }
@@ -98,6 +99,14 @@ func (c *MetaDatasetClient) SendEvent(event MetaEventData) error {
 	if event.EventName == "" {
 		return fmt.Errorf("event_name is required")
 	}
+
+	// When action_source is "app", Meta requires app_sdk_id in user_data.
+	// If app_sdk_id is missing, fall back to action_source "website" to avoid API rejection.
+	if event.ActionSource == "app" && event.UserData.AppSdkID == "" {
+		fmt.Printf("[Meta Dataset] WARNING: action_source is 'app' but app_sdk_id is empty, falling back to action_source 'website'\n")
+		event.ActionSource = "website"
+	}
+
 	if event.ActionSource == "" {
 		event.ActionSource = "other"
 	}
