@@ -65,7 +65,7 @@ type AppData struct {
 // used when user metadata does not contain app_data.
 func DefaultAppData() AppData {
 	return AppData{
-		AdvertiserTrackingEnabled:  "False",
+		AdvertiserTrackingEnabled:  "True",
 		ApplicationTrackingEnabled: "False",
 		ExtInfo:                    serverSideExtInfo(),
 	}
@@ -94,6 +94,9 @@ func AppDataFromUserMetadata(metadata utils.Metadata) AppData {
 	if err := json.Unmarshal(jsonBytes, &appData); err != nil {
 		return DefaultAppData()
 	}
+
+	// Always force advertiser_tracking_enabled to "True"
+	appData.AdvertiserTrackingEnabled = "True"
 
 	return appData
 }
