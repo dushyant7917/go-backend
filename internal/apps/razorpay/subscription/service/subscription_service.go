@@ -1036,33 +1036,21 @@ func (s *subscriptionService) sendMetaDatasetSubscribeEvent(subscription *models
 	value := float64(subscription.Amount) / 100.0
 
 	// Prepare event data
-	eventData := notification.MetaEventData{
+	eventData := notification.NewAppEventData(notification.MetaEventParams{
 		DatasetID:    metaConfig.DatasetID,
 		AccessToken:  metaConfig.AccessToken,
 		EventName:    "SubscriptionCharged",
-		EventTime:    time.Now().Unix(),
-		ActionSource: "app",
-		UserData: notification.UserData{
-			Phone:      notification.HashPhone(subscription.Phone),
-			ExternalID: subscription.UserID.String(),
-			AppSdkID:   metaConfig.AppID,
-		},
-		CustomData: notification.CustomData{
-			Currency:    subscription.Currency,
-			Value:       value,
-			ContentName: fmt.Sprintf("%s Subscription", subscription.AppName),
-			ContentType: "product",
-			Contents: []notification.Content{
-				{
-					ID:       subscription.RazorpayPlanID,
-					Quantity: 1,
-					Price:    value,
-				},
-			},
-		},
-	}
+		ActionSource: "website",
+		Phone:        subscription.Phone,
+		UserID:       subscription.UserID.String(),
+		Currency:     subscription.Currency,
+		Value:        value,
+		ContentName:  fmt.Sprintf("%s Subscription", subscription.AppName),
+		ContentID:    subscription.RazorpayPlanID,
+		DedupSource:  subscription.RazorpaySubscriptionID,
+	})
 
-	// Add event ID for deduplication if payment ID is available
+	// Override dedup source with payment ID if available
 	if paymentID != "" {
 		eventData.EventID = notification.GenerateEventID(paymentID, eventData.EventTime)
 	}
@@ -1107,34 +1095,19 @@ func (s *subscriptionService) sendMetaDatasetAuthenticatedEvent(subscription *mo
 	value := float64(subscription.Amount) / 100.0
 
 	// Prepare event data
-	eventData := notification.MetaEventData{
+	eventData := notification.NewAppEventData(notification.MetaEventParams{
 		DatasetID:    metaConfig.DatasetID,
 		AccessToken:  metaConfig.AccessToken,
 		EventName:    "SubscriptionAuthenticated",
-		EventTime:    time.Now().Unix(),
-		ActionSource: "app",
-		UserData: notification.UserData{
-			Phone:      notification.HashPhone(subscription.Phone),
-			ExternalID: subscription.UserID.String(),
-			AppSdkID:   metaConfig.AppID,
-		},
-		CustomData: notification.CustomData{
-			Currency:    subscription.Currency,
-			Value:       value,
-			ContentName: fmt.Sprintf("%s Subscription", subscription.AppName),
-			ContentType: "product",
-			Contents: []notification.Content{
-				{
-					ID:       subscription.RazorpayPlanID,
-					Quantity: 1,
-					Price:    value,
-				},
-			},
-		},
-	}
-
-	// Add event ID for deduplication using subscription ID
-	eventData.EventID = notification.GenerateEventID(subscription.RazorpaySubscriptionID, eventData.EventTime)
+		ActionSource: "website",
+		Phone:        subscription.Phone,
+		UserID:       subscription.UserID.String(),
+		Currency:     subscription.Currency,
+		Value:        value,
+		ContentName:  fmt.Sprintf("%s Subscription", subscription.AppName),
+		ContentID:    subscription.RazorpayPlanID,
+		DedupSource:  subscription.RazorpaySubscriptionID,
+	})
 
 	// Send event to Meta Conversions API
 	if err := s.metaDatasetClient.SendEvent(eventData); err != nil {
@@ -1176,34 +1149,19 @@ func (s *subscriptionService) sendMetaDatasetActivatedEvent(subscription *models
 	value := float64(subscription.Amount) / 100.0
 
 	// Prepare event data
-	eventData := notification.MetaEventData{
+	eventData := notification.NewAppEventData(notification.MetaEventParams{
 		DatasetID:    metaConfig.DatasetID,
 		AccessToken:  metaConfig.AccessToken,
 		EventName:    "SubscriptionActivated",
-		EventTime:    time.Now().Unix(),
-		ActionSource: "app",
-		UserData: notification.UserData{
-			Phone:      notification.HashPhone(subscription.Phone),
-			ExternalID: subscription.UserID.String(),
-			AppSdkID:   metaConfig.AppID,
-		},
-		CustomData: notification.CustomData{
-			Currency:    subscription.Currency,
-			Value:       value,
-			ContentName: fmt.Sprintf("%s Subscription", subscription.AppName),
-			ContentType: "product",
-			Contents: []notification.Content{
-				{
-					ID:       subscription.RazorpayPlanID,
-					Quantity: 1,
-					Price:    value,
-				},
-			},
-		},
-	}
-
-	// Add event ID for deduplication using subscription ID
-	eventData.EventID = notification.GenerateEventID(subscription.RazorpaySubscriptionID, eventData.EventTime)
+		ActionSource: "website",
+		Phone:        subscription.Phone,
+		UserID:       subscription.UserID.String(),
+		Currency:     subscription.Currency,
+		Value:        value,
+		ContentName:  fmt.Sprintf("%s Subscription", subscription.AppName),
+		ContentID:    subscription.RazorpayPlanID,
+		DedupSource:  subscription.RazorpaySubscriptionID,
+	})
 
 	// Send event to Meta Conversions API
 	if err := s.metaDatasetClient.SendEvent(eventData); err != nil {
@@ -1245,34 +1203,19 @@ func (s *subscriptionService) sendMetaDatasetCancelledEvent(subscription *models
 	value := float64(subscription.Amount) / 100.0
 
 	// Prepare event data
-	eventData := notification.MetaEventData{
+	eventData := notification.NewAppEventData(notification.MetaEventParams{
 		DatasetID:    metaConfig.DatasetID,
 		AccessToken:  metaConfig.AccessToken,
 		EventName:    "SubscriptionCancelled",
-		EventTime:    time.Now().Unix(),
-		ActionSource: "app",
-		UserData: notification.UserData{
-			Phone:      notification.HashPhone(subscription.Phone),
-			ExternalID: subscription.UserID.String(),
-			AppSdkID:   metaConfig.AppID,
-		},
-		CustomData: notification.CustomData{
-			Currency:    subscription.Currency,
-			Value:       value,
-			ContentName: fmt.Sprintf("%s Subscription", subscription.AppName),
-			ContentType: "product",
-			Contents: []notification.Content{
-				{
-					ID:       subscription.RazorpayPlanID,
-					Quantity: 1,
-					Price:    value,
-				},
-			},
-		},
-	}
-
-	// Add event ID for deduplication using subscription ID
-	eventData.EventID = notification.GenerateEventID(subscription.RazorpaySubscriptionID, eventData.EventTime)
+		ActionSource: "website",
+		Phone:        subscription.Phone,
+		UserID:       subscription.UserID.String(),
+		Currency:     subscription.Currency,
+		Value:        value,
+		ContentName:  fmt.Sprintf("%s Subscription", subscription.AppName),
+		ContentID:    subscription.RazorpayPlanID,
+		DedupSource:  subscription.RazorpaySubscriptionID,
+	})
 
 	// Send event to Meta Conversions API
 	if err := s.metaDatasetClient.SendEvent(eventData); err != nil {
@@ -1314,34 +1257,19 @@ func (s *subscriptionService) sendMetaDatasetHaltedEvent(subscription *models.Su
 	value := float64(subscription.Amount) / 100.0
 
 	// Prepare event data
-	eventData := notification.MetaEventData{
+	eventData := notification.NewAppEventData(notification.MetaEventParams{
 		DatasetID:    metaConfig.DatasetID,
 		AccessToken:  metaConfig.AccessToken,
 		EventName:    "SubscriptionHalted",
-		EventTime:    time.Now().Unix(),
-		ActionSource: "app",
-		UserData: notification.UserData{
-			Phone:      notification.HashPhone(subscription.Phone),
-			ExternalID: subscription.UserID.String(),
-			AppSdkID:   metaConfig.AppID,
-		},
-		CustomData: notification.CustomData{
-			Currency:    subscription.Currency,
-			Value:       value,
-			ContentName: fmt.Sprintf("%s Subscription", subscription.AppName),
-			ContentType: "product",
-			Contents: []notification.Content{
-				{
-					ID:       subscription.RazorpayPlanID,
-					Quantity: 1,
-					Price:    value,
-				},
-			},
-		},
-	}
-
-	// Add event ID for deduplication using subscription ID
-	eventData.EventID = notification.GenerateEventID(subscription.RazorpaySubscriptionID, eventData.EventTime)
+		ActionSource: "website",
+		Phone:        subscription.Phone,
+		UserID:       subscription.UserID.String(),
+		Currency:     subscription.Currency,
+		Value:        value,
+		ContentName:  fmt.Sprintf("%s Subscription", subscription.AppName),
+		ContentID:    subscription.RazorpayPlanID,
+		DedupSource:  subscription.RazorpaySubscriptionID,
+	})
 
 	// Send event to Meta Conversions API
 	if err := s.metaDatasetClient.SendEvent(eventData); err != nil {

@@ -1774,7 +1774,7 @@ func (s *recurringPaymentService) createRazorpayRecurringPayment(pa models.Payme
 	}
 
 	if orderStatus, ok := order["status"].(string); ok && orderStatus == "paid" {
-		fmt.Printf("[createRazorpayRecurringPayment] Order %s already paid, updating records\n", pa.RazorpayOrderID)
+		fmt.Printf("[createRazorpayRecurringPayment] Order %s already paid, updating records\n", derefString(pa.RazorpayOrderID))
 		// Extract payment_id from order for data completeness
 		if paymentID := extractPaymentIDFromOrder(order); paymentID != nil {
 			pa.RazorpayPaymentID = paymentID
@@ -1847,7 +1847,9 @@ func (s *recurringPaymentService) createRazorpayRecurringPayment(pa models.Payme
 	}
 
 	fmt.Printf("[createRazorpayRecurringPayment] Created recurring payment: payment_id=%s, order_id=%s\n",
-		pa.RazorpayPaymentID, pa.RazorpayOrderID)
+		derefString(pa.RazorpayPaymentID),
+		derefString(pa.RazorpayOrderID),
+	)
 
 	return nil
 }
@@ -2219,8 +2221,17 @@ func (s *recurringPaymentService) getMetaConfig(appName string) (*metaDatasetMod
 	return metaConfig, true
 }
 
-// getPhoneFromUser extracts phone number from user (without + prefix for Meta API)
-func (s *recurringPaymentService) getPhoneFromUser(userID uuid.UUID) string {
+// derefString safely dereferences a *string, returning empty string if nil.
+func derefString(s *string) string {
+	if s != nil {
+		return *s
+	}
+	return ""
+}
+
+// getUserInfo retrieves the user's phone and app_data from user metadata.
+// Returns phone string and app_data from user metadata (or nil if not available).
+func (s *recurringPaymentService) getUserInfo(userID uuid.UUID) (string, *notification.AppData) {
 	user, err := s.userRepo.FindByID(userID)
 	if err != nil {
 		fmt.Printf("[Meta Dataset ERROR] Failed to find user for phone hash: %v\n", err)
@@ -2229,13 +2240,16 @@ func (s *recurringPaymentService) getPhoneFromUser(userID uuid.UUID) string {
 			scope.SetTag("user_id", userID.String())
 			sentry.CaptureException(fmt.Errorf("[Meta Dataset] failed to find user %s for phone hash: %w", userID, err))
 		})
-		return ""
+		return "", nil
 	}
 
+	var phone string
 	if user.CountryCode != nil && user.Phone != nil {
-		return *user.CountryCode + *user.Phone
+		phone = *user.CountryCode + *user.Phone
 	}
-	return ""
+
+	appData := notification.AppDataFromUserMetadata(user.Metadata)
+	return phone, &appData
 }
 
 // sendMetaEvent sends a Meta Conversions API event
@@ -2245,36 +2259,24 @@ func (s *recurringPaymentService) sendMetaEvent(
 	params metaEventParams,
 	metaConfig *metaDatasetModels.MetaDatasetConfig,
 	phone string,
+	appData *notification.AppData,
 ) {
 	value := float64(amount) / 100.0
 
-	eventData := notification.MetaEventData{
+	eventData := notification.NewAppEventData(notification.MetaEventParams{
 		DatasetID:    metaConfig.DatasetID,
 		AccessToken:  metaConfig.AccessToken,
 		EventName:    params.eventName,
-		EventTime:    time.Now().Unix(),
 		ActionSource: "app",
-		UserData: notification.UserData{
-			Phone:      notification.HashPhone(phone),
-			ExternalID: recurringPayment.UserID.String(),
-			AppSdkID:   metaConfig.AppID,
-		},
-		CustomData: notification.CustomData{
-			Currency:    "INR",
-			Value:       value,
-			ContentName: params.contentName,
-			ContentType: "product",
-			Contents: []notification.Content{
-				{
-					ID:       params.eventIDSource,
-					Quantity: 1,
-					Price:    value,
-				},
-			},
-		},
-	}
-
-	eventData.EventID = notification.GenerateEventID(params.eventIDSource, eventData.EventTime)
+		Phone:        phone,
+		UserID:       recurringPayment.UserID.String(),
+		Currency:     "INR",
+		Value:        value,
+		ContentName:  params.contentName,
+		ContentID:    params.eventIDSource,
+		DedupSource:  params.eventIDSource,
+		AppData:      appData,
+	})
 
 	if err := s.metaDatasetClient.SendEvent(eventData); err != nil {
 		fmt.Printf("[Meta Dataset ERROR] Failed to send %s event: %v\n", params.eventName, err)
@@ -2308,12 +2310,13 @@ func (s *recurringPaymentService) sendMetaDatasetRecurringPaymentStartedEvent(
 	if user.CountryCode != nil && user.Phone != nil {
 		phone = *user.CountryCode + *user.Phone
 	}
+	appData := notification.AppDataFromUserMetadata(user.Metadata)
 
 	s.sendMetaEvent(recurringPayment, paymentAttempt.Amount, metaEventParams{
 		eventName:     "RecurringPaymentStarted",
 		contentName:   fmt.Sprintf("%s Recurring Payment", recurringPayment.AppName),
 		eventIDSource: recurringPayment.ID.String(),
-	}, metaConfig, phone)
+	}, metaConfig, phone, &appData)
 }
 
 // sendMetaDatasetRecurringPaymentCapturedEvent sends RecurringPaymentCaptured event to Meta
@@ -2329,13 +2332,13 @@ func (s *recurringPaymentService) sendMetaDatasetRecurringPaymentCapturedEvent(
 		return
 	}
 
-	phone := s.getPhoneFromUser(recurringPayment.UserID)
+	phone, appData := s.getUserInfo(recurringPayment.UserID)
 
 	s.sendMetaEvent(recurringPayment, paymentAttempt.Amount, metaEventParams{
 		eventName:     "RecurringPaymentCaptured",
 		contentName:   fmt.Sprintf("%s Recurring Payment - Cycle %d", recurringPayment.AppName, billingCycle.CycleNumber),
 		eventIDSource: paymentAttempt.ID.String(),
-	}, metaConfig, phone)
+	}, metaConfig, phone, appData)
 }
 
 // ==================== PostHog Analytics Events ====================
