@@ -38,7 +38,7 @@ func (c *MetaDatasetConfig) BeforeCreate(tx *gorm.DB) error {
 // CreateMetaDatasetConfigRequest represents the request body for creating a meta dataset config
 type CreateMetaDatasetConfigRequest struct {
 	AppName     string         `json:"app_name" binding:"required,min=1,max=100"`
-	Environment string         `json:"environment" binding:"required,oneof=test live"`
+	Environment string         `json:"environment" binding:"required"`
 	DatasetID   string         `json:"dataset_id" binding:"required"`
 	AccessToken string         `json:"access_token" binding:"required"`
 	IsActive    *bool          `json:"is_active,omitempty"`

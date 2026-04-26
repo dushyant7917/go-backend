@@ -119,7 +119,7 @@ func (s *recurringPaymentService) getRazorpayClient(config *clientModels.Razorpa
 
 // getConfig returns a cached Razorpay config or fetches from database
 func (s *recurringPaymentService) getConfig(appName string) (*clientModels.RazorpayConfig, error) {
-	env := utils.GetRazorpayEnvironment()
+	env := utils.GetEnv("GO_ENV", "local")
 	cacheKey := appName + ":" + env
 
 	s.cacheMutex.RLock()

@@ -51,7 +51,7 @@ func main() {
 
 	// Fetch Razorpay config for DailyStoryApp and current environment
 	razorpayConfigRepo := configRepo.NewRazorpayConfigRepository(db)
-	rpEnv := utils.GetRazorpayEnvironment()
+	rpEnv := utils.GetEnv("GO_ENV", "local")
 	config, err := razorpayConfigRepo.FindByAppNameAndEnv("DailyStoryApp", rpEnv)
 	if err != nil {
 		log.Fatalf("Failed to find razorpay config for DailyStoryApp (%s): %v", rpEnv, err)

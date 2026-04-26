@@ -73,9 +73,9 @@ func (h *PostHogConfigHandler) GetPostHogConfigByAppNameAndEnv(c *gin.Context) {
 		return
 	}
 
-	environment := c.DefaultQuery("environment", "local")
-	if environment != "test" && environment != "live" && environment != "local" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "environment must be 'test', 'live', or 'local'"})
+	environment := c.Query("environment")
+	if environment == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "environment is required"})
 		return
 	}
 

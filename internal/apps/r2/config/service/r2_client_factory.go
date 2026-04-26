@@ -28,7 +28,7 @@ func NewR2ClientFactory(configRepo repository.R2ConfigRepository) *R2ClientFacto
 // It fetches credentials from the database and caches the client
 func (f *R2ClientFactory) GetClient(appName string) (*storage.R2Client, error) {
 	// Use app_name + environment as cache key
-	env := utils.GetRazorpayEnvironment() // Reuse the same environment logic (test/live)
+	env := utils.GetEnv("GO_ENV", "local")
 	cacheKey := appName + ":" + env
 
 	// Try to get from cache with read lock
@@ -74,7 +74,7 @@ func (f *R2ClientFactory) GetClient(appName string) (*storage.R2Client, error) {
 
 // InvalidateClient removes a cached client (useful when config is updated)
 func (f *R2ClientFactory) InvalidateClient(appName string) {
-	env := utils.GetRazorpayEnvironment()
+	env := utils.GetEnv("GO_ENV", "local")
 	cacheKey := appName + ":" + env
 
 	f.cacheMutex.Lock()

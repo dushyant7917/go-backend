@@ -39,7 +39,7 @@ func (c *PostHogConfig) BeforeCreate(tx *gorm.DB) error {
 // CreatePostHogConfigRequest represents the request body for creating a PostHog config
 type CreatePostHogConfigRequest struct {
 	AppName     string         `json:"app_name" binding:"required,min=1,max=100"`
-	Environment string         `json:"environment" binding:"required,oneof=test live local"`
+	Environment string         `json:"environment" binding:"required"`
 	APIKey      string         `json:"api_key" binding:"required"`
 	Host        string         `json:"host" binding:"required"`
 	IsActive    *bool          `json:"is_active,omitempty"`

@@ -8,18 +8,6 @@ import (
 	"strings"
 )
 
-// HashEmail hashes an email address with SHA256 for Meta Conversions API
-// Meta requires lowercase and trimmed emails before hashing
-func HashEmail(email string) string {
-	if email == "" {
-		return ""
-	}
-
-	email = strings.ToLower(strings.TrimSpace(email))
-	hash := sha256.Sum256([]byte(email))
-	return hex.EncodeToString(hash[:])
-}
-
 // HashPhone hashes a phone number with SHA256 for Meta Conversions API
 // Meta requires phone numbers in E.164 format (with country code, no spaces/dashes)
 // Example: +919876543210

@@ -39,7 +39,7 @@ func (c *RazorpayConfig) BeforeCreate(tx *gorm.DB) error {
 // CreateRazorpayConfigRequest represents the request body for creating a razorpay config
 type CreateRazorpayConfigRequest struct {
 	AppName               string         `json:"app_name" binding:"required,min=1,max=100"`
-	Environment           string         `json:"environment" binding:"required,oneof=test live"`
+	Environment           string         `json:"environment" binding:"required"`
 	RazorpayKeyID         string         `json:"razorpay_key_id" binding:"required"`
 	RazorpayKeySecret     string         `json:"razorpay_key_secret" binding:"required"`
 	RazorpayWebhookSecret string         `json:"razorpay_webhook_secret" binding:"required"`

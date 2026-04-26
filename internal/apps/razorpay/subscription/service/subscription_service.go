@@ -105,7 +105,7 @@ func (s *subscriptionService) CreateCheckoutURL(req models.CreateSubscriptionReq
 		config, err = s.configRepo.FindByID(*req.ClientID)
 	} else {
 		// Use server-side environment (derived from GO_ENV)
-		env := utils.GetRazorpayEnvironment()
+		env := utils.GetEnv("GO_ENV", "local")
 		config, err = s.configRepo.FindByAppNameAndEnv(req.AppName, env)
 	}
 

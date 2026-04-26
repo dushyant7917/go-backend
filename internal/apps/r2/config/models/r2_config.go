@@ -38,7 +38,7 @@ func (c *R2Config) BeforeCreate(tx *gorm.DB) error {
 // CreateR2ConfigRequest represents the request body for creating an R2 config
 type CreateR2ConfigRequest struct {
 	AppName         string         `json:"app_name" binding:"required,min=1,max=100"`
-	Environment     string         `json:"environment" binding:"required,oneof=test live"`
+	Environment     string         `json:"environment" binding:"required"`
 	AccountID       string         `json:"account_id" binding:"required"`
 	AccessKeyID     string         `json:"access_key_id" binding:"required"`
 	SecretAccessKey string         `json:"secret_access_key" binding:"required"`
