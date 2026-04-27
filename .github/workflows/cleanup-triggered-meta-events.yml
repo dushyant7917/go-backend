@@ -1,0 +1,50 @@
+name: Cleanup Triggered Meta Events
+
+on:
+  schedule:
+    # Runs at 6:30 AM IST (1:00 AM UTC) every Sunday
+    - cron: "0 1 * * 0"
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  cleanup-triggered-meta-events:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-v2-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-v2-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run cleanup script for triggered meta_events older than 7 days
+        env:
+          GO_ENV: ${{ secrets.GO_ENV }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_SSL_MODE: ${{ secrets.DB_SSL_MODE }}
+        run: |
+          cd cron-jobs/cleanup_triggered_meta_events
+          go run main.go 7
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "Cleanup script failed"
+          echo "Check the logs above for details"
