@@ -4,6 +4,8 @@ import (
 	"log"
 	"net/http"
 
+	metaEventModels "go-backend/internal/apps/meta_event/models"
+	metaEventSvc "go-backend/internal/apps/meta_event/service"
 	recurringPaymentModels "go-backend/internal/apps/razorpay/recurring_payment/models"
 	recurringPaymentRepo "go-backend/internal/apps/razorpay/recurring_payment/repository"
 	subscriptionModels "go-backend/internal/apps/razorpay/subscription/models"
@@ -17,23 +19,27 @@ import (
 type DailystoryHandler struct {
 	subscriptionRepo     subscriptionRepo.SubscriptionRepository
 	recurringPaymentRepo recurringPaymentRepo.RecurringPaymentRepository
+	metaEventService     metaEventSvc.MetaEventService
 }
 
 // NewDailystoryHandler creates a new DailystoryHandler
 func NewDailystoryHandler(
 	subscriptionRepo subscriptionRepo.SubscriptionRepository,
 	recurringPaymentRepo recurringPaymentRepo.RecurringPaymentRepository,
+	metaEventService metaEventSvc.MetaEventService,
 ) *DailystoryHandler {
 	return &DailystoryHandler{
 		subscriptionRepo:     subscriptionRepo,
 		recurringPaymentRepo: recurringPaymentRepo,
+		metaEventService:     metaEventService,
 	}
 }
 
 // CombinedSubscriptionStatusResponse represents the combined status response
 type CombinedSubscriptionStatusResponse struct {
-	ActiveSubscription bool `json:"active_subscription"` // Has active subscription OR recurring payment
-	UsedFreeTrial      bool `json:"used_free_trial"`     // Has authenticated OR completed authorization
+	ActiveSubscription bool                               `json:"active_subscription"` // Has active subscription OR recurring payment
+	UsedFreeTrial      bool                               `json:"used_free_trial"`     // Has authenticated OR completed authorization
+	PendingMetaEvent   *metaEventModels.MetaEventResponse `json:"pending_meta_event"`  // Oldest non-triggered meta event
 }
 
 // GetCombinedStatus handles GET /api/v1/dailystory/subscription/status
@@ -79,6 +85,15 @@ func (h *DailystoryHandler) GetCombinedStatus(c *gin.Context) {
 	rpStatus := h.checkRecurringPaymentStatus(userID, appName)
 	response.ActiveSubscription = response.ActiveSubscription || rpStatus.ActiveSubscription
 	response.UsedFreeTrial = response.UsedFreeTrial || rpStatus.UsedFreeTrial
+
+	// Check for pending meta event
+	pendingEvent, err := h.metaEventService.GetPendingEvent(userID, appName)
+	if err != nil {
+		log.Printf("[GetCombinedStatus] Failed to get pending meta event: %v", err)
+	} else if pendingEvent != nil {
+		resp := pendingEvent.ToResponse()
+		response.PendingMetaEvent = &resp
+	}
 
 	c.JSON(http.StatusOK, gin.H{"data": response})
 }

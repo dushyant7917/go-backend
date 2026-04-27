@@ -95,9 +95,6 @@ func AppDataFromUserMetadata(metadata utils.Metadata) AppData {
 		return DefaultAppData()
 	}
 
-	// Always force advertiser_tracking_enabled to "True"
-	appData.AdvertiserTrackingEnabled = "True"
-
 	return appData
 }
 
@@ -140,6 +137,7 @@ type MetaEventParams struct {
 	ContentName  string   // Display name for the product/event
 	ContentID    string   // ID for the content item (plan ID, recurring payment ID, etc.)
 	DedupSource  string   // Source ID for event deduplication (payment ID, subscription ID, etc.)
+	EventID      string   // Explicit event ID for deduplication (if empty, generated from DedupSource)
 	AppData      *AppData // Optional: if nil and ActionSource is "app", default AppData is used
 }
 
@@ -175,6 +173,10 @@ func NewAppEventData(params MetaEventParams) MetaEventData {
 			},
 		},
 		EventID: GenerateEventID(params.DedupSource, eventTime),
+	}
+
+	if params.EventID != "" {
+		event.EventID = params.EventID
 	}
 
 	if params.ActionSource == "app" {

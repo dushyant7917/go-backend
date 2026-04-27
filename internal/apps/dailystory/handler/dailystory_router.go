@@ -8,11 +8,7 @@ import (
 func SetupDailystoryRouter(router *gin.RouterGroup, handler *DailystoryHandler) {
 	dailystory := router.Group("/dailystory")
 	{
-		// Subscription status routes
-		status := dailystory.Group("/subscription")
-		{
-			// Get combined subscription status (old subscriptions + new recurring payments)
-			status.GET("/status", handler.GetCombinedStatus)
-		}
+		// Get combined status (subscriptions, recurring payments, and pending meta events)
+		dailystory.GET("/status", handler.GetCombinedStatus)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	metaEventSvc "go-backend/internal/apps/meta_event/service"
 	metaDatasetModels "go-backend/internal/apps/metadataset/config/models"
 	metaDatasetRepository "go-backend/internal/apps/metadataset/config/repository"
 	posthogModels "go-backend/internal/apps/posthog/config/models"
@@ -61,6 +62,7 @@ type recurringPaymentService struct {
 	userRepo          userRepo.UserRepository
 	metaDatasetRepo   metaDatasetRepository.MetaDatasetConfigRepository
 	posthogConfigRepo repository.PostHogConfigRepository
+	metaEventService  metaEventSvc.MetaEventService
 	clientCache       map[string]*razorpay.Client
 	configCache       map[string]*clientModels.RazorpayConfig
 	cacheMutex        sync.RWMutex
@@ -75,6 +77,7 @@ func NewRecurringPaymentService(
 	userRepo userRepo.UserRepository,
 	metaDatasetRepo metaDatasetRepository.MetaDatasetConfigRepository,
 	posthogConfigRepo repository.PostHogConfigRepository,
+	metaEventService metaEventSvc.MetaEventService,
 ) RecurringPaymentService {
 	return &recurringPaymentService{
 		repo:              repo,
@@ -82,6 +85,7 @@ func NewRecurringPaymentService(
 		userRepo:          userRepo,
 		metaDatasetRepo:   metaDatasetRepo,
 		posthogConfigRepo: posthogConfigRepo,
+		metaEventService:  metaEventService,
 		clientCache:       make(map[string]*razorpay.Client),
 		configCache:       make(map[string]*clientModels.RazorpayConfig),
 		metaDatasetClient: notification.NewMetaDatasetClient(),
@@ -209,8 +213,8 @@ func (s *recurringPaymentService) handlePaymentCaptured(
 	nextCharge := s.calculateNextChargeDate(*recurringPayment)
 	recurringPayment.NextChargeAt = &nextCharge
 
-	// Emit Meta event for new capture
-	go s.sendMetaDatasetRecurringPaymentCapturedEvent(recurringPayment, paymentAttempt, billingCycle)
+	// Emit Meta event for Purchase
+	go s.registerPurchaseMetaEvent(recurringPayment, paymentAttempt, billingCycle)
 
 	// Emit PostHog event for payment captured
 	user, err := s.userRepo.FindByID(recurringPayment.UserID)
@@ -1371,18 +1375,18 @@ func (s *recurringPaymentService) activateMandateFromPayment(
 		return err
 	}
 
-	// Emit Meta pixel event for recurring payment started
-	go s.sendMetaDatasetRecurringPaymentStartedEvent(recurringPayment, paymentAttempt, user)
+	// Emit Meta pixel event for StartTrial
+	go s.registerStartTrialMetaEvent(recurringPayment, paymentAttempt, user)
 
 	// Emit PostHog event for recurring payment started
 	go s.sendPostHogRecurringPaymentStartedEvent(recurringPayment, paymentAttempt, user)
 
-	// If cycle 0 amount equals MaxAmount, this is a real charge — also emit captured events
+	// If cycle 0 amount equals MaxAmount, this is a real charge — also emit Purchase event
 	if paymentAttempt.Amount == recurringPayment.MaxAmount {
 		fmt.Printf("[activateMandateFromPayment] Cycle 0 amount equals MaxAmount (%d), emitting captured events\n", paymentAttempt.Amount)
 
-		// Emit Meta pixel event for recurring payment captured
-		go s.sendMetaDatasetRecurringPaymentCapturedEvent(recurringPayment, paymentAttempt, billingCycle)
+		// Emit Meta pixel event for Purchase
+		go s.registerPurchaseMetaEvent(recurringPayment, paymentAttempt, billingCycle)
 
 		// Emit PostHog event for recurring payment captured
 		go s.sendPostHogRecurringPaymentCapturedEvent(recurringPayment, paymentAttempt, user)
@@ -2174,9 +2178,9 @@ func (s *recurringPaymentService) calculateNextChargeDate(rp models.RecurringPay
 
 // metaEventParams contains parameters for sending a Meta event
 type metaEventParams struct {
-	eventName     string
-	contentName   string
-	eventIDSource string // ID used for deduplication
+	eventName   string
+	contentName string
+	eventID     string // ID used for deduplication
 }
 
 // getMetaConfig fetches and validates the Meta dataset config for an app
@@ -2273,8 +2277,9 @@ func (s *recurringPaymentService) sendMetaEvent(
 		Currency:     "INR",
 		Value:        value,
 		ContentName:  params.contentName,
-		ContentID:    params.eventIDSource,
-		DedupSource:  params.eventIDSource,
+		ContentID:    params.eventID,
+		DedupSource:  params.eventID,
+		EventID:      params.eventID,
 		AppData:      appData,
 	})
 
@@ -2293,13 +2298,14 @@ func (s *recurringPaymentService) sendMetaEvent(
 		params.eventName, recurringPayment.ID, value, metaConfig.DatasetID)
 }
 
-// sendMetaDatasetRecurringPaymentStartedEvent sends RecurringPaymentStarted event to Meta
-func (s *recurringPaymentService) sendMetaDatasetRecurringPaymentStartedEvent(
+// sendMetaDatasetStartTrialEvent sends StartTrial event to Meta CAPI
+func (s *recurringPaymentService) sendMetaDatasetStartTrialEvent(
 	recurringPayment *models.RecurringPayment,
 	paymentAttempt *models.PaymentAttempt,
 	user *userModels.User,
+	eventID uuid.UUID,
 ) {
-	fmt.Printf("[Meta Dataset] Processing RecurringPaymentStarted event for recurring_payment: %s\n", recurringPayment.ID)
+	fmt.Printf("[Meta Dataset] Processing StartTrial event for recurring_payment: %s\n", recurringPayment.ID)
 
 	metaConfig, ok := s.getMetaConfig(recurringPayment.AppName)
 	if !ok {
@@ -2313,19 +2319,20 @@ func (s *recurringPaymentService) sendMetaDatasetRecurringPaymentStartedEvent(
 	appData := notification.AppDataFromUserMetadata(user.Metadata)
 
 	s.sendMetaEvent(recurringPayment, paymentAttempt.Amount, metaEventParams{
-		eventName:     "RecurringPaymentStarted",
-		contentName:   fmt.Sprintf("%s Recurring Payment", recurringPayment.AppName),
-		eventIDSource: recurringPayment.ID.String(),
+		eventName:   "StartTrial",
+		contentName: fmt.Sprintf("%s Recurring Payment", recurringPayment.AppName),
+		eventID:     eventID.String(),
 	}, metaConfig, phone, &appData)
 }
 
-// sendMetaDatasetRecurringPaymentCapturedEvent sends RecurringPaymentCaptured event to Meta
-func (s *recurringPaymentService) sendMetaDatasetRecurringPaymentCapturedEvent(
+// sendMetaDatasetPurchaseEvent sends Purchase event to Meta CAPI
+func (s *recurringPaymentService) sendMetaDatasetPurchaseEvent(
 	recurringPayment *models.RecurringPayment,
 	paymentAttempt *models.PaymentAttempt,
 	billingCycle *models.BillingCycle,
+	eventID uuid.UUID,
 ) {
-	fmt.Printf("[Meta Dataset] Processing RecurringPaymentCaptured event for recurring_payment: %s\n", recurringPayment.ID)
+	fmt.Printf("[Meta Dataset] Processing Purchase event for recurring_payment: %s\n", recurringPayment.ID)
 
 	metaConfig, ok := s.getMetaConfig(recurringPayment.AppName)
 	if !ok {
@@ -2335,18 +2342,54 @@ func (s *recurringPaymentService) sendMetaDatasetRecurringPaymentCapturedEvent(
 	phone, appData := s.getUserInfo(recurringPayment.UserID)
 
 	s.sendMetaEvent(recurringPayment, paymentAttempt.Amount, metaEventParams{
-		eventName:     "RecurringPaymentCaptured",
-		contentName:   fmt.Sprintf("%s Recurring Payment - Cycle %d", recurringPayment.AppName, billingCycle.CycleNumber),
-		eventIDSource: paymentAttempt.ID.String(),
+		eventName:   "Purchase",
+		contentName: fmt.Sprintf("%s Recurring Payment - Cycle %d", recurringPayment.AppName, billingCycle.CycleNumber),
+		eventID:     eventID.String(),
 	}, metaConfig, phone, appData)
+}
+
+// registerStartTrialMetaEvent creates a StartTrial meta event and sends it to Meta CAPI
+func (s *recurringPaymentService) registerStartTrialMetaEvent(
+	recurringPayment *models.RecurringPayment,
+	paymentAttempt *models.PaymentAttempt,
+	user *userModels.User,
+) {
+	value := float64(paymentAttempt.Amount) / 100.0
+	event, err := s.metaEventService.CreateMetaEvent(nil, recurringPayment.UserID, recurringPayment.AppName, "StartTrial", map[string]interface{}{
+		"value":    value,
+		"currency": "INR",
+	})
+	if err != nil {
+		fmt.Printf("[Meta Event ERROR] Failed to create StartTrial meta event: %v\n", err)
+		return
+	}
+	s.sendMetaDatasetStartTrialEvent(recurringPayment, paymentAttempt, user, event.ID)
+}
+
+// registerPurchaseMetaEvent creates a Purchase meta event and sends it to Meta CAPI
+func (s *recurringPaymentService) registerPurchaseMetaEvent(
+	recurringPayment *models.RecurringPayment,
+	paymentAttempt *models.PaymentAttempt,
+	billingCycle *models.BillingCycle,
+) {
+	value := float64(paymentAttempt.Amount) / 100.0
+	event, err := s.metaEventService.CreateMetaEvent(nil, recurringPayment.UserID, recurringPayment.AppName, "Purchase", map[string]interface{}{
+		"value":    value,
+		"currency": "INR",
+	})
+	if err != nil {
+		fmt.Printf("[Meta Event ERROR] Failed to create Purchase meta event: %v\n", err)
+		return
+	}
+	s.sendMetaDatasetPurchaseEvent(recurringPayment, paymentAttempt, billingCycle, event.ID)
 }
 
 // ==================== PostHog Analytics Events ====================
 
 const (
 	// PostHog event names
-	PostHogEventRecurringPaymentStarted        = "RECURRING_PAYMENT_STARTED"
-	PostHogEventRecurringPaymentCaptured       = "RECURRING_PAYMENT_CAPTURED"
+	PostHogEventTrialStarted                   = "TrialStarted"
+	PostHogEventSubscriptionCharged            = "SubscriptionCharged"
 	PostHogEventRecurringPaymentFailed         = "RECURRING_PAYMENT_FAILED"
 	PostHogEventRecurringPaymentCreationFailed = "RECURRING_PAYMENT_CREATION_FAILED"
 	PostHogEventRecurringPaymentCancelled      = "RECURRING_PAYMENT_CANCELLED"
@@ -2440,19 +2483,19 @@ func (s *recurringPaymentService) sendPostHogEvent(
 	}()
 }
 
-// sendPostHogRecurringPaymentStartedEvent sends RECURRING_PAYMENT_STARTED event to PostHog
+// sendPostHogRecurringPaymentStartedEvent sends TrialStarted event to PostHog
 func (s *recurringPaymentService) sendPostHogRecurringPaymentStartedEvent(
 	recurringPayment *models.RecurringPayment,
 	paymentAttempt *models.PaymentAttempt,
 	user *userModels.User,
 ) {
-	fmt.Printf("[PostHog] Processing RECURRING_PAYMENT_STARTED event for recurring_payment: %s\n", recurringPayment.ID)
+	fmt.Printf("[PostHog] Processing TrialStarted event for recurring_payment: %s\n", recurringPayment.ID)
 
 	stateID, languageCode := extractStateAndLanguageCode(user, recurringPayment.AppName)
 	amount := float64(paymentAttempt.Amount) / 100.0
 
 	s.sendPostHogEvent(
-		PostHogEventRecurringPaymentStarted,
+		PostHogEventTrialStarted,
 		recurringPayment.UserID,
 		recurringPayment.AppName,
 		amount,
@@ -2462,19 +2505,19 @@ func (s *recurringPaymentService) sendPostHogRecurringPaymentStartedEvent(
 	)
 }
 
-// sendPostHogRecurringPaymentCapturedEvent sends RECURRING_PAYMENT_CAPTURED event to PostHog
+// sendPostHogRecurringPaymentCapturedEvent sends SubscriptionCharged event to PostHog
 func (s *recurringPaymentService) sendPostHogRecurringPaymentCapturedEvent(
 	recurringPayment *models.RecurringPayment,
 	paymentAttempt *models.PaymentAttempt,
 	user *userModels.User,
 ) {
-	fmt.Printf("[PostHog] Processing RECURRING_PAYMENT_CAPTURED event for recurring_payment: %s\n", recurringPayment.ID)
+	fmt.Printf("[PostHog] Processing SubscriptionCharged event for recurring_payment: %s\n", recurringPayment.ID)
 
 	stateID, languageCode := extractStateAndLanguageCode(user, recurringPayment.AppName)
 	amount := float64(paymentAttempt.Amount) / 100.0
 
 	s.sendPostHogEvent(
-		PostHogEventRecurringPaymentCaptured,
+		PostHogEventSubscriptionCharged,
 		recurringPayment.UserID,
 		recurringPayment.AppName,
 		amount,

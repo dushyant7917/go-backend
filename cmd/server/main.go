@@ -6,9 +6,10 @@ import (
 	"os"
 	"time"
 
+	commonResponse "go-backend/internal/common/response"
+
 	"github.com/getsentry/sentry-go"
 	sentrygin "github.com/getsentry/sentry-go/gin"
-	commonResponse "go-backend/internal/common/response"
 
 	agoraChatHandler "go-backend/internal/apps/agora/chat/handler"
 	agoraChatService "go-backend/internal/apps/agora/chat/service"
@@ -19,6 +20,9 @@ import (
 	dailystoryHandler "go-backend/internal/apps/dailystory/handler"
 	dailystoryRepository "go-backend/internal/apps/dailystory/repository"
 	dailystoryService "go-backend/internal/apps/dailystory/service"
+	metaEventHandler "go-backend/internal/apps/meta_event/handler"
+	metaEventRepository "go-backend/internal/apps/meta_event/repository"
+	metaEventService "go-backend/internal/apps/meta_event/service"
 	metaDatasetRepository "go-backend/internal/apps/metadataset/config/repository"
 	otpHandler "go-backend/internal/apps/otp/handler"
 	otpRepository "go-backend/internal/apps/otp/repository"
@@ -131,7 +135,12 @@ func main() {
 	// Initialize Recurring Payment dependencies
 	recurringPaymentRepo := recurringPaymentRepository.NewRecurringPaymentRepository(db)
 	posthogConfigRepo := posthogConfigRepository.NewPostHogConfigRepository(db)
-	recurringPaymentSvc := recurringPaymentService.NewRecurringPaymentService(recurringPaymentRepo, configRepo, userRepo, metaDatasetRepo, posthogConfigRepo)
+	// Initialize Meta Event dependencies
+	metaEventRepo := metaEventRepository.NewMetaEventRepository(db)
+	metaEventSvc := metaEventService.NewMetaEventService(metaEventRepo)
+	metaEventH := metaEventHandler.NewMetaEventHandler(metaEventSvc)
+
+	recurringPaymentSvc := recurringPaymentService.NewRecurringPaymentService(recurringPaymentRepo, configRepo, userRepo, metaDatasetRepo, posthogConfigRepo, metaEventSvc)
 	recurringPaymentH := recurringPaymentHandler.NewRecurringPaymentHandler(recurringPaymentSvc)
 
 	// Initialize PostHog Config dependencies
@@ -203,7 +212,7 @@ func main() {
 	newsPosterH := dailystoryHandler.NewNewsPosterHandler(newsPosterSvc)
 
 	// Initialize Combined Subscription Status handler (dailystory)
-	dailystoryH := dailystoryHandler.NewDailystoryHandler(subscriptionRepo, recurringPaymentRepo)
+	dailystoryH := dailystoryHandler.NewDailystoryHandler(subscriptionRepo, recurringPaymentRepo, metaEventSvc)
 
 	// Initialize Agora Chat dependencies
 	chatSvc := agoraChatService.NewChatService()
@@ -291,6 +300,9 @@ func main() {
 
 		// Register Combined Subscription Status routes (dailystory)
 		dailystoryHandler.SetupDailystoryRouter(v1, dailystoryH)
+
+		// Register Meta Event routes
+		metaEventHandler.RegisterMetaEventRoutes(v1, metaEventH)
 
 		// Register Agora routes
 		agoraChatHandler.RegisterChatRoutes(v1, chatH)
