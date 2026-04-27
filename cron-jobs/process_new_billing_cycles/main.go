@@ -4,6 +4,8 @@ import (
 	"log"
 	"time"
 
+	metaEventRepo "go-backend/internal/apps/meta_event/repository"
+	metaEventSvc "go-backend/internal/apps/meta_event/service"
 	metaDatasetRepo "go-backend/internal/apps/metadataset/config/repository"
 	posthogConfigRepository "go-backend/internal/apps/posthog/config/repository"
 	configRepo "go-backend/internal/apps/razorpay/config/repository"
@@ -68,7 +70,9 @@ func main() {
 	userRepository := userRepo.NewUserRepository(db)
 	metaDatasetConfigRepo := metaDatasetRepo.NewMetaDatasetConfigRepository(db)
 	posthogConfigRepo := posthogConfigRepository.NewPostHogConfigRepository(db)
-	recurringPaymentService := service.NewRecurringPaymentService(recurringPaymentRepository, razorpayConfigRepo, userRepository, metaDatasetConfigRepo, posthogConfigRepo)
+	metaEventRepository := metaEventRepo.NewMetaEventRepository(db)
+	metaEventService := metaEventSvc.NewMetaEventService(metaEventRepository)
+	recurringPaymentService := service.NewRecurringPaymentService(recurringPaymentRepository, razorpayConfigRepo, userRepository, metaDatasetConfigRepo, posthogConfigRepo, metaEventService)
 
 	// Cron A: Process new billing cycles - create billing cycle and send notification
 	// Filters recurring payments where next_charge_at is 25-50 hours away and no pending billing cycle

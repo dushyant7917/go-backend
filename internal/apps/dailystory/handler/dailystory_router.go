@@ -10,5 +10,7 @@ func SetupDailystoryRouter(router *gin.RouterGroup, handler *DailystoryHandler) 
 	{
 		// Get combined status (subscriptions, recurring payments, and pending meta events)
 		dailystory.GET("/status", handler.GetCombinedStatus)
+		// Deprecated: old endpoint for backward compatibility
+		dailystory.GET("/subscription/status", handler.GetCombinedStatus)
 	}
 }
