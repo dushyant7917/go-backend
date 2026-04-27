@@ -2390,10 +2390,10 @@ const (
 	// PostHog event names
 	PostHogEventTrialStarted                   = "TrialStarted"
 	PostHogEventSubscriptionCharged            = "SubscriptionCharged"
-	PostHogEventRecurringPaymentFailed         = "RECURRING_PAYMENT_FAILED"
-	PostHogEventRecurringPaymentCreationFailed = "RECURRING_PAYMENT_CREATION_FAILED"
-	PostHogEventRecurringPaymentCancelled      = "RECURRING_PAYMENT_CANCELLED"
-	PostHogEventOrderCreationFailed            = "ORDER_CREATION_FAILED"
+	PostHogEventRecurringPaymentFailed         = "RecurringPaymentFailed"
+	PostHogEventRecurringPaymentCreationFailed = "RecurringPaymentCreationFailed"
+	PostHogEventSubscriptionCancelled          = "SubscriptionCancelled"
+	PostHogEventOrderCreationFailed            = "OrderCreationFailed"
 )
 
 // getPostHogConfig fetches and validates the PostHog config for an app
@@ -2527,13 +2527,13 @@ func (s *recurringPaymentService) sendPostHogRecurringPaymentCapturedEvent(
 	)
 }
 
-// sendPostHogRecurringPaymentFailedEvent sends RECURRING_PAYMENT_FAILED event to PostHog
+// sendPostHogRecurringPaymentFailedEvent sends RecurringPaymentFailed event to PostHog
 func (s *recurringPaymentService) sendPostHogRecurringPaymentFailedEvent(
 	recurringPayment *models.RecurringPayment,
 	paymentAttempt *models.PaymentAttempt,
 	user *userModels.User,
 ) {
-	fmt.Printf("[PostHog] Processing RECURRING_PAYMENT_FAILED event for recurring_payment: %s\n", recurringPayment.ID)
+	fmt.Printf("[PostHog] Processing RecurringPaymentFailed event for recurring_payment: %s\n", recurringPayment.ID)
 
 	stateID, languageCode := extractStateAndLanguageCode(user, recurringPayment.AppName)
 	amount := float64(paymentAttempt.Amount) / 100.0
@@ -2554,14 +2554,14 @@ func (s *recurringPaymentService) sendPostHogRecurringPaymentFailedEvent(
 	)
 }
 
-// sendPostHogRecurringPaymentCreationFailedEvent sends RECURRING_PAYMENT_CREATION_FAILED event to PostHog
+// sendPostHogRecurringPaymentCreationFailedEvent sends RecurringPaymentCreationFailed event to PostHog
 func (s *recurringPaymentService) sendPostHogRecurringPaymentCreationFailedEvent(
 	recurringPayment *models.RecurringPayment,
 	amount int64,
 	user *userModels.User,
 	errorCode *string,
 ) {
-	fmt.Printf("[PostHog] Processing RECURRING_PAYMENT_CREATION_FAILED event for recurring_payment: %s\n", recurringPayment.ID)
+	fmt.Printf("[PostHog] Processing RecurringPaymentCreationFailed event for recurring_payment: %s\n", recurringPayment.ID)
 
 	stateID, languageCode := extractStateAndLanguageCode(user, recurringPayment.AppName)
 	amountInr := float64(amount) / 100.0
@@ -2577,19 +2577,19 @@ func (s *recurringPaymentService) sendPostHogRecurringPaymentCreationFailedEvent
 	)
 }
 
-// sendPostHogRecurringPaymentCancelledEvent sends RECURRING_PAYMENT_CANCELLED event to PostHog
+// sendPostHogRecurringPaymentCancelledEvent sends SubscriptionCancelled event to PostHog
 func (s *recurringPaymentService) sendPostHogRecurringPaymentCancelledEvent(
 	recurringPayment *models.RecurringPayment,
 	amount int64,
 	user *userModels.User,
 ) {
-	fmt.Printf("[PostHog] Processing RECURRING_PAYMENT_CANCELLED event for recurring_payment: %s\n", recurringPayment.ID)
+	fmt.Printf("[PostHog] Processing SubscriptionCancelled event for recurring_payment: %s\n", recurringPayment.ID)
 
 	stateID, languageCode := extractStateAndLanguageCode(user, recurringPayment.AppName)
 	amountInr := float64(amount) / 100.0
 
 	s.sendPostHogEvent(
-		PostHogEventRecurringPaymentCancelled,
+		PostHogEventSubscriptionCancelled,
 		recurringPayment.UserID,
 		recurringPayment.AppName,
 		amountInr,
@@ -2627,7 +2627,7 @@ func (s *recurringPaymentService) sendPostHogOrderCreationFailedEvent(
 
 	go func() {
 		if err := s.posthogClient.SendEvent(config.Host, config.APIKey, PostHogEventOrderCreationFailed, recurringPayment.UserID.String(), props.ToProperties()); err != nil {
-			fmt.Printf("[PostHog ERROR] Failed to send %s event: %v\n", PostHogEventOrderCreationFailed, err)
+			fmt.Printf("[PostHog ERROR] Failed to send OrderCreationFailed event: %v\n", err)
 			sentry.WithScope(func(scope *sentry.Scope) {
 				scope.SetTag("app_name", recurringPayment.AppName)
 				scope.SetTag("recurring_payment_id", recurringPayment.ID.String())
