@@ -12,25 +12,25 @@
 # │ │ │ │ │
 # * * * * * command to execute
 
-# ----- Push Notification Examples -----
+# ----- DailyStory Push Notification Examples -----
 
-# Send daily reminder at 9:00 AM for dailystory app
-0 9 * * * cd /Users/dushyant7917/D7/go-backend && DB_HOST=localhost DB_PASSWORD=yourpass go run cron-jobs/send_push_notification.go dailystory
+# Send daily reminder at 9:00 AM for DailyStory new users without active subscription
+0 9 * * * cd /Users/dushyant7917/D7/go-backend && DB_HOST=localhost DB_PASSWORD=yourpass go run cron-jobs/send_dailystory_push_notification/main.go
 
-# Send notification every day at 8:00 PM for crushconnect app
-0 20 * * * cd /Users/dushyant7917/D7/go-backend && DB_HOST=localhost DB_PASSWORD=yourpass go run cron-jobs/send_push_notification.go crushconnect
+# Send notification every day at 8:00 PM
+0 20 * * * cd /Users/dushyant7917/D7/go-backend && DB_HOST=localhost DB_PASSWORD=yourpass go run cron-jobs/send_dailystory_push_notification/main.go
 
 # Send notification every Monday at 10:00 AM
-0 10 * * 1 cd /Users/dushyant7917/D7/go-backend && DB_HOST=localhost DB_PASSWORD=yourpass go run cron-jobs/send_push_notification.go dailystory
+0 10 * * 1 cd /Users/dushyant7917/D7/go-backend && DB_HOST=localhost DB_PASSWORD=yourpass go run cron-jobs/send_dailystory_push_notification/main.go
 
 # Send notification every hour (on the hour)
-0 * * * * cd /Users/dushyant7917/D7/go-backend && DB_HOST=localhost DB_PASSWORD=yourpass go run cron-jobs/send_push_notification.go dailystory
+0 * * * * cd /Users/dushyant7917/D7/go-backend && DB_HOST=localhost DB_PASSWORD=yourpass go run cron-jobs/send_dailystory_push_notification/main.go
 
 # Send notification every 30 minutes
-*/30 * * * * cd /Users/dushyant7917/D7/go-backend && DB_HOST=localhost DB_PASSWORD=yourpass go run cron-jobs/send_push_notification.go dailystory
+*/30 * * * * cd /Users/dushyant7917/D7/go-backend && DB_HOST=localhost DB_PASSWORD=yourpass go run cron-jobs/send_dailystory_push_notification/main.go
 
 # Send notification at 9 AM, 2 PM, and 7 PM daily
-0 9,14,19 * * * cd /Users/dushyant7917/D7/go-backend && DB_HOST=localhost DB_PASSWORD=yourpass go run cron-jobs/send_push_notification.go dailystory
+0 9,14,19 * * * cd /Users/dushyant7917/D7/go-backend && DB_HOST=localhost DB_PASSWORD=yourpass go run cron-jobs/send_dailystory_push_notification/main.go
 
 # ----- RSS News Feed Parser Examples -----
 
@@ -50,18 +50,18 @@
 
 # ----- Production Configuration -----
 # For production, use the production database credentials:
-# 0 9 * * * cd /Users/dushyant7917/D7/go-backend && DB_HOST=prod-db.example.com DB_USER=produser DB_PASSWORD=yourpass DB_NAME=production go run cron-jobs/send_push_notification.go dailystory
+# 0 9 * * * cd /Users/dushyant7917/D7/go-backend && DB_HOST=prod-db.example.com DB_USER=produser DB_PASSWORD=yourpass DB_NAME=production go run cron-jobs/send_dailystory_push_notification/main.go
 
 # ----- Using Compiled Binary (Recommended for Production) -----
-# Compile once: go build -o cron-jobs/push_notifier cron-jobs/send_push_notification.go
+# Compile once: go build -o cron-jobs/send_dailystory_push_notification_bin cron-jobs/send_dailystory_push_notification/main.go
 # Then use the binary in cron:
-# 0 9 * * * cd /Users/dushyant7917/D7/go-backend && DB_HOST=localhost DB_PASSWORD=yourpass ./cron-jobs/push_notifier dailystory
+# 0 9 * * * cd /Users/dushyant7917/D7/go-backend && DB_HOST=localhost DB_PASSWORD=yourpass ./cron-jobs/send_dailystory_push_notification_bin
 
 # ----- Tips -----
 # 1. Always use absolute paths in cron jobs
 # 2. Set environment variables (like DB_HOST, DB_PASSWORD) before the command
 # 3. Redirect output to log files for debugging:
-#    0 9 * * * cd /path/to/go-backend && DB_HOST=localhost DB_PASSWORD=yourpass ./cron-jobs/push_notifier dailystory >> /var/log/cron-push.log 2>&1
+#    0 9 * * * cd /path/to/go-backend && DB_HOST=localhost DB_PASSWORD=yourpass ./cron-jobs/send_dailystory_push_notification_bin >> /var/log/cron-push.log 2>&1
 # 4. Test your script manually before adding to crontab
 # 5. Use tools like https://crontab.guru/ to validate cron expressions
 # 6. For security, consider using a .env file or secret management system for DB_PASSWORD

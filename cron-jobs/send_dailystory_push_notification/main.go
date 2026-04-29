@@ -42,8 +42,12 @@ var notificationMessages = map[string]struct {
 	},
 }
 
-// Default language for users without language_code set
-const defaultLanguage = "hi"
+// Cron job constants
+const (
+	defaultLanguage = "hi"            // Default language for users without language_code set
+	targetAppName   = "DailyStoryApp" // Target app for this cron job
+	userAgeDays     = 7               // Only notify users created within last 7 days
+)
 
 // userMessage pairs a push token with its localized notification message
 type userMessage struct {
@@ -149,15 +153,9 @@ func main() {
 		}
 	}
 
-	// Check if app_name is provided
-	if len(os.Args) < 2 {
-		log.Fatal("Error: app_name is required\nUsage: go run send_push_notification.go <app_name>\nExample: go run send_push_notification.go dailystory")
-	}
-
-	appName := os.Args[1]
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 
-	log.Printf("[%s] Starting push notification for app: %s\n", timestamp, appName)
+	log.Printf("[%s] Starting push notification for app: %s\n", timestamp, targetAppName)
 
 	// Connect to database
 	dbConfig := database.Config{
@@ -180,18 +178,18 @@ func main() {
 	userRepo := repository.NewUserRepository(db)
 	pushClient := notification.NewExpoPushClient()
 
-	// Find users with push notification tokens
-	users, err := userRepo.FindByAppWithPushToken(appName)
+	// Find new users (created within last 7 days) with push tokens and no active subscription
+	users, err := userRepo.FindNewUsersWithoutActiveSubscription(targetAppName, userAgeDays)
 	if err != nil {
 		log.Fatalf("[%s] ✗ Failed to find users: %v\n", timestamp, err)
 	}
 
 	if len(users) == 0 {
-		log.Printf("[%s] No users found with push notification tokens for app: %s\n", timestamp, appName)
+		log.Printf("[%s] No new users without active subscription found for app: %s\n", timestamp, targetAppName)
 		os.Exit(0)
 	}
 
-	log.Printf("[%s] Found %d users with push notification tokens\n", timestamp, len(users))
+	log.Printf("[%s] Found %d new users without active subscription\n", timestamp, len(users))
 
 	// Build localized notification messages
 	userMessages := buildUserMessages(users, timestamp)
