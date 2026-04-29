@@ -152,7 +152,7 @@ func (r *userRepository) FindByApp(appName string) ([]models.User, error) {
 // FindNewUsersWithoutActiveSubscription retrieves users created within the last N days
 // who have push notification tokens but do NOT have an active subscription or recurring payment.
 // Uses NOT EXISTS subqueries to match the combined status logic from GetCombinedStatus:
-//   - No subscription with status IN ('active', 'authenticated') (matched by phone)
+//   - No subscription with status IN ('active', 'authenticated') (matched by user_id)
 //   - No recurring payment with status = 'active' (matched by user_id)
 func (r *userRepository) FindNewUsersWithoutActiveSubscription(appName string, days int) ([]models.User, error) {
 	var users []models.User
@@ -163,7 +163,7 @@ func (r *userRepository) FindNewUsersWithoutActiveSubscription(appName string, d
 		appName, since,
 	).
 		Where(
-			"NOT EXISTS (SELECT 1 FROM subscriptions WHERE subscriptions.phone = users.phone AND subscriptions.app_name = ? AND subscriptions.status IN ('active', 'authenticated') AND subscriptions.deleted_at IS NULL)",
+			"NOT EXISTS (SELECT 1 FROM subscriptions WHERE subscriptions.user_id = users.id AND subscriptions.app_name = ? AND subscriptions.status IN ('active', 'authenticated') AND subscriptions.deleted_at IS NULL)",
 			appName,
 		).
 		Where(
