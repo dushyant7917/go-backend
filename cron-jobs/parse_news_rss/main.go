@@ -319,11 +319,17 @@ func main() {
 		go func(rssFeed RSSFeed) {
 			defer feedWg.Done()
 			defer func() { <-feedSemaphore }() // Release semaphore
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[%s] PANIC in feed goroutine: %v\n", timestamp, r)
+				}
+			}()
 
 			log.Printf("[%s] Parsing feed: %s (category: %s)\n", timestamp, rssFeed.URL, rssFeed.Category)
 
 			// Create a new parser for each goroutine (gofeed.Parser is not thread-safe)
 			fp := gofeed.NewParser()
+			fp.Client = &http.Client{Timeout: 30 * time.Second}
 			feed, err := fp.ParseURL(rssFeed.URL)
 			if err != nil {
 				log.Printf("[%s] ✗ Failed to parse feed %s: %v\n", timestamp, rssFeed.URL, err)
@@ -404,10 +410,17 @@ func main() {
 					defer itemWg.Done()
 					defer func() { <-itemSemaphore }()    // Release semaphore
 					defer inFlightLinks.Delete(item.Link) // Remove from in-flight tracking
+					defer func() {
+						if r := recover(); r != nil {
+							log.Printf("[%s] PANIC in item goroutine: %v\n", timestamp, r)
+						}
+					}()
 
 					// Convert title to Hindi short summary and translate based on category using Gemini
 					// Use description if available, otherwise fall back to title
-					result, err := translateWithGemini(context.Background(), genaiClient, item.Title, item.Description, targetLanguages, rateLimiter)
+					geminiCtx, geminiCancel := context.WithTimeout(context.Background(), 60*time.Second)
+					defer geminiCancel()
+					result, err := translateWithGemini(geminiCtx, genaiClient, item.Title, item.Description, targetLanguages, rateLimiter)
 					if err != nil {
 						log.Printf("[%s] ✗ Failed to convert/translate title '%s': %v\n", timestamp, item.Title, err)
 						countersMutex.Lock()
@@ -741,7 +754,10 @@ func tryParseDate(dateStr string) *time.Time {
 // If DB transaction fails and media was uploaded to R2, it cleans up the R2 file
 // The hindiSummary is the converted poster short summary (stored for 'hi' language code)
 func storeNewsWithTranslations(db *gorm.DB, r2Client *storage.R2Client, bucketName, link string, mediaFileKey *string, publishedAt *time.Time, category string, result TranslationResult) error {
-	err := db.Transaction(func(tx *gorm.DB) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Create news record
 		news := News{
 			Link:         link,

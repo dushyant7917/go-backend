@@ -15,6 +15,14 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
+// r2Timeout is the default timeout for R2 API operations
+const r2Timeout = 30 * time.Second
+
+// r2Context returns a context with the default R2 timeout
+func r2Context() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), r2Timeout)
+}
+
 // R2Client wraps the S3 client for Cloudflare R2 operations
 type R2Client struct {
 	client    *s3.Client
@@ -195,7 +203,9 @@ func (r *R2Client) DeleteFile(bucketName, fileKey string) error {
 	}
 
 	// Delete the object
-	_, err := r.client.DeleteObject(context.Background(), deleteObjectInput)
+	ctx, cancel := r2Context()
+	defer cancel()
+	_, err := r.client.DeleteObject(ctx, deleteObjectInput)
 	if err != nil {
 		return fmt.Errorf("failed to delete file: %w", err)
 	}
@@ -239,7 +249,9 @@ func (r *R2Client) DeleteFiles(bucketName string, fileKeys []string) ([]string, 
 	}
 
 	// Delete the objects
-	result, err := r.client.DeleteObjects(context.Background(), deleteObjectsInput)
+	ctx, cancel := r2Context()
+	defer cancel()
+	result, err := r.client.DeleteObjects(ctx, deleteObjectsInput)
 	if err != nil {
 		return nil, fmt.Errorf("failed to delete files: %w", err)
 	}
@@ -293,7 +305,9 @@ func (r *R2Client) UploadFile(bucketName, fileKey string, reader io.Reader, cont
 	}
 
 	// Upload the object
-	_, err = r.client.PutObject(context.Background(), putObjectInput)
+	ctx, cancel := r2Context()
+	defer cancel()
+	_, err = r.client.PutObject(ctx, putObjectInput)
 	if err != nil {
 		return fmt.Errorf("failed to upload file: %w", err)
 	}

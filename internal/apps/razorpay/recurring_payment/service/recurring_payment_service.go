@@ -167,6 +167,11 @@ func processInParallel[T any](items []T, processor func(T) error, logPrefix stri
 		go func(item T) {
 			defer wg.Done()
 			defer func() { <-sem }() // release semaphore
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Printf("[%s] PANIC: %v\n", logPrefix, r)
+				}
+			}()
 
 			if err := processor(item); err != nil {
 				fmt.Printf("[%s] ERROR: %v\n", logPrefix, err)
@@ -1482,7 +1487,10 @@ func (s *recurringPaymentService) processPendingBillingCycleRetry(rp models.Recu
 	razorpayClient := s.getRazorpayClient(config)
 
 	newChargeAttempts := bc.ChargeAttempts + 1
-	user, _ := s.userRepo.FindByID(rp.UserID)
+	user, err := s.userRepo.FindByID(rp.UserID)
+	if err != nil {
+		return fmt.Errorf("failed to find user: %w", err)
+	}
 	orderID, err := s.createRetryOrder(razorpayClient, &rp, bc, newChargeAttempts, user)
 	if err != nil {
 		errorInfo := extractRazorpayError(err)
@@ -1555,7 +1563,11 @@ func (s *recurringPaymentService) createRetryOrder(
 		return "", err
 	}
 
-	return order["id"].(string), nil
+	orderID, ok := order["id"].(string)
+	if !ok || orderID == "" {
+		return "", fmt.Errorf("invalid order response: missing or invalid id field")
+	}
+	return orderID, nil
 }
 
 // handleOrderCreationError handles errors during order creation
@@ -1639,7 +1651,10 @@ func (s *recurringPaymentService) processNewBillingCycleForPayment(rp models.Rec
 		return fmt.Errorf("billing cycle end_at (%s) would exceed mandate end_at (%s)", endAt.Format(time.RFC3339), rp.EndAt.Format(time.RFC3339))
 	}
 
-	user, _ := s.userRepo.FindByID(rp.UserID)
+	user, err := s.userRepo.FindByID(rp.UserID)
+	if err != nil {
+		return fmt.Errorf("failed to find user: %w", err)
+	}
 	orderID, err := s.createNewCycleOrder(razorpayClient, &rp, nextCycleNumber, amount, user)
 	if err != nil {
 		errorInfo := extractRazorpayError(err)
@@ -1692,7 +1707,11 @@ func (s *recurringPaymentService) createNewCycleOrder(
 		return "", err
 	}
 
-	return order["id"].(string), nil
+	orderID, ok := order["id"].(string)
+	if !ok || orderID == "" {
+		return "", fmt.Errorf("invalid order response: missing or invalid id field")
+	}
+	return orderID, nil
 }
 
 // createNewCycleDBRecords creates database records for a new billing cycle
