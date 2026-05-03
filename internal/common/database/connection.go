@@ -48,11 +48,11 @@ func NewConnection(config Config) (*gorm.DB, error) {
 	// MaxOpenConns: limits total connections to prevent overwhelming PostgreSQL
 	sqlDB.SetMaxOpenConns(25)
 	// MaxIdleConns: keep enough idle connections to avoid reconnect churn
-	sqlDB.SetMaxIdleConns(10)
+	sqlDB.SetMaxIdleConns(25)
 	// ConnMaxLifetime: recycle connections to prevent stale TCP connections
-	sqlDB.SetConnMaxLifetime(5 * time.Minute)
-	// ConnMaxIdleTime: close idle connections to free resources
-	sqlDB.SetConnMaxIdleTime(1 * time.Minute)
+	sqlDB.SetConnMaxLifetime(10 * time.Minute)
+	// ConnMaxIdleTime: keep idle connections alive to avoid cold-start latency
+	sqlDB.SetConnMaxIdleTime(10 * time.Minute)
 
 	log.Println("Database connection established successfully")
 	return db, nil
