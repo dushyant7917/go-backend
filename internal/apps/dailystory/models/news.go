@@ -3,8 +3,9 @@ package models
 import (
 	"time"
 
-	"github.com/google/uuid"
 	"go-backend/pkg/utils"
+
+	"github.com/google/uuid"
 )
 
 // News represents a news article in the database
@@ -30,6 +31,7 @@ type NewsTranslation struct {
 	ID           uuid.UUID      `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
 	NewsID       uuid.UUID      `json:"news_id" gorm:"type:uuid;not null"`
 	Title        string         `json:"title" gorm:"type:varchar(1000);not null"`
+	Summary      string         `json:"summary" gorm:"type:varchar(1000);not null"`
 	LanguageCode string         `json:"language_code" gorm:"type:varchar(10);not null"`
 	Metadata     utils.Metadata `json:"metadata" gorm:"type:jsonb;not null;default:'{}'"`
 	CreatedAt    time.Time      `json:"created_at"`
@@ -50,6 +52,7 @@ type NewsResponse struct {
 	Category     string         `json:"category"`
 	Status       string         `json:"status"`
 	Title        string         `json:"title"`
+	Summary      string         `json:"summary"`
 	LanguageCode string         `json:"language_code"`
 	PublishedAt  *time.Time     `json:"published_at,omitempty"`
 	Metadata     utils.Metadata `json:"metadata"`

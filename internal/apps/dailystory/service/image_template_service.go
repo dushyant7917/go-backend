@@ -87,7 +87,7 @@ func (s *imageTemplateService) UpdateImageTemplate(id uuid.UUID, req models.Upda
 	if req.Config != nil {
 		template.Config = req.Config
 	}
-	if req.Metadata != nil && len(req.Metadata) > 0 {
+	if len(req.Metadata) > 0 {
 		// Merge metadata (partial update)
 		if template.Metadata == nil {
 			template.Metadata = make(utils.Metadata)
