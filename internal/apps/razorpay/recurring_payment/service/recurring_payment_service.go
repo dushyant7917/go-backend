@@ -153,7 +153,7 @@ func (s *recurringPaymentService) getConfig(appName string) (*clientModels.Razor
 
 // ==================== Generic Helpers ====================
 
-const maxConcurrency = 20
+const maxConcurrency = 15
 
 // processInParallel runs a processor function in parallel over items with bounded concurrency
 func processInParallel[T any](items []T, processor func(T) error, logPrefix string) {

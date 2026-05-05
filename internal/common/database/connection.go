@@ -10,6 +10,37 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+// PoolProfile defines connection pool settings for different workload patterns.
+type PoolProfile struct {
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLifetime time.Duration
+	ConnMaxIdleTime time.Duration
+}
+
+// ServerPoolProfile is optimized for the web server:
+//   - Many short-lived requests, low latency requirements
+//   - Keep idle connections warm for fast API response
+//   - MaxOpenConns should cover peak concurrent API requests
+//   - MaxIdleConns should match MaxOpenConns to avoid cold-start latency
+var ServerPoolProfile = PoolProfile{
+	MaxOpenConns:    15,
+	MaxIdleConns:    15,
+	ConnMaxLifetime: 10 * time.Minute,
+	ConnMaxIdleTime: 10 * time.Minute,
+}
+
+// CronPoolProfile is optimized for cron jobs:
+//   - MaxOpenConns matches max goroutines (20) to prevent pool exhaustion
+//   - MaxIdleConns is low (2) because the process exits after the job finishes
+//   - ConnMaxIdleTime is short to free PostgreSQL resources quickly
+var CronPoolProfile = PoolProfile{
+	MaxOpenConns:    15,
+	MaxIdleConns:    2,
+	ConnMaxLifetime: 10 * time.Minute,
+	ConnMaxIdleTime: 1 * time.Minute,
+}
+
 // Config holds database configuration
 type Config struct {
 	Host     string
@@ -20,8 +51,17 @@ type Config struct {
 	SSLMode  string
 }
 
-// NewConnection creates a new database connection
+// NewConnection creates a connection for the web server (ServerPoolProfile).
 func NewConnection(config Config) (*gorm.DB, error) {
+	return newConnectionWithProfile(config, ServerPoolProfile)
+}
+
+// NewCronConnection creates a connection for cron jobs (CronPoolProfile).
+func NewCronConnection(config Config) (*gorm.DB, error) {
+	return newConnectionWithProfile(config, CronPoolProfile)
+}
+
+func newConnectionWithProfile(config Config, profile PoolProfile) (*gorm.DB, error) {
 	dsn := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
 		config.Host,
@@ -44,16 +84,12 @@ func NewConnection(config Config) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to get underlying sql.DB: %w", err)
 	}
 
-	// Pool configuration to prevent connection exhaustion and hangs
-	// MaxOpenConns: limits total connections to prevent overwhelming PostgreSQL
-	sqlDB.SetMaxOpenConns(25)
-	// MaxIdleConns: keep enough idle connections to avoid reconnect churn
-	sqlDB.SetMaxIdleConns(25)
-	// ConnMaxLifetime: recycle connections to prevent stale TCP connections
-	sqlDB.SetConnMaxLifetime(10 * time.Minute)
-	// ConnMaxIdleTime: keep idle connections alive to avoid cold-start latency
-	sqlDB.SetConnMaxIdleTime(10 * time.Minute)
+	sqlDB.SetMaxOpenConns(profile.MaxOpenConns)
+	sqlDB.SetMaxIdleConns(profile.MaxIdleConns)
+	sqlDB.SetConnMaxLifetime(profile.ConnMaxLifetime)
+	sqlDB.SetConnMaxIdleTime(profile.ConnMaxIdleTime)
 
-	log.Println("Database connection established successfully")
+	log.Printf("Database connection established (pool: open=%d idle=%d lifetime=%s idleTime=%s)",
+		profile.MaxOpenConns, profile.MaxIdleConns, profile.ConnMaxLifetime, profile.ConnMaxIdleTime)
 	return db, nil
 }

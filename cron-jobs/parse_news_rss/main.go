@@ -206,7 +206,7 @@ func main() {
 		SSLMode:  utils.GetEnv("DB_SSL_MODE", "disable"),
 	}
 
-	db, err := database.NewConnection(dbConfig)
+	db, err := database.NewCronConnection(dbConfig)
 	if err != nil {
 		log.Fatalf("[%s] ✗ Failed to connect to database: %v\n", timestamp, err)
 	}
@@ -302,7 +302,7 @@ func main() {
 
 	// Worker pool for processing news items concurrently
 	// Use a buffered channel as semaphore to limit concurrency
-	maxConcurrentItems := 20
+	maxConcurrentItems := 10
 	itemSemaphore := make(chan struct{}, maxConcurrentItems)
 	var itemWg sync.WaitGroup
 

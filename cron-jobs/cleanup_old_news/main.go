@@ -53,7 +53,7 @@ func main() {
 		SSLMode:  utils.GetEnv("DB_SSL_MODE", "disable"),
 	}
 
-	db, err := database.NewConnection(dbConfig)
+	db, err := database.NewCronConnection(dbConfig)
 	if err != nil {
 		log.Fatalf("[%s] ✗ Failed to connect to database: %v\n", timestamp, err)
 	}
@@ -139,7 +139,7 @@ func main() {
 
 	// Delete media files from R2
 	if len(fileKeys) > 0 {
-		log.Printf("[%s] Deleting %d media files from R2 with 20 goroutines...\n", timestamp, len(fileKeys))
+		log.Printf("[%s] Deleting %d media files from R2 with 15 goroutines...\n", timestamp, len(fileKeys))
 
 		// Split into batches of 1000 (R2/S3 limit per request)
 		var batches [][]string
@@ -151,8 +151,8 @@ func main() {
 			batches = append(batches, fileKeys[i:end])
 		}
 
-		// Use 20 goroutines to process batches
-		numWorkers := 20
+		// Use 15 goroutines to process batches
+		numWorkers := 15
 		if len(batches) < numWorkers {
 			numWorkers = len(batches)
 		}

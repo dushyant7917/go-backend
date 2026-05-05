@@ -42,7 +42,7 @@ func main() {
 		SSLMode:  utils.GetEnv("DB_SSL_MODE", "disable"),
 	}
 
-	db, err := database.NewConnection(dbConfig)
+	db, err := database.NewCronConnection(dbConfig)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
