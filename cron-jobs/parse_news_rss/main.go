@@ -76,7 +76,7 @@ type TranslationPair struct {
 type TranslationResult struct {
 	// Converted Hindi headline (40 chars max, poster format)
 	HindiHeadline string
-	// Converted Hindi short summary (200 chars max, poster format)
+	// Converted Hindi short summary (150 chars max, poster format)
 	HindiSummary string
 	// Translations of Hindi headline and summary to other languages
 	Translations map[string]TranslationPair
@@ -166,7 +166,7 @@ const llmHeadlineGuidelines = `Headline guidelines (शीर्षक निर
 // llmSummaryGuidelines contains the shared guidelines for LLM short summary conversion
 const llmSummaryGuidelines = `Summary guidelines (सारांश निर्देश):
 - Convert the content into a single factual short summary that summarizes all key information
-- The summary must not exceed 200 characters (अधिकतम 200 अक्षर)
+- The summary must not exceed 150 characters (अधिकतम 150 अक्षर)
 - The summary should convey complete information (पूरी जानकारी) so users understand the news without reading the full article
 - Avoid teaser-style text (चुभाने वाला टेक्स्ट) like "जानें क्या हुआ", "पढ़ें विवरण", "और जानें", "आप विश्वास नहीं करेंगे"
 - Include the कौन (who), क्या (what), कब (when), कहाँ (where), and क्यों (why) if available in the original content
