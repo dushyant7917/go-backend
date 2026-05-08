@@ -158,7 +158,7 @@ const (
 // llmHeadlineGuidelines contains the shared guidelines for LLM headline creation
 const llmHeadlineGuidelines = `Headline guidelines (शीर्षक निर्देश):
 - Create a concise news headline that captures the essence of the news
-- The headline must not exceed 40 characters (अधिकतम 40 अक्षर)
+- The headline must not exceed 30 characters (अधिकतम 30 अक्षर)
 - The headline should be short and catchy (छोटा और आकर्षक)
 - Avoid teaser-style text (चुभाने वाला टेक्स्ट) like "जानें क्या हुआ", "पढ़ें विवरण", "और जानें"
 - The headline should make readers want to read the summary.`
