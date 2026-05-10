@@ -46,7 +46,7 @@ var notificationMessages = map[string]struct {
 const (
 	defaultLanguage = "hi"            // Default language for users without language_code set
 	targetAppName   = "DailyStoryApp" // Target app for this cron job
-	userAgeDays     = 7               // Only notify users created within last 7 days
+	userAgeDays     = 10              // Only notify users created within last 10 days
 )
 
 // userMessage pairs a push token with its localized notification message
@@ -178,18 +178,18 @@ func main() {
 	userRepo := repository.NewUserRepository(db)
 	pushClient := notification.NewExpoPushClient()
 
-	// Find new users (created within last 7 days) with push tokens and no active subscription
-	users, err := userRepo.FindNewUsersWithoutActiveSubscription(targetAppName, userAgeDays)
+	// Find users created within last 10 days with push tokens
+	users, err := userRepo.FindRecentUsers(targetAppName, userAgeDays)
 	if err != nil {
 		log.Fatalf("[%s] ✗ Failed to find users: %v\n", timestamp, err)
 	}
 
 	if len(users) == 0 {
-		log.Printf("[%s] No new users without active subscription found for app: %s\n", timestamp, targetAppName)
+		log.Printf("[%s] No recent users found for app: %s\n", timestamp, targetAppName)
 		os.Exit(0)
 	}
 
-	log.Printf("[%s] Found %d new users without active subscription\n", timestamp, len(users))
+	log.Printf("[%s] Found %d recent users\n", timestamp, len(users))
 
 	// Build localized notification messages
 	userMessages := buildUserMessages(users, timestamp)
