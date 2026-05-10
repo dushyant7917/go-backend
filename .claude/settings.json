@@ -1,0 +1,36 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /Users/dushyant7917/D7/go-backend/.claude/hooks/post_edit_check.sh",
+            "timeout": 30,
+            "statusMessage": "Checking build and reviewing changes..."
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(make build)",
+            "command": "find /Users/dushyant7917/D7/go-backend/bin -maxdepth 1 -type f -delete 2>/dev/null || true",
+            "timeout": 10,
+            "statusMessage": "Cleaning up build artifacts..."
+          },
+          {
+            "type": "command",
+            "if": "Bash(go build *)",
+            "command": "bash /Users/dushyant7917/D7/go-backend/.claude/hooks/cleanup_build_artifacts.sh",
+            "timeout": 10,
+            "statusMessage": "Cleaning up build artifacts..."
+          }
+        ]
+      }
+    ]
+  }
+}
