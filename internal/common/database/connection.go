@@ -24,8 +24,8 @@ type PoolProfile struct {
 //   - MaxOpenConns should cover peak concurrent API requests
 //   - MaxIdleConns should match MaxOpenConns to avoid cold-start latency
 var ServerPoolProfile = PoolProfile{
-	MaxOpenConns:    15,
-	MaxIdleConns:    15,
+	MaxOpenConns:    20,
+	MaxIdleConns:    20,
 	ConnMaxLifetime: 10 * time.Minute,
 	ConnMaxIdleTime: 10 * time.Minute,
 }
