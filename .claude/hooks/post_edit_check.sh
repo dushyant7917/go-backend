@@ -3,21 +3,19 @@ set -euo pipefail
 
 cd /Users/dushyant7917/D7/go-backend
 
-INPUT=$(cat)
-FILE=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)
+# Get all modified Go files (staged + unstaged)
+GO_FILES=$(git diff --name-only HEAD 2>/dev/null | grep '\.go$' || true)
 
-# Only process Go files
-if ! echo "$FILE" | grep -qE '\.go$'; then
+if [ -z "$GO_FILES" ]; then
     exit 0
 fi
 
 # Run go build to check for compilation errors
 BUILD_OUT=$(go build ./... 2>&1 || true)
 
-# Get git diff for the changed file
-DIFF_OUT=$(git diff -- "$FILE" 2>/dev/null | head -150)
+# Get git diff for all changed Go files (capped at 300 lines)
+DIFF_OUT=$(git diff HEAD -- $GO_FILES 2>/dev/null | head -300)
 
-# Build context for Claude to review
 CONTEXT=""
 if [ -n "$BUILD_OUT" ]; then
     CONTEXT="=== BUILD ERRORS (fix these) ===\n${BUILD_OUT}\n\n"
@@ -30,5 +28,4 @@ if [ -z "$CONTEXT" ]; then
     exit 0
 fi
 
-# Inject context back to Claude as additionalContext
-printf '%s' "$CONTEXT" | jq -Rs '{hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: .}}'
+printf '%s' "$CONTEXT" | jq -Rs '{hookSpecificOutput: {hookEventName: "Stop", additionalContext: .}}'
