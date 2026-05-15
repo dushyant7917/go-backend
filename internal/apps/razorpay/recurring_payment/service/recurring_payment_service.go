@@ -522,7 +522,7 @@ func (s *recurringPaymentService) CreateRegistrationLink(req models.CreateRegist
 			"method":     "upi",
 			"max_amount": req.MaxAmount,
 			"expire_at":  req.StartAt.AddDate(1, 0, 0).Unix(), // 1 year from start date
-			"frequency":  req.Frequency,
+			"frequency":  "as_presented",
 		},
 		"notes": map[string]interface{}{
 			"app_name": req.AppName,
@@ -634,7 +634,7 @@ func (s *recurringPaymentService) createAuthorizationRazorpayOrder(
 		"token": map[string]interface{}{
 			"max_amount": req.MaxAmount,
 			"expire_at":  req.StartAt.AddDate(1, 0, 0).Unix(), // 1 year from start date
-			"frequency":  req.Frequency,
+			"frequency":  "as_presented",
 		},
 		"notes": map[string]interface{}{
 			"purpose":  "authorization",
