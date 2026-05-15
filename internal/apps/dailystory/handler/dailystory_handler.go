@@ -3,6 +3,7 @@ package handler
 import (
 	"log"
 	"net/http"
+	"time"
 
 	metaEventModels "go-backend/internal/apps/meta_event/models"
 	metaEventSvc "go-backend/internal/apps/meta_event/service"
@@ -121,13 +122,11 @@ func (h *DailystoryHandler) checkSubscriptionStatus(phone, appName string) *subs
 func (h *DailystoryHandler) checkRecurringPaymentStatus(userID uuid.UUID, appName string) *recurringPaymentModels.RecurringPaymentStatusResponse {
 	result := &recurringPaymentModels.RecurringPaymentStatusResponse{}
 
-	// Check for active recurring payment
-	_, err := h.recurringPaymentRepo.FindActiveRecurringPaymentByUserID(userID, appName)
+	isActive, err := h.recurringPaymentRepo.IsSubscriptionActive(userID, appName, time.Now().UTC())
 	if err == nil {
-		result.ActiveSubscription = true
+		result.ActiveSubscription = isActive
 	}
 
-	// Check if ever completed authorization
 	hasCompleted, err := h.recurringPaymentRepo.HasCompletedAuthorizationPayment(userID, appName)
 	if err == nil {
 		result.UsedFreeTrial = hasCompleted

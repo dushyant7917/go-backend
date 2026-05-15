@@ -26,6 +26,7 @@ type RecurringPaymentRepository interface {
 	FindRecurringPaymentByTokenID(tokenID string) (*models.RecurringPayment, error)
 	FindRecurringPaymentByCustomerID(customerID string) (*models.RecurringPayment, error)
 	HasCompletedAuthorizationPayment(userID uuid.UUID, appName string) (bool, error)
+	IsSubscriptionActive(userID uuid.UUID, appName string, now time.Time) (bool, error)
 	UpdateRecurringPayment(tx *gorm.DB, rp *models.RecurringPayment) error
 
 	// BillingCycle operations
@@ -224,6 +225,35 @@ func (r *recurringPaymentRepository) HasCompletedAuthorizationPayment(userID uui
 		Where("user_id = ? AND app_name = ?", userID, appName).
 		Where("metadata ? 'authorized_at'").
 		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// IsSubscriptionActive returns true if the user has a billing cycle covering now with an appropriate status.
+// Cycle 0 (authorization/trial) requires paid; cycle >= 1 requires paid or pending.
+// Checks across all recurring payments for the user to handle the double-authorization edge case.
+func (r *recurringPaymentRepository) IsSubscriptionActive(userID uuid.UUID, appName string, now time.Time) (bool, error) {
+	var count int64
+	err := r.db.Raw(`
+		SELECT COUNT(*)
+		FROM billing_cycles bc
+		JOIN recurring_payments rp ON rp.id = bc.recurring_payment_id
+		WHERE rp.user_id = ?
+		  AND rp.app_name = ?
+		  AND rp.deleted_at IS NULL
+		  AND bc.start_at <= ?
+		  AND bc.end_at >= ?
+		  AND (
+		    (bc.cycle_number = 0 AND bc.status = ?)
+		    OR
+		    (bc.cycle_number >= 1 AND bc.status IN ?)
+		  )
+	`, userID, appName, now, now,
+		models.BillingCycleStatusPaid,
+		[]models.BillingCycleStatus{models.BillingCycleStatusPaid, models.BillingCycleStatusPending},
+	).Scan(&count).Error
 	if err != nil {
 		return false, err
 	}
