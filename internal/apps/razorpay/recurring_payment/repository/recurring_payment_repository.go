@@ -233,9 +233,12 @@ func (r *recurringPaymentRepository) HasCompletedAuthorizationPayment(userID uui
 
 // IsSubscriptionActive returns true if the user has a billing cycle covering now with an appropriate status.
 // Cycle 0 (authorization/trial) requires paid; cycle >= 1 requires paid or pending.
+// A 24h grace window is applied to end_at to cover the intentional gap between cycle 0 and cycle 1,
+// and to handle cases where the next cycle hasn't been created yet.
 // Checks across all recurring payments for the user to handle the double-authorization edge case.
 func (r *recurringPaymentRepository) IsSubscriptionActive(userID uuid.UUID, appName string, now time.Time) (bool, error) {
 	var count int64
+	endAtThreshold := now.Add(-24 * time.Hour)
 	err := r.db.Raw(`
 		SELECT COUNT(*)
 		FROM billing_cycles bc
@@ -250,7 +253,7 @@ func (r *recurringPaymentRepository) IsSubscriptionActive(userID uuid.UUID, appN
 		    OR
 		    (bc.cycle_number >= 1 AND bc.status IN ?)
 		  )
-	`, userID, appName, now, now,
+	`, userID, appName, now, endAtThreshold,
 		models.BillingCycleStatusPaid,
 		[]models.BillingCycleStatus{models.BillingCycleStatusPaid, models.BillingCycleStatusPending},
 	).Scan(&count).Error
