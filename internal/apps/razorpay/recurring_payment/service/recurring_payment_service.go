@@ -261,8 +261,8 @@ func (s *recurringPaymentService) handlePaymentFailed(
 		return
 	}
 
-	// Mark expired if max attempts reached (8)
-	if billingCycle.ChargeAttempts >= 8 {
+	// Mark expired if max attempts reached (9)
+	if billingCycle.ChargeAttempts >= 9 {
 		billingCycle.Status = models.BillingCycleStatusFailed
 		recurringPayment.Status = models.RecurringPaymentStatusExpired
 		return
@@ -1466,7 +1466,7 @@ func (s *recurringPaymentService) processPendingBillingCycleRetry(rp models.Recu
 		return fmt.Errorf("latest billing cycle is not pending")
 	}
 
-	if bc.ChargeAttempts >= 8 {
+	if bc.ChargeAttempts >= 9 {
 		return s.markBillingCycleAsFailed(bc, &rp)
 	}
 
@@ -1985,7 +1985,7 @@ func (s *recurringPaymentService) handleRecurringPaymentError(
 		needsRPUpdate = true
 	} else if billingCycle.CycleNumber > 0 {
 		// Generic error on a billing cycle: schedule retry or mark expired
-		if billingCycle.ChargeAttempts >= 8 {
+		if billingCycle.ChargeAttempts >= 9 {
 			billingCycle.Status = models.BillingCycleStatusFailed
 			recurringPayment.Status = models.RecurringPaymentStatusExpired
 			needsRPUpdate = true
