@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/time/rate"
 
 	metaEventSvc "go-backend/internal/apps/meta_event/service"
 	metaDatasetModels "go-backend/internal/apps/metadataset/config/models"
@@ -68,7 +71,15 @@ type recurringPaymentService struct {
 	cacheMutex        sync.RWMutex
 	metaDatasetClient *notification.MetaDatasetClient
 	posthogClient     *analytics.PostHogClient
+	// Per-resource rate limiters for cron job Razorpay API calls (90 req/min assumed)
+	orderLimiter   *rate.Limiter
+	paymentLimiter *rate.Limiter
 }
+
+// razorpayAPIRateLimit is the assumed per-resource rate limit (90 req/min = 1.5 req/sec).
+// Burst of 5 absorbs brief spikes without exceeding the per-minute budget meaningfully.
+const razorpayAPIRateLimit = rate.Limit(90.0 / 60.0)
+const razorpayAPIBurst = 5
 
 // NewRecurringPaymentService creates a new instance of RecurringPaymentService
 func NewRecurringPaymentService(
@@ -90,6 +101,8 @@ func NewRecurringPaymentService(
 		configCache:       make(map[string]*clientModels.RazorpayConfig),
 		metaDatasetClient: notification.NewMetaDatasetClient(),
 		posthogClient:     analytics.NewPostHogClient(),
+		orderLimiter:      rate.NewLimiter(razorpayAPIRateLimit, razorpayAPIBurst),
+		paymentLimiter:    rate.NewLimiter(razorpayAPIRateLimit, razorpayAPIBurst),
 	}
 }
 
@@ -153,7 +166,13 @@ func (s *recurringPaymentService) getConfig(appName string) (*clientModels.Razor
 
 // ==================== Generic Helpers ====================
 
-const maxConcurrency = 15
+// waitForRateLimit blocks until the rate limiter grants a token.
+// Uses context.Background() because cron jobs have no cancellation context.
+func waitForRateLimit(limiter *rate.Limiter) {
+	_ = limiter.Wait(context.Background())
+}
+
+const maxConcurrency = 5
 
 // processInParallel runs a processor function in parallel over items with bounded concurrency
 func processInParallel[T any](items []T, processor func(T) error, logPrefix string) {
@@ -1555,6 +1574,7 @@ func (s *recurringPaymentService) createRetryOrder(
 		},
 	}
 
+	waitForRateLimit(s.orderLimiter)
 	order, err := razorpayClient.Order.Create(orderData, nil)
 	if err != nil {
 		// Emit PostHog event for order creation failure
@@ -1699,6 +1719,7 @@ func (s *recurringPaymentService) createNewCycleOrder(
 		},
 	}
 
+	waitForRateLimit(s.orderLimiter)
 	order, err := razorpayClient.Order.Create(orderData, nil)
 	if err != nil {
 		// Emit PostHog event for order creation failure
@@ -1791,6 +1812,7 @@ func (s *recurringPaymentService) createRazorpayRecurringPayment(pa models.Payme
 
 	razorpayClient := s.getRazorpayClient(config)
 
+	waitForRateLimit(s.orderLimiter)
 	order, err := razorpayClient.Order.Fetch(*pa.RazorpayOrderID, nil, nil)
 	if err != nil {
 		return fmt.Errorf("failed to fetch order: %w", err)
@@ -1838,6 +1860,7 @@ func (s *recurringPaymentService) createRazorpayRecurringPayment(pa models.Payme
 		},
 	}
 
+	waitForRateLimit(s.paymentLimiter)
 	payment, err := razorpayClient.Payment.CreateRecurringPayment(recurringData, nil)
 	// payment, err := s.createRecurringPaymentDirectHTTP(config, recurringData)
 	if err != nil {
@@ -2079,6 +2102,7 @@ func (s *recurringPaymentService) reconcileFromPaymentID(
 	billingCycle *models.BillingCycle,
 	recurringPayment *models.RecurringPayment,
 ) error {
+	waitForRateLimit(s.paymentLimiter)
 	payment, err := razorpayClient.Payment.Fetch(*pa.RazorpayPaymentID, nil, nil)
 	if err != nil {
 		return fmt.Errorf("failed to fetch payment: %w", err)
@@ -2128,6 +2152,7 @@ func (s *recurringPaymentService) reconcileFromOrderID(
 	billingCycle *models.BillingCycle,
 	recurringPayment *models.RecurringPayment,
 ) error {
+	waitForRateLimit(s.orderLimiter)
 	order, err := razorpayClient.Order.Fetch(*pa.RazorpayOrderID, nil, nil)
 	if err != nil {
 		return fmt.Errorf("failed to fetch order: %w", err)
