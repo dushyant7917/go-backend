@@ -22,8 +22,8 @@ const (
 	userAgeDays     = 7
 	batchSize       = 10
 
-	// Notification delivery window: 1pm–9pm IST = 7:30am–3:30pm UTC
-	windowStartHourUTC   = 7
+	// Notification delivery window: 10am–9pm IST = 4:30am–3:30pm UTC
+	windowStartHourUTC   = 4
 	windowStartMinuteUTC = 30
 	windowEndHourUTC     = 15
 	windowEndMinuteUTC   = 30
@@ -67,8 +67,8 @@ func buildUserMessages(users []models.User, timestamp string) []userMessage {
 	return msgs
 }
 
-// scheduleBatchTimes returns M evenly-spaced times within the 1pm–9pm IST window.
-// If M == 1 the single batch fires at windowStart (1pm).
+// scheduleBatchTimes returns M evenly-spaced times within the 10am–9pm IST window.
+// If M == 1 the single batch fires at windowStart (10am).
 func scheduleBatchTimes(m int, today time.Time) []time.Time {
 	d := today.UTC()
 	windowStart := time.Date(d.Year(), d.Month(), d.Day(), windowStartHourUTC, windowStartMinuteUTC, 0, 0, time.UTC)
@@ -144,16 +144,16 @@ func main() {
 
 	userRepo := repository.NewUserRepository(db)
 
-	users, err := userRepo.FindNewUsersWithoutActiveSubscription(targetAppName, userAgeDays)
+	users, err := userRepo.FindUsersEligibleForPushNotification(targetAppName, userAgeDays)
 	if err != nil {
-		log.Fatalf("[%s] ✗ Failed to find users: %v\n", timestamp, err)
+		log.Fatalf("[%s] ✗ Failed to find eligible users: %v\n", timestamp, err)
 	}
 
 	if len(users) == 0 {
-		log.Printf("[%s] No new users without active subscription found\n", timestamp)
+		log.Printf("[%s] No eligible users found\n", timestamp)
 		os.Exit(0)
 	}
-	log.Printf("[%s] Found %d users\n", timestamp, len(users))
+	log.Printf("[%s] Found %d eligible users\n", timestamp, len(users))
 
 	msgs := buildUserMessages(users, timestamp)
 	if len(msgs) == 0 {
