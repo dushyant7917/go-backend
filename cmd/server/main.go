@@ -15,6 +15,7 @@ import (
 	agoraChatService "go-backend/internal/apps/agora/chat/service"
 	chemistryHandler "go-backend/internal/apps/chemistry/handler"
 	crushHandler "go-backend/internal/apps/crush/handler"
+	dailystoryInngest "go-backend/internal/apps/dailystory/inngest"
 	crushRepository "go-backend/internal/apps/crush/repository"
 	crushService "go-backend/internal/apps/crush/service"
 	dailystoryHandler "go-backend/internal/apps/dailystory/handler"
@@ -52,8 +53,10 @@ import (
 	wingwomanService "go-backend/internal/apps/wingwoman/service"
 	"go-backend/internal/common/database"
 	"go-backend/internal/common/middleware"
+	"go-backend/pkg/notification"
 
 	"github.com/gin-gonic/gin"
+	"github.com/inngest/inngestgo"
 	"github.com/joho/godotenv"
 )
 
@@ -253,6 +256,19 @@ func main() {
 
 	// PostHog config creation endpoint (before CORS middleware for admin access)
 	router.POST("/api/v1/posthog-configs", posthogConfigH.CreatePostHogConfig)
+
+	// Inngest function handler — server-to-server, no CORS needed
+	pushClient := notification.NewExpoPushClient()
+	inngestClient, err := inngestgo.NewClient(inngestgo.ClientOpts{
+		AppID: getEnv("INNGEST_APP_ID", "go-backend"),
+	})
+	if err != nil {
+		log.Fatalf("Failed to create Inngest client: %v", err)
+	}
+	if regErr := dailystoryInngest.RegisterFunctions(inngestClient, pushClient); regErr != nil {
+		log.Fatalf("Failed to register Inngest functions: %v", regErr)
+	}
+	router.Any("/api/inngest", gin.WrapH(inngestClient.Serve()))
 
 	// Setup CORS middleware
 	router.Use(middleware.SetupCORS(env))

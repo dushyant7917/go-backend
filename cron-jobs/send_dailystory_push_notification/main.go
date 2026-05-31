@@ -1,163 +1,132 @@
 package main
 
 import (
-	"fmt"
+	"context"
 	"log"
 	"os"
 	"time"
 
+	"go-backend/internal/apps/dailystory/inngest"
 	"go-backend/internal/apps/user/models"
 	"go-backend/internal/apps/user/repository"
 	"go-backend/internal/common/database"
 	"go-backend/pkg/notification"
 	"go-backend/pkg/utils"
 
+	"github.com/inngest/inngestgo"
 	"github.com/joho/godotenv"
 )
 
-// Notification message templates by language code
-var notificationMessages = map[string]struct {
-	Title string
-	Body  string
-}{
-	"hi": {
-		Title: "आपके लिए नए न्यूज़ पोस्टर्स तैयार हैं!",
-		Body:  "नए पोस्टर्स शेयर करें और लोगों के बीच वायरल हो जाएं।",
-	},
-	"gu": {
-		Title: "તમારા માટે નવા ન્યૂઝ પોસ્ટર્સ તૈયાર છે!",
-		Body:  "નવા પોસ્ટર્સ શેર કરો અને લોકોમાં વાયરલ થઈ જાઓ.",
-	},
-	"pa": {
-		Title: "ਤੁਹਾਡੇ ਲਈ ਨਵੇਂ ਨਿਊਜ਼ ਪੋਸਟਰ ਤਿਆਰ ਹਨ!",
-		Body:  "ਨਵੇਂ ਪੋਸਟਰ ਸ਼ੇਅਰ ਕਰੋ ਅਤੇ ਲੋਕਾਂ ਵਿੱਚ ਵਾਇਰਲ ਹੋ ਜਾਓ।",
-	},
-	"mr": {
-		Title: "तुमच्यासाठी नवीन न्यूज पोस्टर्स तयार आहेत!",
-		Body:  "नवीन पोस्टर्स शेअर करा आणि लोकांमध्ये व्हायरल व्हा.",
-	},
-	"bn": {
-		Title: "আপনার জন্য নতুন নিউজ পোস্টার তৈরি!",
-		Body:  "নতুন পোস্টার শেয়ার করুন এবং মানুষের মধ্যে ভাইরাল হয়ে যান।",
-	},
-}
-
-// Cron job constants
 const (
-	defaultLanguage = "hi"            // Default language for users without language_code set
-	targetAppName   = "DailyStoryApp" // Target app for this cron job
-	userAgeDays     = 7               // Only notify users created within last 7 days
+	targetAppName = "DailyStoryApp"
+	userAgeDays     = 7
+	batchSize       = 10
+
+	// Notification delivery window: 1pm–9pm IST = 7:30am–3:30pm UTC
+	windowStartHourUTC   = 7
+	windowStartMinuteUTC = 30
+	windowEndHourUTC     = 15
+	windowEndMinuteUTC   = 30
 )
 
 // userMessage pairs a push token with its localized notification message
 type userMessage struct {
 	token    string
-	message  notification.ExpoMessage
 	langCode string
 }
 
-// buildUserMessages constructs localized notification messages for users.
+// buildUserMessages constructs token+langCode pairs for users with valid push tokens.
 func buildUserMessages(users []models.User, timestamp string) []userMessage {
-	userMessages := make([]userMessage, 0, len(users))
+	msgs := make([]userMessage, 0, len(users))
 
 	for _, user := range users {
 		if user.Metadata == nil {
 			continue
 		}
 
-		// Get push notification token from metadata
 		token, ok := user.Metadata["push_notification_token"].(string)
 		if !ok || token == "" {
 			continue
 		}
 
-		// Validate token format
 		if !notification.ValidatePushToken(token) {
 			log.Printf("[%s] Skipping invalid token for user %s\n", timestamp, user.ID)
 			continue
 		}
 
-		// Get user's language preference, default to Hindi
-		langCode := defaultLanguage
+		langCode := inngest.DefaultLanguage
 		if lc, ok := user.Metadata["language_code"].(string); ok && lc != "" {
-			langCode = lc
+			if _, supported := inngest.NotificationMessages[lc]; supported {
+				langCode = lc
+			}
 		}
 
-		// Get message template
-		msgTemplate, exists := notificationMessages[langCode]
-		if !exists {
-			msgTemplate = notificationMessages[defaultLanguage]
-			log.Printf("[%s] Unknown language_code '%s' for user %s, using default\n", timestamp, langCode, user.ID)
+		msgs = append(msgs, userMessage{token: token, langCode: langCode})
+	}
+
+	return msgs
+}
+
+// scheduleBatchTimes returns M evenly-spaced times within the 1pm–9pm IST window.
+// If M == 1 the single batch fires at windowStart (1pm).
+func scheduleBatchTimes(m int, today time.Time) []time.Time {
+	d := today.UTC()
+	windowStart := time.Date(d.Year(), d.Month(), d.Day(), windowStartHourUTC, windowStartMinuteUTC, 0, 0, time.UTC)
+	windowEnd := time.Date(d.Year(), d.Month(), d.Day(), windowEndHourUTC, windowEndMinuteUTC, 0, 0, time.UTC)
+
+	times := make([]time.Time, m)
+	if m == 1 {
+		times[0] = windowStart
+		return times
+	}
+	interval := windowEnd.Sub(windowStart) / time.Duration(m-1)
+	for i := range times {
+		times[i] = windowStart.Add(time.Duration(i) * interval)
+	}
+	return times
+}
+
+// buildBatchEvents divides userMessages into groups of batchSize and returns
+// one Inngest event per group with its scheduled delivery time.
+func buildBatchEvents(msgs []userMessage, batchTimes []time.Time) []any {
+	events := make([]any, 0, len(batchTimes))
+	for i, t := range batchTimes {
+		start := i * batchSize
+		end := min(start+batchSize, len(msgs))
+		group := msgs[start:end]
+
+		tokens := make([]string, len(group))
+		langCodes := make([]string, len(group))
+		for j, m := range group {
+			tokens[j] = m.token
+			langCodes[j] = m.langCode
 		}
 
-		userMessages = append(userMessages, userMessage{
-			token:    token,
-			langCode: langCode,
-			message: notification.ExpoMessage{
-				To:       token,
-				Title:    msgTemplate.Title,
-				Body:     msgTemplate.Body,
-				Data:     map[string]interface{}{"title": msgTemplate.Title, "body": msgTemplate.Body},
-				Sound:    "default",
-				Priority: "high",
+		events = append(events, inngest.BatchNotificationEvent{
+			Name: inngest.BatchNotificationEventName,
+			Data: inngest.BatchNotificationEventData{
+				Tokens:      tokens,
+				LangCodes:   langCodes,
+				ScheduledAt: t,
+				BatchIndex:  i,
 			},
 		})
 	}
-
-	return userMessages
-}
-
-// sendBatchNotifications sends notifications in sequential batches.
-func sendBatchNotifications(pushClient *notification.ExpoPushClient, messages []notification.ExpoMessage, targetTokens []string, timestamp string) (int64, int64, []string) {
-	const batchSize = 100
-
-	var totalSuccess, totalFailed int64
-	var errorMessages []string
-
-	for i := 0; i < len(messages); i += batchSize {
-		end := i + batchSize
-		if end > len(messages) {
-			end = len(messages)
-		}
-		batch := messages[i:end]
-
-		results, err := pushClient.SendBatch(batch)
-		if err != nil {
-			totalFailed += int64(len(batch))
-			errorMessages = append(errorMessages, fmt.Sprintf("Batch failed: %v", err))
-			log.Printf("[%s] Batch failed: %v\n", timestamp, err)
-			continue
-		}
-
-		for j, result := range results {
-			if result != nil {
-				totalFailed++
-				errorMessages = append(errorMessages, fmt.Sprintf("Token %s: %v", targetTokens[i+j], result))
-			} else {
-				totalSuccess++
-			}
-		}
-	}
-
-	return totalSuccess, totalFailed, errorMessages
+	return events
 }
 
 func main() {
-	// Load environment variables from appropriate file
 	env := utils.GetEnv("GO_ENV", "local")
 	envFile := ".env." + env
 	if err := godotenv.Load(envFile); err != nil {
-		// Fallback to .env if environment-specific file not found
 		if err := godotenv.Load(); err != nil {
 			log.Printf("No %s or .env file found, using environment variables", envFile)
 		}
 	}
 
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	log.Printf("[%s] Starting push notification scheduler for app: %s\n", timestamp, targetAppName)
 
-	log.Printf("[%s] Starting push notification for app: %s\n", timestamp, targetAppName)
-
-	// Connect to database
 	dbConfig := database.Config{
 		Host:     utils.GetEnv("DB_HOST", "localhost"),
 		Port:     utils.GetEnv("DB_PORT", "5432"),
@@ -171,68 +140,55 @@ func main() {
 	if err != nil {
 		log.Fatalf("[%s] ✗ Failed to connect to database: %v\n", timestamp, err)
 	}
+	log.Printf("[%s] Database connected\n", timestamp)
 
-	log.Printf("[%s] Database connected successfully\n", timestamp)
-
-	// Initialize repository and notification client
 	userRepo := repository.NewUserRepository(db)
-	pushClient := notification.NewExpoPushClient()
 
-	// Find new users (created within last 7 days) with push tokens and no active subscription
 	users, err := userRepo.FindNewUsersWithoutActiveSubscription(targetAppName, userAgeDays)
 	if err != nil {
 		log.Fatalf("[%s] ✗ Failed to find users: %v\n", timestamp, err)
 	}
 
 	if len(users) == 0 {
-		log.Printf("[%s] No new users without active subscription found for app: %s\n", timestamp, targetAppName)
+		log.Printf("[%s] No new users without active subscription found\n", timestamp)
 		os.Exit(0)
 	}
+	log.Printf("[%s] Found %d users\n", timestamp, len(users))
 
-	log.Printf("[%s] Found %d new users without active subscription\n", timestamp, len(users))
-
-	// Build localized notification messages
-	userMessages := buildUserMessages(users, timestamp)
-
-	if len(userMessages) == 0 {
+	msgs := buildUserMessages(users, timestamp)
+	if len(msgs) == 0 {
 		log.Printf("[%s] No valid push notification tokens found\n", timestamp)
 		os.Exit(0)
 	}
+	log.Printf("[%s] Scheduling notifications for %d users in batches of %d\n", timestamp, len(msgs), batchSize)
 
-	log.Printf("[%s] Sending notifications to %d users\n", timestamp, len(userMessages))
+	numBatches := (len(msgs) + batchSize - 1) / batchSize
+	batchTimes := scheduleBatchTimes(numBatches, time.Now())
+	log.Printf("[%s] %d batches scheduled from %s to %s (IST)\n",
+		timestamp, numBatches,
+		batchTimes[0].Format("15:04"),
+		batchTimes[len(batchTimes)-1].Format("15:04"),
+	)
 
-	// Prepare slices for batch sending
-	messages := make([]notification.ExpoMessage, len(userMessages))
-	targetTokens := make([]string, len(userMessages))
-	messagesByLang := make(map[string]int)
+	events := buildBatchEvents(msgs, batchTimes)
 
-	for i, um := range userMessages {
-		messages[i] = um.message
-		targetTokens[i] = um.token
-		messagesByLang[um.langCode]++
+	inngestClient, err := inngestgo.NewClient(inngestgo.ClientOpts{
+		AppID: utils.GetEnv("INNGEST_APP_ID", "go-backend"),
+	})
+	if err != nil {
+		log.Fatalf("[%s] ✗ Failed to create Inngest client: %v\n", timestamp, err)
 	}
 
-	// Log language distribution
-	for lang, count := range messagesByLang {
-		log.Printf("[%s] Language %s: %d users\n", timestamp, lang, count)
+	ids, err := inngestClient.SendMany(context.Background(), events)
+	if err != nil {
+		log.Fatalf("[%s] ✗ Failed to send Inngest events: %v\n", timestamp, err)
 	}
 
-	// Send notifications in sequential batches
-	totalSuccess, totalFailed, errorMessages := sendBatchNotifications(pushClient, messages, targetTokens, timestamp)
-
-	log.Printf("[%s] ✓ Push notifications sent successfully!\n", timestamp)
-	log.Printf("[%s]   Success: %d, Failed: %d, Total: %d\n", timestamp, totalSuccess, totalFailed, len(messages))
-
-	if len(errorMessages) > 0 && totalFailed > 0 {
-		log.Printf("[%s]   Errors:\n", timestamp)
-		for _, errMsg := range errorMessages {
-			log.Printf("[%s]     - %s\n", timestamp, errMsg)
-		}
+	log.Printf("[%s] ✓ Scheduled %d batch events via Inngest\n", timestamp, len(ids))
+	for i, id := range ids {
+		log.Printf("[%s]   batch %d → event id %s (scheduled at %s IST)\n",
+			timestamp, i, id, batchTimes[i].Format("15:04"))
 	}
 
-	// Exit with success code if at least one notification was sent
-	if totalSuccess > 0 {
-		os.Exit(0)
-	}
-	os.Exit(1)
+	os.Exit(0)
 }
