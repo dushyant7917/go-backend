@@ -3,16 +3,22 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	dsmodels "go-backend/internal/apps/dailystory/models"
 	posthogModels "go-backend/internal/apps/posthog/config/models"
 	posthogRepository "go-backend/internal/apps/posthog/config/repository"
 	"go-backend/internal/apps/r2/config/repository"
@@ -31,39 +37,18 @@ import (
 	"gorm.io/gorm"
 )
 
-// News represents the news table
-type News struct {
-	ID           uuid.UUID      `gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	Link         string         `gorm:"type:varchar(2048);not null;unique"`
-	MediaFileKey *string        `gorm:"type:varchar(512)"`
-	Category     string         `gorm:"type:varchar(100);not null"`
-	Status       string         `gorm:"type:varchar(50);not null;default:'published'"`
-	PublishedAt  *time.Time     `gorm:"type:timestamp with time zone"`
-	Metadata     utils.Metadata `gorm:"type:jsonb;not null;default:'{}'"`
-	CreatedAt    time.Time      `gorm:"autoCreateTime"`
-	UpdatedAt    time.Time      `gorm:"autoUpdateTime"`
-}
-
-// NewsTranslation represents the news_translations table
-type NewsTranslation struct {
-	ID           uuid.UUID      `gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
-	NewsID       uuid.UUID      `gorm:"type:uuid;not null"`
-	Title        string         `gorm:"type:varchar(1000);not null"`
-	Summary      string         `gorm:"type:varchar(1000);not null"`
-	LanguageCode string         `gorm:"type:varchar(10);not null"`
-	Metadata     utils.Metadata `gorm:"type:jsonb;not null;default:'{}'"`
-	CreatedAt    time.Time      `gorm:"autoCreateTime"`
-	UpdatedAt    time.Time      `gorm:"autoUpdateTime"`
-}
-
-// TableName specifies the table name for News
-func (News) TableName() string {
-	return "news"
-}
-
-// TableName specifies the table name for NewsTranslation
-func (NewsTranslation) TableName() string {
-	return "news_translations"
+// computeContentHash returns a sha256 hex digest over normalized title + UTC date + source host.
+// The date is truncated to day precision (UTC) so minor timezone differences don't split the same article.
+// sourceHost is the hostname of the RSS feed URL (e.g. "www.bhaskar.com").
+func computeContentHash(title string, publishedAt *time.Time, sourceHost string) string {
+	normalizedTitle := strings.ToLower(strings.TrimSpace(title))
+	normalizedDate := ""
+	if publishedAt != nil {
+		normalizedDate = publishedAt.UTC().Format("2006-01-02")
+	}
+	input := normalizedTitle + "|" + normalizedDate + "|" + sourceHost
+	digest := sha256.Sum256([]byte(input))
+	return hex.EncodeToString(digest[:])
 }
 
 // TranslationPair holds both headline and summary translations for a language
@@ -72,78 +57,59 @@ type TranslationPair struct {
 	Summary  string
 }
 
-// TranslationResult holds translations for a news item (source is Hindi)
+// TranslationResult holds translations for a news item
 type TranslationResult struct {
-	// Converted Hindi headline (40 chars max, poster format)
-	HindiHeadline string
-	// Converted Hindi short summary (150 chars max, poster format)
-	HindiSummary string
-	// Translations of Hindi headline and summary to other languages
+	// Base language code (e.g. "hi" for Hindi-source feeds, "te" for Telugu-source feeds)
+	BaseLanguageCode string
+	// Headline in the base language (poster format, 30 chars max)
+	BaseHeadline string
+	// Short summary in the base language (poster format, 150 chars max)
+	BaseSummary string
+	// Translations of the headline and summary to additional languages
 	Translations map[string]TranslationPair
 }
 
-// GeminiConversionOnlyResponse for conversion only (no translations)
-type GeminiConversionOnlyResponse struct {
-	HindiHeadline string `json:"hindi_headline"`
-	HindiSummary  string `json:"hindi_summary"`
-}
-
-// GeminiSingleTranslationResponse for single language translation (convert + translate to one language)
-type GeminiSingleTranslationResponse struct {
-	HindiHeadline       string `json:"hindi_headline"`
-	HindiSummary        string `json:"hindi_summary"`
-	HeadlineTranslation string `json:"headline_translation"`
-	SummaryTranslation  string `json:"summary_translation"`
-}
-
-// GeminiMultiTranslationResponse for converting to headline+summary and translating to multiple languages
-type GeminiMultiTranslationResponse struct {
-	HindiHeadline    string `json:"hindi_headline"`
-	HindiSummary     string `json:"hindi_summary"`
-	PunjabiHeadline  string `json:"punjabi_headline"`
-	PunjabiSummary   string `json:"punjabi_summary"`
-	GujaratiHeadline string `json:"gujarati_headline"`
-	GujaratiSummary  string `json:"gujarati_summary"`
-	MarathiHeadline  string `json:"marathi_headline"`
-	MarathiSummary   string `json:"marathi_summary"`
-	BengaliHeadline  string `json:"bengali_headline"`
-	BengaliSummary   string `json:"bengali_summary"`
-}
-
-// Category-to-language mapping
-// Each category maps to the language codes it should be translated to (in addition to Hindi)
-// Empty slice means only Hindi (no additional translation needed)
+// categoryLanguageMapping maps each category to the full set of language codes that should be stored.
+// "hi" is listed explicitly so the set is self-documenting and the routing logic never needs to
+// assume a default base language.
+// Hindi-source categories always include "hi". Regional-source categories (te/ta/ml/kn) do NOT
+// include "hi" — their base language is the regional language itself.
 var categoryLanguageMapping = map[string][]string{
-	// national categories - all 4 regional languages
-	"national":      {"pa", "gu", "mr", "bn"},
-	"international": {"pa", "gu", "mr", "bn"},
-	"sports":        {"pa", "gu", "mr", "bn"},
-	"entertainment": {"pa", "gu", "mr", "bn"},
-	// State categories - Hindi + state's language
-	"punjab":      {"pa"},
-	"west_bengal": {"bn"},
-	"gujarat":     {"gu"},
-	"maharashtra": {"mr"},
-	// States where only Hindi is needed - empty slice
-	"himachal_pradesh": {},
-	"haryana":          {},
-	"delhi":            {},
-	"uttar_pradesh":    {},
-	"bihar":            {},
-	"rajasthan":        {},
-	"madhya_pradesh":   {},
-	"jharkhand":        {},
-	"chhattisgarh":     {},
-	"uttarakhand":      {},
+	// National categories — Hindi base + English + all 8 regional languages
+	"national":      {"hi", "en", "pa", "gu", "mr", "bn", "te", "ta", "ml", "kn"},
+	"international": {"hi", "en", "pa", "gu", "mr", "bn", "te", "ta", "ml", "kn"},
+	"sports":        {"hi", "en", "pa", "gu", "mr", "bn", "te", "ta", "ml", "kn"},
+	"entertainment": {"hi", "en", "pa", "gu", "mr", "bn", "te", "ta", "ml", "kn"},
+	// Hindi-source states — Hindi base + state's regional language
+	"punjab":      {"hi", "pa"},
+	"west_bengal": {"hi", "bn"},
+	"gujarat":     {"hi", "gu"},
+	"maharashtra": {"hi", "mr"},
+	// Hindi-source states — Hindi only
+	"himachal_pradesh": {"hi"},
+	"haryana":          {"hi"},
+	"delhi":            {"hi"},
+	"uttar_pradesh":    {"hi"},
+	"bihar":            {"hi"},
+	"rajasthan":        {"hi"},
+	"madhya_pradesh":   {"hi"},
+	"jharkhand":        {"hi"},
+	"chhattisgarh":     {"hi"},
+	"uttarakhand":      {"hi"},
+	// Regional-source states — regional language + English (no Hindi)
+	"telangana":  {"te", "en"},
+	"tamil_nadu": {"ta", "en"},
+	"kerala":     {"ml", "en"},
+	"karnataka":  {"kn", "en"},
 }
 
-// getLanguagesForCategory returns the languages to translate for a given category
+// getLanguagesForCategory returns the full set of language codes to store for a given category.
+// Falls back to Hindi-only for any unmapped category.
 func getLanguagesForCategory(category string) []string {
 	if langs, ok := categoryLanguageMapping[category]; ok {
 		return langs
 	}
-	// Default: no additional translations (only Hindi)
-	return []string{}
+	return []string{"hi"}
 }
 
 const (
@@ -156,26 +122,41 @@ const (
 )
 
 // llmHeadlineGuidelines contains the shared guidelines for LLM headline creation
-const llmHeadlineGuidelines = `Headline guidelines (शीर्षक निर्देश):
+const llmHeadlineGuidelines = `Headline guidelines:
 - Create a concise news headline that captures the essence of the news
-- The headline must not exceed 30 characters (अधिकतम 30 अक्षर)
-- The headline should be short and catchy (छोटा और आकर्षक)
-- Avoid teaser-style text (चुभाने वाला टेक्स्ट) like "जानें क्या हुआ", "पढ़ें विवरण", "और जानें"
-- The headline should make readers want to read the summary.`
+- Important: The headline must not exceed 6 words`
 
 // llmSummaryGuidelines contains the shared guidelines for LLM short summary conversion
-const llmSummaryGuidelines = `Summary guidelines (सारांश निर्देश):
-- Convert the content into a single factual short summary that summarizes all key information
-- The summary must not exceed 150 characters (अधिकतम 150 अक्षर)
-- The summary should convey complete information (पूरी जानकारी) so users understand the news without reading the full article
-- Avoid teaser-style text (चुभाने वाला टेक्स्ट) like "जानें क्या हुआ", "पढ़ें विवरण", "और जानें", "आप विश्वास नहीं करेंगे"
-- Include the कौन (who), क्या (what), कब (when), कहाँ (where), and क्यों (why) if available in the original content
-- The short summary should be informative (जानकारीपूर्ण), not mysterious (रहस्यमय)
-- Extract the most important facts from the content and present them in one clear short summary`
+const llmSummaryGuidelines = `Summary guidelines:
+- Convert the content into a single factual short summary that summarizes key information
+- Important: The summary must be 20-25 words`
+
+// browserUserAgentTransport wraps an http.RoundTripper and injects a browser-like
+// User-Agent so that feeds which block the default gofeed agent (e.g. manatelangana.news)
+// respond with 200 instead of 403.
+type browserUserAgentTransport struct{ http.RoundTripper }
+
+func (t *browserUserAgentTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; RSS reader)")
+	return t.RoundTripper.RoundTrip(req)
+}
 
 // Shared HTTP client for connection reuse
 var httpClient = &http.Client{
 	Timeout: 30 * time.Second,
+}
+
+// imgSrcRegex extracts the src attribute of the first <img> tag in HTML content.
+// Used as a fallback for feeds that embed images in content:encoded rather than
+// using <media:content> or <enclosure> elements (e.g. manatelangana.news, ntvtelugu.com).
+var imgSrcRegex = regexp.MustCompile(`(?i)<img[^>]*\ssrc=["']([^"']+)["']`)
+
+// extractImageFromContent returns the first <img src> URL found in HTML content, or "".
+func extractImageFromContent(content string) string {
+	if matches := imgSrcRegex.FindStringSubmatch(content); len(matches) > 1 {
+		return strings.TrimSpace(matches[1])
+	}
+	return ""
 }
 
 // Common date formats for RSS feeds
@@ -309,16 +290,26 @@ func main() {
 		{URL: "https://api.livehindustan.com/feeds/rss/punjab/rssfeed.xml", Category: "punjab"},
 		{URL: "https://api.livehindustan.com/feeds/rss/gujarat/rssfeed.xml", Category: "gujarat"},
 		{URL: "https://api.livehindustan.com/feeds/rss/maharashtra/rssfeed.xml", Category: "maharashtra"},
-		// national categories - all languages (Bhaskar)
+		// national categories - Hindi source, all 8 regional languages (Bhaskar)
 		{URL: "https://www.bhaskar.com/rss-v1--category-1061.xml", Category: "national"},
 		{URL: "https://www.bhaskar.com/rss-v1--category-1125.xml", Category: "international"},
 		{URL: "https://www.bhaskar.com/rss-v1--category-1053.xml", Category: "sports"},
 		{URL: "https://www.bhaskar.com/rss-v1--category-3998.xml", Category: "entertainment"},
-		// national categories - all languages (LiveHindustan)
+		// national categories - Hindi source, all 8 regional languages (LiveHindustan)
 		{URL: "https://api.livehindustan.com/feeds/rss/national/rssfeed.xml", Category: "national"},
 		{URL: "https://api.livehindustan.com/feeds/rss/international/rssfeed.xml", Category: "international"},
 		{URL: "https://api.livehindustan.com/feeds/rss/sports/rssfeed.xml", Category: "sports"},
 		{URL: "https://api.livehindustan.com/feeds/rss/entertainment/rssfeed.xml", Category: "entertainment"},
+		// Telangana - Telugu source
+		{URL: "https://www.manatelangana.news/feed", Category: "telangana"},
+		{URL: "https://ntvtelugu.com/feed", Category: "telangana"},
+		// Tamil Nadu - Tamil source
+		{URL: "https://tamil.oneindia.com/rss/feeds/oneindia-tamil-fb.xml", Category: "tamil_nadu"},
+		// Kerala - Malayalam source
+		{URL: "https://malayalam.oneindia.com/rss/feeds/oneindia-malayalam-fb.xml", Category: "kerala"},
+		{URL: "https://www.onmanorama.com/kerala.feeds.onmrss.xml", Category: "kerala"},
+		// Karnataka - Kannada source
+		{URL: "https://kannada.oneindia.com/rss/feeds/oneindia-kannada-fb.xml", Category: "karnataka"},
 	}
 
 	totalProcessed := 0
@@ -356,9 +347,14 @@ func main() {
 
 			log.Printf("[%s] Parsing feed: %s (category: %s)\n", timestamp, rssFeed.URL, rssFeed.Category)
 
-			// Create a new parser for each goroutine (gofeed.Parser is not thread-safe)
+			// Create a new parser for each goroutine (gofeed.Parser is not thread-safe).
+			// Some feeds (e.g. manatelangana.news) block the default gofeed User-Agent with 403,
+			// so we use a browser-like User-Agent.
 			fp := gofeed.NewParser()
-			fp.Client = &http.Client{Timeout: 30 * time.Second}
+			fp.Client = &http.Client{
+				Timeout:   30 * time.Second,
+				Transport: &browserUserAgentTransport{http.DefaultTransport},
+			}
 			feed, err := fp.ParseURL(rssFeed.URL)
 			if err != nil {
 				log.Printf("[%s] ✗ Failed to parse feed %s: %v\n", timestamp, rssFeed.URL, err)
@@ -366,6 +362,12 @@ func main() {
 			}
 
 			log.Printf("[%s] ✓ Found %d items in feed\n", timestamp, len(feed.Items))
+
+			// Extract source hostname once per feed for content hashing
+			sourceHost := rssFeed.URL
+			if parsed, err := url.Parse(rssFeed.URL); err == nil {
+				sourceHost = parsed.Hostname()
+			}
 
 			for _, item := range feed.Items {
 				// Trim title and description early
@@ -391,6 +393,12 @@ func main() {
 				if mediaLink == "" && len(item.Enclosures) > 0 {
 					mediaLink = item.Enclosures[0].URL
 				}
+				// Fallback: extract first <img src> from content:encoded
+				// Handles feeds like manatelangana.news and ntvtelugu.com that
+				// embed images in the HTML body instead of using standard media tags.
+				if mediaLink == "" && item.Content != "" {
+					mediaLink = extractImageFromContent(item.Content)
+				}
 
 				// Skip items without media link
 				if mediaLink == "" {
@@ -400,8 +408,12 @@ func main() {
 					continue
 				}
 
-				// Check if item is duplicate (by link or media file key)
-				isDuplicate, err := checkDuplicateItem(db, item.Link, mediaLink)
+				// Parse published_at before hashing so the date is available
+				publishedAt := parsePublishedAt(item)
+				contentHash := computeContentHash(item.Title, publishedAt, sourceHost)
+
+				// Check DB for duplicates: skip if link OR content hash already exists
+				isDuplicate, err := checkDuplicateItem(db, item.Link, contentHash)
 				if err != nil {
 					log.Printf("[%s] ✗ Database error checking duplicate: %v\n", timestamp, err)
 					countersMutex.Lock()
@@ -416,17 +428,21 @@ func main() {
 					continue
 				}
 
-				// Check if this link is already being processed by another goroutine
-				// LoadOrStore returns (value, loaded) - if loaded is true, the key already exists
+				// Claim link in-flight; skip if another goroutine is already processing it
 				if _, alreadyProcessing := inFlightLinks.LoadOrStore(item.Link, true); alreadyProcessing {
 					countersMutex.Lock()
 					totalSkipped++
 					countersMutex.Unlock()
 					continue
 				}
-
-				// Parse published_at robustly
-				publishedAt := parsePublishedAt(item)
+				// Claim hash in-flight; release link claim if the same content is already in-flight
+				if _, alreadyProcessing := inFlightLinks.LoadOrStore(contentHash, true); alreadyProcessing {
+					inFlightLinks.Delete(item.Link)
+					countersMutex.Lock()
+					totalSkipped++
+					countersMutex.Unlock()
+					continue
+				}
 
 				// Get target languages based on category
 				targetLanguages := getLanguagesForCategory(rssFeed.Category)
@@ -435,18 +451,17 @@ func main() {
 				itemWg.Add(1)
 				itemSemaphore <- struct{}{} // Acquire semaphore
 
-				go func(item *gofeed.Item, mediaLink string, publishedAt *time.Time, category string, targetLanguages []string) {
+				go func(item *gofeed.Item, mediaLink string, publishedAt *time.Time, contentHash string, category string, targetLanguages []string) {
 					defer itemWg.Done()
-					defer func() { <-itemSemaphore }()    // Release semaphore
-					defer inFlightLinks.Delete(item.Link) // Remove from in-flight tracking
+					defer func() { <-itemSemaphore }()
+					defer inFlightLinks.Delete(item.Link)
+					defer inFlightLinks.Delete(contentHash)
 					defer func() {
 						if r := recover(); r != nil {
 							log.Printf("[%s] PANIC in item goroutine: %v\n", timestamp, r)
 						}
 					}()
 
-					// Convert title to Hindi headline and short summary, then translate based on category using Gemini
-					// Use description if available, otherwise fall back to title
 					geminiCtx, geminiCancel := context.WithTimeout(context.Background(), 60*time.Second)
 					defer geminiCancel()
 					result, err := translateWithGemini(geminiCtx, genaiClient, item.Title, item.Description, targetLanguages, rateLimiter)
@@ -455,8 +470,23 @@ func main() {
 						countersMutex.Lock()
 						totalFailed++
 						countersMutex.Unlock()
-
 						return
+					}
+					if result.BaseHeadline == "" || result.BaseSummary == "" {
+						log.Printf("[%s] ✗ Gemini returned empty base headline or summary for '%s'\n", timestamp, item.Title)
+						countersMutex.Lock()
+						totalFailed++
+						countersMutex.Unlock()
+						return
+					}
+					for langCode, pair := range result.Translations {
+						if pair.Headline == "" || pair.Summary == "" {
+							log.Printf("[%s] ✗ Gemini returned empty %s translation for '%s'\n", timestamp, langCode, item.Title)
+							countersMutex.Lock()
+							totalFailed++
+							countersMutex.Unlock()
+							return
+						}
 					}
 
 					// Upload media to R2 if present (before DB transaction)
@@ -475,7 +505,7 @@ func main() {
 					}
 
 					// Store in database atomically (with R2 cleanup on failure)
-					err = storeNewsWithTranslations(db, r2Client, r2BucketName, item.Link, mediaFileKey, publishedAt, category, result)
+					err = storeNewsWithTranslations(db, r2Client, r2BucketName, item.Link, contentHash, mediaFileKey, publishedAt, category, result)
 					if err != nil {
 						log.Printf("[%s] ✗ Failed to store news item: %v\n", timestamp, err)
 						countersMutex.Lock()
@@ -488,7 +518,7 @@ func main() {
 					totalProcessed++
 					countersMutex.Unlock()
 
-				}(item, mediaLink, publishedAt, rssFeed.Category, targetLanguages)
+				}(item, mediaLink, publishedAt, contentHash, rssFeed.Category, targetLanguages)
 			}
 
 			log.Printf("[%s] ✓ Finished processing feed: %s\n", timestamp, rssFeed.URL)
@@ -510,65 +540,70 @@ func main() {
 	os.Exit(0)
 }
 
-// translateWithGemini converts the RSS title/description to a Hindi headline and poster short summary
-// and translates both to target languages in a single LLM call
-// Uses description if available and non-empty, otherwise falls back to title
+// translateWithGemini determines the base language and additional translation targets from
+// targetLanguages, then delegates to callGeminiTranslate.
+//
+// If "hi" is in targetLanguages it is the base language (Hindi-source feeds).
+// Otherwise the first language is the base (regional-source feeds, e.g. "te").
+// Uses description if available and non-empty, otherwise falls back to title.
 func translateWithGemini(ctx context.Context, client *genai.Client, title, description string, targetLanguages []string, rateLimiter *rate.Limiter) (TranslationResult, error) {
-	// Wait for rate limiter permission
 	if err := rateLimiter.Wait(ctx); err != nil {
 		return TranslationResult{}, fmt.Errorf("rate limiter wait failed: %w", err)
 	}
+	if len(targetLanguages) == 0 {
+		return TranslationResult{}, fmt.Errorf("no target languages specified for category")
+	}
 
-	// Determine which source to use: description if available, otherwise title
 	sourceText := title
 	if description != "" {
 		sourceText = description
 	}
 
-	// Determine if we need single or multi-language translation
-	if len(targetLanguages) == 0 {
-		// Only convert to Hindi headline and short summary, no translations needed
-		return callGeminiConversionOnly(ctx, client, sourceText)
+	// Determine base language and additional translations
+	var baseLang string
+	var additionalLangs []string
+	if slices.Contains(targetLanguages, "hi") {
+		baseLang = "hi"
+		for _, lang := range targetLanguages {
+			if lang != "hi" {
+				additionalLangs = append(additionalLangs, lang)
+			}
+		}
+	} else {
+		baseLang = targetLanguages[0]
+		additionalLangs = targetLanguages[1:]
 	}
-	if len(targetLanguages) == 1 {
-		return callGeminiSingleWithConversion(ctx, client, sourceText, targetLanguages[0])
-	}
-	return callGeminiMultiWithConversion(ctx, client, sourceText, targetLanguages)
+
+	return callGeminiTranslate(ctx, client, sourceText, baseLang, additionalLangs)
 }
 
-// callGeminiConversionOnly converts RSS content to Hindi headline and short summary only (no translations)
-func callGeminiConversionOnly(ctx context.Context, client *genai.Client, sourceText string) (TranslationResult, error) {
-	prompt := fmt.Sprintf(`Convert the following Hindi news content into a Hindi news headline and a Hindi news poster short summary.
+// callGeminiTranslate converts source content into a headline and short summary in baseLang,
+// then translates both to each language in additionalLangs.
+//
+// To add a new language: add its code→name entry to languageCodeToName, then add the code to
+// the relevant categories in categoryLanguageMapping. No changes needed here.
+func callGeminiTranslate(ctx context.Context, client *genai.Client, sourceText, baseLang string, additionalLangs []string) (TranslationResult, error) {
+	baseLangName := languageCodeToName(baseLang)
 
-%s
-
-%s
-
-Respond ONLY with a JSON object in this exact format: {"hindi_headline": "headline here", "hindi_summary": "summary here"}
-
-Original Hindi news content: "%s"`, llmHeadlineGuidelines, llmSummaryGuidelines, sourceText)
-
-	result, err := callGeminiAPI(ctx, client, prompt)
-	if err != nil {
-		return TranslationResult{}, err
+	// Build the optional translation clause and the corresponding JSON fields dynamically.
+	// Adding a new language requires no change here — only languageCodeToName + categoryLanguageMapping.
+	translateClause := ""
+	translationFields := ""
+	if len(additionalLangs) > 0 {
+		names := make([]string, len(additionalLangs))
+		for i, code := range additionalLangs {
+			names[i] = languageCodeToName(code)
+		}
+		translateClause = fmt.Sprintf(", then translate both to: %s", strings.Join(names, ", "))
+		var sb strings.Builder
+		for _, name := range names {
+			lower := strings.ToLower(name)
+			fmt.Fprintf(&sb, ",\n  \"%s_headline\": \"headline translated to %s\",\n  \"%s_summary\": \"summary translated to %s\"", lower, name, lower, name)
+		}
+		translationFields = sb.String()
 	}
 
-	var response GeminiConversionOnlyResponse
-	if err := json.Unmarshal([]byte(result), &response); err != nil {
-		return TranslationResult{}, fmt.Errorf("failed to parse Gemini response: %w", err)
-	}
-
-	return TranslationResult{
-		HindiHeadline: strings.TrimSpace(response.HindiHeadline),
-		HindiSummary:  strings.TrimSpace(response.HindiSummary),
-		Translations:  make(map[string]TranslationPair),
-	}, nil
-}
-
-// callGeminiSingleWithConversion converts content to Hindi headline+summary and translates to a single language
-func callGeminiSingleWithConversion(ctx context.Context, client *genai.Client, sourceText string, langCode string) (TranslationResult, error) {
-	langName := languageCodeToName(langCode)
-	prompt := fmt.Sprintf(`Convert the following Hindi news content into a Hindi news headline and a Hindi news poster short summary, then translate both to %s.
+	prompt := fmt.Sprintf(`Convert the following %s news content into a %s news headline and a %s news poster short summary%s.
 
 %s
 
@@ -576,114 +611,45 @@ func callGeminiSingleWithConversion(ctx context.Context, client *genai.Client, s
 
 Respond ONLY with a JSON object in this exact format:
 {
-  "hindi_headline": "Hindi headline here",
-  "hindi_summary": "Hindi short summary here",
-  "headline_translation": "headline translated to %s",
-  "summary_translation": "summary translated to %s"
+  "base_headline": "%s headline here",
+  "base_summary": "%s short summary here"%s
 }
 
-Original Hindi news content: "%s"`, langName, llmHeadlineGuidelines, llmSummaryGuidelines, langName, langName, sourceText)
+Original %s news content: "%s"`,
+		baseLangName, baseLangName, baseLangName, translateClause,
+		llmHeadlineGuidelines, llmSummaryGuidelines,
+		baseLangName, baseLangName, translationFields,
+		baseLangName, sourceText)
 
-	result, err := callGeminiAPI(ctx, client, prompt)
+	raw, err := callGeminiAPIIntoMap(ctx, client, prompt)
 	if err != nil {
 		return TranslationResult{}, err
 	}
 
-	var response GeminiSingleTranslationResponse
-	if err := json.Unmarshal([]byte(result), &response); err != nil {
-		return TranslationResult{}, fmt.Errorf("failed to parse Gemini response: %w", err)
-	}
-
-	return TranslationResult{
-		HindiHeadline: strings.TrimSpace(response.HindiHeadline),
-		HindiSummary:  strings.TrimSpace(response.HindiSummary),
-		Translations: map[string]TranslationPair{
-			langCode: {
-				Headline: strings.TrimSpace(response.HeadlineTranslation),
-				Summary:  strings.TrimSpace(response.SummaryTranslation),
-			},
-		},
-	}, nil
-}
-
-// callGeminiMultiWithConversion converts content to Hindi headline+summary and translates to multiple languages
-func callGeminiMultiWithConversion(ctx context.Context, client *genai.Client, sourceText string, targetLanguages []string) (TranslationResult, error) {
-	// Build language list for prompt
-	langNames := make([]string, len(targetLanguages))
-	for i, langCode := range targetLanguages {
-		langNames[i] = languageCodeToName(langCode)
-	}
-
-	prompt := fmt.Sprintf(`Convert the following Hindi news content into a Hindi news headline and a Hindi news poster short summary, then translate both to these languages: %s.
-
-%s
-
-%s
-
-Respond ONLY with a JSON object in this exact format:
-{
-  "hindi_headline": "Hindi headline here",
-  "hindi_summary": "Hindi short summary here",
-  "punjabi_headline": "headline translated to Punjabi",
-  "punjabi_summary": "summary translated to Punjabi",
-  "gujarati_headline": "headline translated to Gujarati",
-  "gujarati_summary": "summary translated to Gujarati",
-  "marathi_headline": "headline translated to Marathi",
-  "marathi_summary": "summary translated to Marathi",
-  "bengali_headline": "headline translated to Bengali",
-  "bengali_summary": "summary translated to Bengali"
-}
-Only include the languages requested from: Punjabi, Gujarati, Marathi, Bengali. Use the exact keys shown above.
-
-Original Hindi news content: "%s"`, strings.Join(langNames, ", "), llmHeadlineGuidelines, llmSummaryGuidelines, sourceText)
-
-	result, err := callGeminiAPI(ctx, client, prompt)
-	if err != nil {
-		return TranslationResult{}, err
-	}
-
-	var response GeminiMultiTranslationResponse
-	if err := json.Unmarshal([]byte(result), &response); err != nil {
-		return TranslationResult{}, fmt.Errorf("failed to parse Gemini response: %w", err)
-	}
-
-	// Map to TranslationResult based on which languages were requested
-	translations := make(map[string]TranslationPair)
-	for _, langCode := range targetLanguages {
-		switch langCode {
-		case "pa":
-			translations["pa"] = TranslationPair{
-				Headline: strings.TrimSpace(response.PunjabiHeadline),
-				Summary:  strings.TrimSpace(response.PunjabiSummary),
-			}
-		case "gu":
-			translations["gu"] = TranslationPair{
-				Headline: strings.TrimSpace(response.GujaratiHeadline),
-				Summary:  strings.TrimSpace(response.GujaratiSummary),
-			}
-		case "mr":
-			translations["mr"] = TranslationPair{
-				Headline: strings.TrimSpace(response.MarathiHeadline),
-				Summary:  strings.TrimSpace(response.MarathiSummary),
-			}
-		case "bn":
-			translations["bn"] = TranslationPair{
-				Headline: strings.TrimSpace(response.BengaliHeadline),
-				Summary:  strings.TrimSpace(response.BengaliSummary),
-			}
+	translations := make(map[string]TranslationPair, len(additionalLangs))
+	for _, code := range additionalLangs {
+		lower := strings.ToLower(languageCodeToName(code))
+		translations[code] = TranslationPair{
+			Headline: strings.TrimSpace(raw[lower+"_headline"]),
+			Summary:  strings.TrimSpace(raw[lower+"_summary"]),
 		}
 	}
 
 	return TranslationResult{
-		HindiHeadline: strings.TrimSpace(response.HindiHeadline),
-		HindiSummary:  strings.TrimSpace(response.HindiSummary),
-		Translations:  translations,
+		BaseLanguageCode: baseLang,
+		BaseHeadline:     strings.TrimSpace(raw["base_headline"]),
+		BaseSummary:      strings.TrimSpace(raw["base_summary"]),
+		Translations:     translations,
 	}, nil
 }
 
 // languageCodeToName converts language code to full name
 func languageCodeToName(code string) string {
 	switch code {
+	case "hi":
+		return "Hindi"
+	case "en":
+		return "English"
 	case "pa":
 		return "Punjabi"
 	case "gu":
@@ -692,9 +658,30 @@ func languageCodeToName(code string) string {
 		return "Marathi"
 	case "bn":
 		return "Bengali"
+	case "te":
+		return "Telugu"
+	case "ta":
+		return "Tamil"
+	case "ml":
+		return "Malayalam"
+	case "kn":
+		return "Kannada"
 	default:
 		return code
 	}
+}
+
+// callGeminiAPIIntoMap calls the Gemini API and unmarshals the JSON response into a flat string map.
+func callGeminiAPIIntoMap(ctx context.Context, client *genai.Client, prompt string) (map[string]string, error) {
+	raw, err := callGeminiAPI(ctx, client, prompt)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]string
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return nil, fmt.Errorf("failed to parse Gemini response: %w", err)
+	}
+	return result, nil
 }
 
 // callGeminiAPI makes a request to Gemini API using the SDK
@@ -722,34 +709,18 @@ func callGeminiAPI(ctx context.Context, client *genai.Client, prompt string) (st
 	return response.Candidates[0].Content.Parts[0].Text, nil
 }
 
-// checkDuplicateItem checks if a news item is duplicate by link or media file key
-// Returns true if either check finds a match (item is duplicate)
-func checkDuplicateItem(db *gorm.DB, link, mediaFileKey string) (bool, error) {
-	// Step 1: Check if link exists in news table
-	var existingNews News
-	result := db.Where("link = ?", link).First(&existingNews)
+// checkDuplicateItem returns true if a news record already exists matching either the article
+// link or the content hash. Both checks together catch the same article re-appearing under a
+// different URL in a later run.
+func checkDuplicateItem(db *gorm.DB, link, contentHash string) (bool, error) {
+	var existing dsmodels.News
+	result := db.Where("link = ? OR content_hash = ?", link, contentHash).First(&existing)
 	if result.Error == nil {
-		// Link already exists
 		return true, nil
 	}
-	if result.Error != nil && result.Error != gorm.ErrRecordNotFound {
-		return false, fmt.Errorf("error checking link: %w", result.Error)
+	if result.Error != gorm.ErrRecordNotFound {
+		return false, fmt.Errorf("error checking duplicate: %w", result.Error)
 	}
-
-	// Step 2: Check if media file key exists (if provided)
-	if mediaFileKey != "" {
-		var existingMedia News
-		result = db.Where("media_file_key = ?", mediaFileKey).First(&existingMedia)
-		if result.Error == nil {
-			// Media file already exists
-			return true, nil
-		}
-		if result.Error != nil && result.Error != gorm.ErrRecordNotFound {
-			return false, fmt.Errorf("error checking media: %w", result.Error)
-		}
-	}
-
-	// Neither link nor media exists - not a duplicate
 	return false, nil
 }
 
@@ -810,17 +781,17 @@ func tryParseDate(dateStr string) *time.Time {
 	return nil
 }
 
-// storeNewsWithTranslations stores news and translations atomically
-// If DB transaction fails and media was uploaded to R2, it cleans up the R2 file
-// HindiHeadline is stored in Title column, HindiSummary is stored in Summary column
-func storeNewsWithTranslations(db *gorm.DB, r2Client *storage.R2Client, bucketName, link string, mediaFileKey *string, publishedAt *time.Time, category string, result TranslationResult) error {
+// storeNewsWithTranslations stores news and translations atomically.
+// If the DB transaction fails and media was already uploaded to R2, it cleans up the orphaned file.
+func storeNewsWithTranslations(db *gorm.DB, r2Client *storage.R2Client, bucketName, link, contentHash string, mediaFileKey *string, publishedAt *time.Time, category string, result TranslationResult) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Create news record
-		news := News{
+		news := dsmodels.News{
 			Link:         link,
+			ContentHash:  &contentHash,
 			Category:     category,
 			Status:       "approved",
 			PublishedAt:  publishedAt,
@@ -832,14 +803,13 @@ func storeNewsWithTranslations(db *gorm.DB, r2Client *storage.R2Client, bucketNa
 		}
 
 		// Create translations (news.ID is populated after Create)
-		// Store the converted Hindi headline in Title and Hindi short summary in Summary for 'hi' language code
-		translationsToCreate := []NewsTranslation{
-			{NewsID: news.ID, Title: result.HindiHeadline, Summary: result.HindiSummary, LanguageCode: "hi"},
+		translationsToCreate := []dsmodels.NewsTranslation{
+			{NewsID: news.ID, Title: result.BaseHeadline, Summary: result.BaseSummary, LanguageCode: result.BaseLanguageCode},
 		}
 
 		// Add translated headlines and summaries
 		for langCode, pair := range result.Translations {
-			translationsToCreate = append(translationsToCreate, NewsTranslation{
+			translationsToCreate = append(translationsToCreate, dsmodels.NewsTranslation{
 				NewsID:       news.ID,
 				Title:        strings.TrimSpace(pair.Headline),
 				Summary:      strings.TrimSpace(pair.Summary),
@@ -923,8 +893,8 @@ type NewsParsingEventProperties struct {
 }
 
 // ToProperties converts NewsParsingEventProperties to a map
-func (p NewsParsingEventProperties) ToProperties() map[string]interface{} {
-	return map[string]interface{}{
+func (p NewsParsingEventProperties) ToProperties() map[string]any {
+	return map[string]any{
 		"count": p.Count,
 	}
 }

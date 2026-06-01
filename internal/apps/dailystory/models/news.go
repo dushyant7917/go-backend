@@ -12,6 +12,7 @@ import (
 type News struct {
 	ID           uuid.UUID      `json:"id" gorm:"type:uuid;primary_key;default:gen_random_uuid()"`
 	Link         string         `json:"link" gorm:"type:varchar(2048);not null;unique"`
+	ContentHash  *string        `json:"content_hash,omitempty" gorm:"type:varchar(64);uniqueIndex"`
 	MediaFileKey *string        `json:"media_file_key,omitempty" gorm:"type:varchar(512)"`
 	Category     string         `json:"category" gorm:"type:varchar(100);not null"`
 	Status       string         `json:"status" gorm:"type:varchar(50);not null;default:'published'"`
