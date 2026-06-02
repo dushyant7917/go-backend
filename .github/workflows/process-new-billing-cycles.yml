@@ -2,8 +2,8 @@ name: Process New Billing Cycles
 
 on:
   schedule:
-    # Runs at 3:00 AM IST (9:30 PM UTC previous day) every day
-    - cron: "30 21 * * *"
+    # Runs at 2:00 AM IST (8:30 PM UTC previous day) every day
+    - cron: "30 20 * * *"
   workflow_dispatch: # Allows manual triggering
 
 jobs:

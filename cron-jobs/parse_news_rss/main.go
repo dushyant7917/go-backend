@@ -61,12 +61,16 @@ type TranslationPair struct {
 type TranslationResult struct {
 	// Base language code (e.g. "hi" for Hindi-source feeds, "te" for Telugu-source feeds)
 	BaseLanguageCode string
-	// Headline in the base language (poster format, 30 chars max)
+	// Headline in the base language (poster format, 4-6 words)
 	BaseHeadline string
-	// Short summary in the base language (poster format, 150 chars max)
+	// Short summary in the base language (poster format, 25-30 words)
 	BaseSummary string
 	// Translations of the headline and summary to additional languages
 	Translations map[string]TranslationPair
+	// SkipItem is true when LLM determined the article should not be stored
+	SkipItem bool
+	// SkipReason is the brief reason returned by LLM when SkipItem is true
+	SkipReason string
 }
 
 // categoryLanguageMapping maps each category to the full set of language codes that should be stored.
@@ -112,6 +116,80 @@ func getLanguagesForCategory(category string) []string {
 	return []string{"hi"}
 }
 
+// isStateCategory returns true for state-level categories (not national/international/sports/entertainment).
+func isStateCategory(category string) bool {
+	switch category {
+	case "national", "international", "sports", "entertainment":
+		return false
+	}
+	return true
+}
+
+// categoryToStateName converts a category key to a human-readable state name.
+func categoryToStateName(category string) string {
+	names := map[string]string{
+		"himachal_pradesh": "Himachal Pradesh",
+		"haryana":          "Haryana",
+		"delhi":            "Delhi",
+		"uttar_pradesh":    "Uttar Pradesh",
+		"bihar":            "Bihar",
+		"rajasthan":        "Rajasthan",
+		"madhya_pradesh":   "Madhya Pradesh",
+		"jharkhand":        "Jharkhand",
+		"chhattisgarh":     "Chhattisgarh",
+		"uttarakhand":      "Uttarakhand",
+		"punjab":           "Punjab",
+		"west_bengal":      "West Bengal",
+		"gujarat":          "Gujarat",
+		"maharashtra":      "Maharashtra",
+		"telangana":        "Telangana",
+		"tamil_nadu":       "Tamil Nadu",
+		"kerala":           "Kerala",
+		"karnataka":        "Karnataka",
+	}
+	if name, ok := names[category]; ok {
+		return name
+	}
+	return category
+}
+
+// buildFilterPreamble returns the Gemini prompt preamble that instructs the model to classify
+// (and potentially skip) the article. It starts with a base filter common to all categories,
+// then appends category-specific additional rules.
+func buildFilterPreamble(category string) string {
+	base := `Before translating, classify this article. Skip it if ANY of these apply:
+- It is about astrology, horoscopes, zodiac signs, or numerology.
+- It is a food or cooking recipe, or a step-by-step cooking guide.
+- It is a commercial advertisement or sponsored promotional content.`
+
+	var additional string
+	switch {
+	case isStateCategory(category):
+		stateName := categoryToStateName(category)
+		additional = fmt.Sprintf(`- It is NOT specifically about %s — this includes national/international news and news from other Indian states. Sports and entertainment items are only kept if they are specifically about %s.`, stateName, stateName)
+	case category == "national":
+		additional = `- It is primarily about events confined to a single Indian state with no national significance (state-level local news, not truly national news).
+- It is international news unrelated to India.`
+	case category == "international":
+		additional = `- It covers only India's domestic affairs with no international angle (purely internal Indian news that does not involve other countries or world events).`
+	case category == "sports":
+		additional = `- It is not about sports, athletics, or competitive games.`
+	case category == "entertainment":
+		additional = `- It is not about entertainment (unrelated to films, music, TV, celebrities, or pop culture).`
+	}
+
+	preamble := base
+	if additional != "" {
+		preamble += "\n" + additional
+	}
+	preamble += `
+
+If the article should be skipped, respond ONLY with: {"skip": "true", "skip_reason": "brief reason"}
+If the article should NOT be skipped, include "skip": "false" as the first field in your JSON response.`
+
+	return preamble
+}
+
 const (
 	geminiModel        = "gemini-2.5-flash-lite"
 	rateLimitPerMinute = 1000
@@ -124,12 +202,12 @@ const (
 // llmHeadlineGuidelines contains the shared guidelines for LLM headline creation
 const llmHeadlineGuidelines = `Headline guidelines:
 - Create a concise news headline that captures the essence of the news
-- Important: The headline must not exceed 6 words`
+- Important: The headline must be 4-6 words long only`
 
 // llmSummaryGuidelines contains the shared guidelines for LLM short summary conversion
 const llmSummaryGuidelines = `Summary guidelines:
 - Convert the content into a single factual short summary that summarizes key information
-- Important: The summary must be 20-25 words`
+- Important: The summary must be 25-30 words long only`
 
 // browserUserAgentTransport wraps an http.RoundTripper and injects a browser-like
 // User-Agent so that feeds which block the default gofeed agent (e.g. manatelangana.news)
@@ -464,11 +542,18 @@ func main() {
 
 					geminiCtx, geminiCancel := context.WithTimeout(context.Background(), 60*time.Second)
 					defer geminiCancel()
-					result, err := translateWithGemini(geminiCtx, genaiClient, item.Title, item.Description, targetLanguages, rateLimiter)
+					result, err := translateWithGemini(geminiCtx, genaiClient, item.Title, item.Description, targetLanguages, rateLimiter, category)
 					if err != nil {
 						log.Printf("[%s] ✗ Failed to convert/translate title '%s': %v\n", timestamp, item.Title, err)
 						countersMutex.Lock()
 						totalFailed++
+						countersMutex.Unlock()
+						return
+					}
+					if result.SkipItem {
+						log.Printf("[%s] ⊘ [%s] Skipped: %s | title: %s\n", timestamp, category, result.SkipReason, item.Title)
+						countersMutex.Lock()
+						totalSkipped++
 						countersMutex.Unlock()
 						return
 					}
@@ -546,7 +631,7 @@ func main() {
 // If "hi" is in targetLanguages it is the base language (Hindi-source feeds).
 // Otherwise the first language is the base (regional-source feeds, e.g. "te").
 // Uses description if available and non-empty, otherwise falls back to title.
-func translateWithGemini(ctx context.Context, client *genai.Client, title, description string, targetLanguages []string, rateLimiter *rate.Limiter) (TranslationResult, error) {
+func translateWithGemini(ctx context.Context, client *genai.Client, title, description string, targetLanguages []string, rateLimiter *rate.Limiter, category string) (TranslationResult, error) {
 	if err := rateLimiter.Wait(ctx); err != nil {
 		return TranslationResult{}, fmt.Errorf("rate limiter wait failed: %w", err)
 	}
@@ -574,7 +659,7 @@ func translateWithGemini(ctx context.Context, client *genai.Client, title, descr
 		additionalLangs = targetLanguages[1:]
 	}
 
-	return callGeminiTranslate(ctx, client, sourceText, baseLang, additionalLangs)
+	return callGeminiTranslate(ctx, client, sourceText, baseLang, additionalLangs, category)
 }
 
 // callGeminiTranslate converts source content into a headline and short summary in baseLang,
@@ -582,7 +667,7 @@ func translateWithGemini(ctx context.Context, client *genai.Client, title, descr
 //
 // To add a new language: add its code→name entry to languageCodeToName, then add the code to
 // the relevant categories in categoryLanguageMapping. No changes needed here.
-func callGeminiTranslate(ctx context.Context, client *genai.Client, sourceText, baseLang string, additionalLangs []string) (TranslationResult, error) {
+func callGeminiTranslate(ctx context.Context, client *genai.Client, sourceText, baseLang string, additionalLangs []string, category string) (TranslationResult, error) {
 	baseLangName := languageCodeToName(baseLang)
 
 	// Build the optional translation clause and the corresponding JSON fields dynamically.
@@ -603,7 +688,11 @@ func callGeminiTranslate(ctx context.Context, client *genai.Client, sourceText, 
 		translationFields = sb.String()
 	}
 
-	prompt := fmt.Sprintf(`Convert the following %s news content into a %s news headline and a %s news poster short summary%s.
+	filterPreamble := buildFilterPreamble(category)
+
+	prompt := fmt.Sprintf(`%s
+
+Convert the following %s news content into a %s news headline and a %s news poster short summary%s.
 
 %s
 
@@ -611,11 +700,13 @@ func callGeminiTranslate(ctx context.Context, client *genai.Client, sourceText, 
 
 Respond ONLY with a JSON object in this exact format:
 {
+  "skip": "false",
   "base_headline": "%s headline here",
   "base_summary": "%s short summary here"%s
 }
 
 Original %s news content: "%s"`,
+		filterPreamble,
 		baseLangName, baseLangName, baseLangName, translateClause,
 		llmHeadlineGuidelines, llmSummaryGuidelines,
 		baseLangName, baseLangName, translationFields,
@@ -624,6 +715,10 @@ Original %s news content: "%s"`,
 	raw, err := callGeminiAPIIntoMap(ctx, client, prompt)
 	if err != nil {
 		return TranslationResult{}, err
+	}
+
+	if raw["skip"] == "true" {
+		return TranslationResult{SkipItem: true, SkipReason: strings.TrimSpace(raw["skip_reason"])}, nil
 	}
 
 	translations := make(map[string]TranslationPair, len(additionalLangs))

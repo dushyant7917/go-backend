@@ -2,8 +2,8 @@ name: Retry Failed Billing Cycles
 
 on:
   schedule:
-    # Runs at 3:30 AM IST (10:00 PM UTC previous day) every day
-    - cron: "0 22 * * *"
+    # Runs at 2:15 AM IST (8:45 PM UTC previous day) every day
+    - cron: "45 20 * * *"
   workflow_dispatch: # Allows manual triggering
 
 jobs:
