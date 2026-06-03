@@ -399,13 +399,14 @@ func main() {
 	var inFlightLinks sync.Map
 
 	// Worker pool for processing news items concurrently
-	// Use a buffered channel as semaphore to limit concurrency
-	maxConcurrentItems := 10
+	// Use a buffered channel as semaphore to limit concurrency.
+	// Peak concurrency is capped at maxConcurrentFeeds + maxConcurrentItems = 10.
+	maxConcurrentItems := 8
 	itemSemaphore := make(chan struct{}, maxConcurrentItems)
 	var itemWg sync.WaitGroup
 
 	// Worker pool for fetching RSS feeds concurrently
-	maxConcurrentFeeds := 5
+	maxConcurrentFeeds := 2
 	feedSemaphore := make(chan struct{}, maxConcurrentFeeds)
 	var feedWg sync.WaitGroup
 

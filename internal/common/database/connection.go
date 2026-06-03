@@ -20,22 +20,23 @@ type PoolProfile struct {
 
 // ServerPoolProfile is optimized for the web server:
 //   - Many short-lived requests, low latency requirements
-//   - Keep idle connections warm for fast API response
-//   - MaxOpenConns should cover peak concurrent API requests
-//   - MaxIdleConns should match MaxOpenConns to avoid cold-start latency
+//   - MaxOpenConns covers peak concurrent queries with headroom for spikes
+//     (current traffic uses only ~2-3 at a time)
+//   - MaxIdleConns keeps a few connections warm for fast API response without
+//     pinning idle backend slots on PostgreSQL
 var ServerPoolProfile = PoolProfile{
 	MaxOpenConns:    20,
-	MaxIdleConns:    20,
+	MaxIdleConns:    10,
 	ConnMaxLifetime: 10 * time.Minute,
 	ConnMaxIdleTime: 10 * time.Minute,
 }
 
 // CronPoolProfile is optimized for cron jobs:
-//   - MaxOpenConns matches max goroutines (20) to prevent pool exhaustion
+//   - MaxOpenConns matches max goroutines (12) to prevent pool exhaustion
 //   - MaxIdleConns is low (2) because the process exits after the job finishes
 //   - ConnMaxIdleTime is short to free PostgreSQL resources quickly
 var CronPoolProfile = PoolProfile{
-	MaxOpenConns:    15,
+	MaxOpenConns:    12,
 	MaxIdleConns:    2,
 	ConnMaxLifetime: 10 * time.Minute,
 	ConnMaxIdleTime: 1 * time.Minute,

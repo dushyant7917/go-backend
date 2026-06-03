@@ -104,8 +104,8 @@ func main() {
 		fmt.Println(key)
 	}
 
-	// Delete orphaned files in bulk with 15 goroutines
-	log.Printf("[%s] Deleting %d orphaned files with 15 goroutines...\n", timestamp, len(orphanedKeys))
+	// Delete orphaned files in bulk with 5 goroutines
+	log.Printf("[%s] Deleting %d orphaned files with 5 goroutines...\n", timestamp, len(orphanedKeys))
 
 	// Split into batches of 1000 (R2/S3 limit per request)
 	var batches [][]string
@@ -117,8 +117,8 @@ func main() {
 		batches = append(batches, orphanedKeys[i:end])
 	}
 
-	// Use 15 goroutines to process batches
-	numWorkers := 15
+	// Use 5 goroutines to process batches
+	numWorkers := 5
 	if len(batches) < numWorkers {
 		numWorkers = len(batches)
 	}
