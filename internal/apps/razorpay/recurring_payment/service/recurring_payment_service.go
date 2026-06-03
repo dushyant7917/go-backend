@@ -38,6 +38,7 @@ import (
 
 	"github.com/google/uuid"
 	razorpay "github.com/razorpay/razorpay-go"
+	rzperrors "github.com/razorpay/razorpay-go/errors"
 	"gorm.io/gorm"
 )
 
@@ -198,6 +199,77 @@ func processInParallel[T any](items []T, processor func(T) error, logPrefix stri
 		}(item)
 	}
 	wg.Wait()
+}
+
+// transientErrorDescriptionPhrases are substrings (matched case-insensitively) in a
+// Razorpay error description that signal a transient gateway/processing failure worth
+// retrying, even though the SDK wraps them as *BadRequestError (see the quirk below).
+// Example seen in production: "Payment timed out. Please try again."
+var transientErrorDescriptionPhrases = []string{
+	"timed out",
+	"please try again",
+	"too many requests", // rate limited (HTTP 429) — back off and retry
+	"rate limit",
+}
+
+// hasTransientErrorDescription reports whether the error's description matches a known
+// transient phrase. Best-effort heuristic — Razorpay does not expose a machine-readable
+// "retryable" flag, so we string-match the human-readable description.
+func hasTransientErrorDescription(err error) bool {
+	desc := strings.ToLower(extractRazorpayError(err).Description)
+	if desc == "" {
+		return false
+	}
+	for _, phrase := range transientErrorDescriptionPhrases {
+		if strings.Contains(desc, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+// isRetryableRazorpayError returns true for transient errors that are safe to retry.
+//
+// In practice the razorpay-go SDK switches on a JSON `internal_error_code` field that
+// Razorpay's public API does not populate, so it wraps ALL HTTP error responses
+// (including genuine 5xx and transient gateway timeouts) as *BadRequestError. We treat
+// *BadRequestError as non-retryable by default — a 4xx is usually a business error (bad
+// token, mandate cancelled) that won't resolve on retry — EXCEPT when its description
+// matches a known transient phrase (e.g. "Payment timed out. Please try again."), which
+// we do retry. Transport-level failures (timeouts, connection resets), returned by the
+// SDK as the raw error, are always retryable. Safe for idempotent calls (Order.Create,
+// Order.Fetch) and for CreateRecurringPayment, which is protected by Razorpay's
+// order-level idempotency (one charge per order_id).
+func isRetryableRazorpayError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var badReq *rzperrors.BadRequestError
+	if errors.As(err, &badReq) {
+		return hasTransientErrorDescription(err)
+	}
+	return true
+}
+
+// callWithRetry calls fn up to 3 times, backing off 1s then 2s between attempts.
+// Retries only errors deemed transient by isRetryableRazorpayError; other errors
+// (e.g. business 4xx) return immediately.
+func callWithRetry(logPrefix string, fn func() (map[string]interface{}, error)) (map[string]interface{}, error) {
+	delays := []time.Duration{time.Second, 2 * time.Second}
+	var lastErr error
+	for attempt := range 3 {
+		result, err := fn()
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		if !isRetryableRazorpayError(err) || attempt == 2 {
+			break
+		}
+		fmt.Printf("[%s] attempt %d failed (%v), retrying in %s\n", logPrefix, attempt+1, err, delays[attempt])
+		time.Sleep(delays[attempt])
+	}
+	return nil, lastErr
 }
 
 // scheduleRetry calculates and sets the next retry time for a billing cycle
@@ -1574,8 +1646,10 @@ func (s *recurringPaymentService) createRetryOrder(
 		},
 	}
 
-	waitForRateLimit(s.orderLimiter)
-	order, err := razorpayClient.Order.Create(orderData, nil)
+	order, err := callWithRetry("createRetryOrder", func() (map[string]interface{}, error) {
+		waitForRateLimit(s.orderLimiter)
+		return razorpayClient.Order.Create(orderData, nil)
+	})
 	if err != nil {
 		// Emit PostHog event for order creation failure
 		errorInfo := extractRazorpayError(err)
@@ -1719,8 +1793,10 @@ func (s *recurringPaymentService) createNewCycleOrder(
 		},
 	}
 
-	waitForRateLimit(s.orderLimiter)
-	order, err := razorpayClient.Order.Create(orderData, nil)
+	order, err := callWithRetry("createNewCycleOrder", func() (map[string]interface{}, error) {
+		waitForRateLimit(s.orderLimiter)
+		return razorpayClient.Order.Create(orderData, nil)
+	})
 	if err != nil {
 		// Emit PostHog event for order creation failure
 		errorInfo := extractRazorpayError(err)
@@ -1812,8 +1888,10 @@ func (s *recurringPaymentService) createRazorpayRecurringPayment(pa models.Payme
 
 	razorpayClient := s.getRazorpayClient(config)
 
-	waitForRateLimit(s.orderLimiter)
-	order, err := razorpayClient.Order.Fetch(*pa.RazorpayOrderID, nil, nil)
+	order, err := callWithRetry("createRazorpayRecurringPayment/fetchOrder", func() (map[string]interface{}, error) {
+		waitForRateLimit(s.orderLimiter)
+		return razorpayClient.Order.Fetch(*pa.RazorpayOrderID, nil, nil)
+	})
 	if err != nil {
 		return fmt.Errorf("failed to fetch order: %w", err)
 	}
@@ -1860,8 +1938,18 @@ func (s *recurringPaymentService) createRazorpayRecurringPayment(pa models.Payme
 		},
 	}
 
-	waitForRateLimit(s.paymentLimiter)
-	payment, err := razorpayClient.Payment.CreateRecurringPayment(recurringData, nil)
+	// Retrying is safe even though this moves money: Razorpay enforces order-level
+	// idempotency, so only one charge can ever succeed against a given order_id — a
+	// duplicate create (e.g. if the first request timed out after Razorpay received it)
+	// is rejected at their end. If the original did succeed, the redundant retry returns
+	// a duplicate error we record as a failed attempt; the real charge is then corrected
+	// to captured by the payment.captured webhook (matched on order_id). NOTE: the
+	// reconcile cron does NOT cover this case — it only re-checks created/pending
+	// attempts, never failed ones — so the webhook is the sole safety net here.
+	payment, err := callWithRetry("createRazorpayRecurringPayment/createRecurring", func() (map[string]interface{}, error) {
+		waitForRateLimit(s.paymentLimiter)
+		return razorpayClient.Payment.CreateRecurringPayment(recurringData, nil)
+	})
 	// payment, err := s.createRecurringPaymentDirectHTTP(config, recurringData)
 	if err != nil {
 		errorInfo := extractRazorpayError(err)
@@ -2152,8 +2240,10 @@ func (s *recurringPaymentService) reconcileFromOrderID(
 	billingCycle *models.BillingCycle,
 	recurringPayment *models.RecurringPayment,
 ) error {
-	waitForRateLimit(s.orderLimiter)
-	order, err := razorpayClient.Order.Fetch(*pa.RazorpayOrderID, nil, nil)
+	order, err := callWithRetry("reconcileFromOrderID/fetchOrder", func() (map[string]interface{}, error) {
+		waitForRateLimit(s.orderLimiter)
+		return razorpayClient.Order.Fetch(*pa.RazorpayOrderID, nil, nil)
+	})
 	if err != nil {
 		return fmt.Errorf("failed to fetch order: %w", err)
 	}

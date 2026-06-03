@@ -61,7 +61,7 @@ type TranslationPair struct {
 type TranslationResult struct {
 	// Base language code (e.g. "hi" for Hindi-source feeds, "te" for Telugu-source feeds)
 	BaseLanguageCode string
-	// Headline in the base language (poster format, 4-6 words)
+	// Headline in the base language (poster format, 4 words)
 	BaseHeadline string
 	// Short summary in the base language (poster format, 25-30 words)
 	BaseSummary string
@@ -202,7 +202,7 @@ const (
 // llmHeadlineGuidelines contains the shared guidelines for LLM headline creation
 const llmHeadlineGuidelines = `Headline guidelines:
 - Create a concise news headline that captures the essence of the news
-- Important: The headline must be 4-6 words long only`
+- Important: The headline must be 4 words long only`
 
 // llmSummaryGuidelines contains the shared guidelines for LLM short summary conversion
 const llmSummaryGuidelines = `Summary guidelines:
