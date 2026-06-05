@@ -26,7 +26,7 @@ type PoolProfile struct {
 //     pinning idle backend slots on PostgreSQL
 var ServerPoolProfile = PoolProfile{
 	MaxOpenConns:    20,
-	MaxIdleConns:    10,
+	MaxIdleConns:    20,
 	ConnMaxLifetime: 10 * time.Minute,
 	ConnMaxIdleTime: 10 * time.Minute,
 }
@@ -36,7 +36,7 @@ var ServerPoolProfile = PoolProfile{
 //   - MaxIdleConns is low (2) because the process exits after the job finishes
 //   - ConnMaxIdleTime is short to free PostgreSQL resources quickly
 var CronPoolProfile = PoolProfile{
-	MaxOpenConns:    12,
+	MaxOpenConns:    11,
 	MaxIdleConns:    2,
 	ConnMaxLifetime: 10 * time.Minute,
 	ConnMaxIdleTime: 1 * time.Minute,
