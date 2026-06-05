@@ -41,6 +41,7 @@ type RecurringPaymentRepository interface {
 	CreatePaymentAttempt(tx *gorm.DB, pa *models.PaymentAttempt) error
 	FindPaymentAttemptByOrderID(orderID string) (*models.PaymentAttempt, error)
 	FindPaymentAttemptByPaymentID(paymentID string) (*models.PaymentAttempt, error)
+	FindPaymentAttemptByPaymentLinkID(paymentLinkID string) (*models.PaymentAttempt, error)
 	FindPaymentAttemptsByBillingCycle(billingCycleID uuid.UUID) ([]models.PaymentAttempt, error)
 	FindPendingPaymentAttempts(chargeBefore time.Time) ([]models.PaymentAttempt, error)
 	UpdatePaymentAttempt(tx *gorm.DB, pa *models.PaymentAttempt) error
@@ -341,6 +342,16 @@ func (r *recurringPaymentRepository) FindPaymentAttemptByOrderID(orderID string)
 func (r *recurringPaymentRepository) FindPaymentAttemptByPaymentID(paymentID string) (*models.PaymentAttempt, error) {
 	var pa models.PaymentAttempt
 	err := r.db.Where("razorpay_payment_id = ?", paymentID).First(&pa).Error
+	if err != nil {
+		return nil, err
+	}
+	return &pa, nil
+}
+
+// FindPaymentAttemptByPaymentLinkID retrieves a payment attempt by Razorpay payment link ID stored in metadata
+func (r *recurringPaymentRepository) FindPaymentAttemptByPaymentLinkID(paymentLinkID string) (*models.PaymentAttempt, error) {
+	var pa models.PaymentAttempt
+	err := r.db.Where("metadata->>'razorpay_payment_link_id' = ?", paymentLinkID).First(&pa).Error
 	if err != nil {
 		return nil, err
 	}

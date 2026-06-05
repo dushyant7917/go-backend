@@ -48,6 +48,9 @@ type RecurringPaymentService interface {
 	CreateAuthorizationOrder(req models.CreateAuthorizationOrderRequest) (*models.AuthorizationOrderResponse, error)
 	CreateRegistrationLink(req models.CreateRegistrationLinkRequest) (*models.RegistrationLinkResponse, error)
 	VerifyAuthorizationPayment(req models.VerifyAuthorizationPaymentRequest) (*models.RecurringPaymentResponse, error)
+	CreateOneTimePaymentOrder(req models.CreateOneTimePaymentOrderRequest) (*models.OneTimePaymentOrderResponse, error)
+	CreateOneTimePaymentLink(req models.CreateOneTimePaymentLinkRequest) (*models.OneTimePaymentLinkResponse, error)
+	VerifyOneTimePayment(req models.VerifyOneTimePaymentRequest) (*models.RecurringPaymentResponse, error)
 	GetRecurringPaymentByID(id uuid.UUID) (*models.RecurringPaymentResponse, error)
 	GetRecurringPaymentStatus(userID uuid.UUID, appName string) (*models.RecurringPaymentStatusResponse, error)
 	HandleWebhook(payload []byte, signature string) error
@@ -531,7 +534,7 @@ func (s *recurringPaymentService) CreateAuthorizationOrder(req models.CreateAuth
 	}
 
 	// Create database records
-	recurringPayment, billingCycle, paymentAttempt, err := s.createAuthorizationDBRecords(req, customerID, orderID)
+	recurringPayment, billingCycle, paymentAttempt, err := s.createAuthorizationDBRecords(req, customerID, &orderID, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -625,9 +628,18 @@ func (s *recurringPaymentService) CreateRegistrationLink(req models.CreateRegist
 		return nil, fmt.Errorf("failed to create registration link: %w", err)
 	}
 
-	shortURL := link["short_url"].(string)
-	orderID := link["order_id"].(string)
-	customerID := link["customer_id"].(string)
+	shortURL, ok := link["short_url"].(string)
+	if !ok || shortURL == "" {
+		return nil, fmt.Errorf("unexpected razorpay response: missing short_url")
+	}
+	orderID, ok := link["order_id"].(string)
+	if !ok || orderID == "" {
+		return nil, fmt.Errorf("unexpected razorpay response: missing order_id")
+	}
+	customerID, ok := link["customer_id"].(string)
+	if !ok || customerID == "" {
+		return nil, fmt.Errorf("unexpected razorpay response: missing customer_id")
+	}
 	fmt.Printf("[CreateRegistrationLink] Created registration link: %s, order: %s, customer: %s\n", shortURL, orderID, customerID)
 
 	// Create database records using the customer_id and order_id from Razorpay
@@ -639,7 +651,7 @@ func (s *recurringPaymentService) CreateRegistrationLink(req models.CreateRegist
 		StartAt:             req.StartAt,
 		Frequency:           req.Frequency,
 	}
-	_, _, _, err = s.createAuthorizationDBRecords(authReq, customerID, orderID)
+	_, _, _, err = s.createAuthorizationDBRecords(authReq, customerID, &orderID, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -738,20 +750,34 @@ func (s *recurringPaymentService) createAuthorizationRazorpayOrder(
 		return "", fmt.Errorf("failed to create razorpay order: %w", err)
 	}
 
-	orderID := order["id"].(string)
+	orderID, ok := order["id"].(string)
+	if !ok || orderID == "" {
+		return "", fmt.Errorf("unexpected razorpay response: missing order id")
+	}
 	fmt.Printf("[CreateAuthorizationOrder] Created order: %s\n", orderID)
 	return orderID, nil
 }
 
-// createAuthorizationDBRecords creates the database records for authorization
+// createAuthorizationDBRecords creates the database records for authorization.
+// orderID may be nil (e.g. payment-link flow where no order exists at creation time).
+// rpMetadata and paMetadata are merged into RecurringPayment and PaymentAttempt
+// metadata respectively within the same transaction, so callers never need a
+// separate post-commit update for fields like payment_type or payment_link_id.
 func (s *recurringPaymentService) createAuthorizationDBRecords(
 	req models.CreateAuthorizationOrderRequest,
-	customerID, orderID string,
+	customerID string,
+	orderID *string,
+	rpMetadata utils.Metadata,
+	paMetadata utils.Metadata,
 ) (*models.RecurringPayment, *models.BillingCycle, *models.PaymentAttempt, error) {
 	tx := s.repo.BeginTransaction()
 
 	// Create RecurringPayment record
 	endAt := req.StartAt.AddDate(1, 0, 0) // One year from start
+	rpMeta := make(utils.Metadata)
+	for k, v := range rpMetadata {
+		rpMeta[k] = v
+	}
 	recurringPayment := &models.RecurringPayment{
 		UserID:             req.UserID,
 		AppName:            req.AppName,
@@ -761,7 +787,7 @@ func (s *recurringPaymentService) createAuthorizationDBRecords(
 		Frequency:          req.Frequency,
 		StartAt:            &req.StartAt,
 		EndAt:              &endAt,
-		Metadata:           make(utils.Metadata),
+		Metadata:           rpMeta,
 	}
 
 	if err := s.repo.CreateRecurringPayment(tx, recurringPayment); err != nil {
@@ -789,13 +815,17 @@ func (s *recurringPaymentService) createAuthorizationDBRecords(
 	}
 
 	// Create PaymentAttempt
+	paMeta := make(utils.Metadata)
+	for k, v := range paMetadata {
+		paMeta[k] = v
+	}
 	paymentAttempt := &models.PaymentAttempt{
 		BillingCycleID:  billingCycle.ID,
 		AttemptNumber:   1,
-		RazorpayOrderID: &orderID,
+		RazorpayOrderID: orderID,
 		Status:          models.PaymentAttemptStatusCreated,
 		Amount:          req.AuthorizationAmount,
-		Metadata:        make(utils.Metadata),
+		Metadata:        paMeta,
 	}
 
 	if err := s.repo.CreatePaymentAttempt(tx, paymentAttempt); err != nil {
@@ -1062,6 +1092,8 @@ func (s *recurringPaymentService) HandleWebhook(payload []byte, signature string
 	switch eventType {
 	case "payment.captured", "payment.failed":
 		return s.handlePaymentWebhook(eventType, payloadData, payload, signature)
+	case "payment_link.paid":
+		return s.handlePaymentLinkPaidWebhook(payloadData, payload, signature)
 	case "token.confirmed", "token.cancelled":
 		return s.handleTokenWebhook(eventType, payloadData, payload, signature)
 	default:
@@ -1117,6 +1149,56 @@ func (s *recurringPaymentService) handlePaymentWebhook(eventType string, payload
 	fmt.Printf("[Webhook] Signature verified successfully\n")
 
 	return s.processPaymentEvent(eventType, paymentEntity, paymentAttempt, billingCycle, recurringPayment)
+}
+
+// handlePaymentLinkPaidWebhook handles payment_link.paid webhook events.
+// Razorpay does not include payment_link_id in payment.captured for PaymentLink payments,
+// so we rely on this dedicated event to activate one-time payment link records.
+func (s *recurringPaymentService) handlePaymentLinkPaidWebhook(payloadData map[string]interface{}, rawPayload []byte, signature string) error {
+	// Extract payment_link_id from payload.payment_link.entity.id
+	paymentLinkWrap, ok := payloadData["payment_link"].(map[string]interface{})
+	if !ok {
+		return errors.New("invalid payment_link.paid payload: missing payment_link")
+	}
+	paymentLinkEntity, ok := paymentLinkWrap["entity"].(map[string]interface{})
+	if !ok {
+		return errors.New("invalid payment_link.paid payload: missing payment_link entity")
+	}
+	linkID, ok := paymentLinkEntity["id"].(string)
+	if !ok || linkID == "" {
+		return errors.New("invalid payment_link.paid payload: missing payment_link id")
+	}
+
+	fmt.Printf("[Webhook] payment_link.paid: link_id=%s\n", linkID)
+
+	paymentEntity, err := extractPaymentEntity(payloadData)
+	if err != nil {
+		return err
+	}
+
+	paymentAttempt, err := s.repo.FindPaymentAttemptByPaymentLinkID(linkID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			fmt.Printf("[Webhook] PaymentLink %s not found in recurring_payment module (ignoring)\n", linkID)
+			return nil
+		}
+		return fmt.Errorf("failed to find payment attempt by payment_link_id: %w", err)
+	}
+
+	fmt.Printf("[Webhook] Found payment attempt: id=%s, billing_cycle_id=%s\n", paymentAttempt.ID, paymentAttempt.BillingCycleID)
+
+	billingCycle, recurringPayment, config, err := s.getPaymentRelatedRecords(paymentAttempt.BillingCycleID)
+	if err != nil {
+		return err
+	}
+
+	if !s.verifyWebhookSignature(rawPayload, signature, config.RazorpayWebhookSecret) {
+		fmt.Printf("[Webhook ERROR] Signature verification failed\n")
+		return errors.New("invalid webhook signature")
+	}
+	fmt.Printf("[Webhook] Signature verified successfully\n")
+
+	return s.processPaymentEvent("payment.captured", paymentEntity, paymentAttempt, billingCycle, recurringPayment)
 }
 
 // extractPaymentEntity extracts the payment entity from webhook payload
@@ -1338,31 +1420,47 @@ func (s *recurringPaymentService) handleTokenCancelled(tokenID string, rawPayloa
 	return nil
 }
 
-// findPaymentAttemptFromEntity finds payment attempt from webhook payment entity
+// findPaymentAttemptFromEntity finds payment attempt from webhook payment entity.
+// Tries order_id, then payment_id, then payment_link_id in order. Each lookup
+// falls through on ErrRecordNotFound so that the payment_link_id branch remains
+// reachable even when Razorpay includes an order_id we don't own (e.g. the
+// internal order Razorpay auto-creates for a PaymentLink payment).
 func (s *recurringPaymentService) findPaymentAttemptFromEntity(paymentEntity map[string]interface{}) (*models.PaymentAttempt, error) {
 	if orderID, ok := paymentEntity["order_id"].(string); ok && orderID != "" {
 		pa, err := s.repo.FindPaymentAttemptByOrderID(orderID)
-		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				fmt.Printf("[Webhook] Order %s not found in payment_attempts (not a recurring_payment order, ignoring)\n", orderID)
-				return nil, nil // Return nil without error to acknowledge webhook
-			}
+		if err == nil {
+			return pa, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, err
 		}
-		return pa, nil
+		fmt.Printf("[Webhook] Order %s not found in payment_attempts, trying next lookup\n", orderID)
 	}
-	if paymentID, ok := paymentEntity["id"].(string); ok {
+
+	if paymentID, ok := paymentEntity["id"].(string); ok && paymentID != "" {
 		pa, err := s.repo.FindPaymentAttemptByPaymentID(paymentID)
-		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				fmt.Printf("[Webhook] Payment %s not found in payment_attempts (not a recurring_payment payment, ignoring)\n", paymentID)
-				return nil, nil // Return nil without error to acknowledge webhook
-			}
+		if err == nil {
+			return pa, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, err
 		}
-		return pa, nil
+		fmt.Printf("[Webhook] Payment %s not found in payment_attempts, trying next lookup\n", paymentID)
 	}
-	return nil, errors.New("no order_id or payment_id in payment entity")
+
+	if linkID, ok := paymentEntity["payment_link_id"].(string); ok && linkID != "" {
+		pa, err := s.repo.FindPaymentAttemptByPaymentLinkID(linkID)
+		if err == nil {
+			return pa, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+		fmt.Printf("[Webhook] PaymentLink %s not found in payment_attempts, ignoring\n", linkID)
+	}
+
+	fmt.Printf("[Webhook] Payment not found in recurring_payment module (ignoring webhook)\n")
+	return nil, nil
 }
 
 // processPaymentEvent updates records based on payment event
@@ -1382,12 +1480,20 @@ func (s *recurringPaymentService) processPaymentEvent(
 
 	switch eventType {
 	case "payment.captured":
-		// Handle authorization payment (cycle 0) - activate mandate
+		// Handle authorization payment (cycle 0) - activate mandate or one-time payment
 		if billingCycle.CycleNumber == 0 {
-			fmt.Printf("[processPaymentEvent] Activating mandate for cycle 0 authorization\n")
-			if err := s.activateMandateFromPayment(paymentEntity, paymentAttempt, billingCycle, recurringPayment); err != nil {
-				fmt.Printf("[processPaymentEvent ERROR] Failed to activate mandate: %v\n", err)
-				return err
+			if recurringPayment.Metadata["payment_type"] == "one_time" {
+				fmt.Printf("[processPaymentEvent] Activating one-time payment for cycle 0\n")
+				if err := s.activateOneTimePayment(paymentEntity, paymentAttempt, billingCycle, recurringPayment); err != nil {
+					fmt.Printf("[processPaymentEvent ERROR] Failed to activate one-time payment: %v\n", err)
+					return err
+				}
+			} else {
+				fmt.Printf("[processPaymentEvent] Activating mandate for cycle 0 authorization\n")
+				if err := s.activateMandateFromPayment(paymentEntity, paymentAttempt, billingCycle, recurringPayment); err != nil {
+					fmt.Printf("[processPaymentEvent ERROR] Failed to activate mandate: %v\n", err)
+					return err
+				}
 			}
 		} else {
 			fmt.Printf("[processPaymentEvent] Handling payment captured for cycle %d\n", billingCycle.CycleNumber)
@@ -2770,4 +2876,270 @@ func (s *recurringPaymentService) sendPostHogOrderCreationFailedEvent(
 			})
 		}
 	}()
+}
+
+// ==================== One-Time Payment ====================
+
+// CreateOneTimePaymentOrder creates a plain Razorpay order for in-app one-time payment checkout.
+// Unlike the mandate flow, no UPI token params are set. token_id will remain nil permanently.
+func (s *recurringPaymentService) CreateOneTimePaymentOrder(req models.CreateOneTimePaymentOrderRequest) (*models.OneTimePaymentOrderResponse, error) {
+	user, err := s.userRepo.FindByID(req.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find user: %w", err)
+	}
+
+	config, err := s.getConfig(req.AppName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find razorpay config: %w", err)
+	}
+
+	if !config.IsActive {
+		return nil, errors.New("razorpay config is not active")
+	}
+
+	razorpayClient := s.getRazorpayClient(config)
+
+	customerID, err := s.createRazorpayCustomer(razorpayClient, user)
+	if err != nil {
+		return nil, err
+	}
+
+	orderData := map[string]interface{}{
+		"amount":          req.Amount,
+		"currency":        "INR",
+		"payment_capture": true,
+		"notes": map[string]interface{}{
+			"purpose":  "one_time_payment",
+			"app_name": req.AppName,
+		},
+	}
+	order, err := razorpayClient.Order.Create(orderData, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create razorpay order: %w", err)
+	}
+	orderID, ok := order["id"].(string)
+	if !ok || orderID == "" {
+		return nil, fmt.Errorf("unexpected razorpay response: missing order id")
+	}
+	fmt.Printf("[CreateOneTimePaymentOrder] Created order: %s, customer: %s\n", orderID, customerID)
+
+	// Reuse authorization DB records helper (amount == max_amount for one-time)
+	authReq := models.CreateAuthorizationOrderRequest{
+		UserID:              req.UserID,
+		AppName:             req.AppName,
+		AuthorizationAmount: req.Amount,
+		MaxAmount:           req.Amount,
+		StartAt:             req.StartAt,
+		Frequency:           req.Frequency,
+	}
+	recurringPayment, _, _, err := s.createAuthorizationDBRecords(authReq, customerID, &orderID,
+		utils.Metadata{"payment_type": "one_time"}, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Printf("[CreateOneTimePaymentOrder] Created RecurringPayment: %s\n", recurringPayment.ID)
+
+	return &models.OneTimePaymentOrderResponse{
+		RecurringPaymentID: recurringPayment.ID,
+		RazorpayOrderID:    orderID,
+		RazorpayCustomerID: customerID,
+		Amount:             req.Amount,
+		Currency:           "INR",
+		KeyID:              config.RazorpayKeyID,
+	}, nil
+}
+
+// CreateOneTimePaymentLink creates a Razorpay PaymentLink for web-based one-time payment.
+// The hosted URL is returned; activation happens via the payment.captured webhook.
+func (s *recurringPaymentService) CreateOneTimePaymentLink(req models.CreateOneTimePaymentLinkRequest) (*models.OneTimePaymentLinkResponse, error) {
+	user, err := s.userRepo.FindByID(req.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find user: %w", err)
+	}
+
+	if user.Email == nil || *user.Email == "" {
+		return nil, errors.New("user email is required")
+	}
+	if user.CountryCode == nil || *user.CountryCode == "" {
+		return nil, errors.New("user country_code is required")
+	}
+	if user.Phone == nil || *user.Phone == "" {
+		return nil, errors.New("user phone is required")
+	}
+
+	config, err := s.getConfig(req.AppName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find razorpay config: %w", err)
+	}
+
+	if !config.IsActive {
+		return nil, errors.New("razorpay config is not active")
+	}
+
+	razorpayClient := s.getRazorpayClient(config)
+
+	customerID, err := s.createRazorpayCustomer(razorpayClient, user)
+	if err != nil {
+		return nil, err
+	}
+
+	contact := "+" + *user.CountryCode + *user.Phone
+	linkData := map[string]interface{}{
+		"amount":   req.Amount,
+		"currency": "INR",
+		"description": "One-time Payment",
+		"customer": map[string]interface{}{
+			"email":   *user.Email,
+			"contact": contact,
+		},
+		"expire_by": time.Now().UTC().Add(24 * time.Hour).Unix(),
+		"notify":    map[string]interface{}{"sms": 0, "email": 0},
+		"notes":     map[string]interface{}{"app_name": req.AppName},
+	}
+
+	link, err := razorpayClient.PaymentLink.Create(linkData, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create payment link: %w", err)
+	}
+
+	shortURL, ok := link["short_url"].(string)
+	if !ok || shortURL == "" {
+		return nil, fmt.Errorf("unexpected razorpay response: missing short_url")
+	}
+	linkID, ok := link["id"].(string)
+	if !ok || linkID == "" {
+		return nil, fmt.Errorf("unexpected razorpay response: missing payment link id")
+	}
+	fmt.Printf("[CreateOneTimePaymentLink] Created payment link: %s, id: %s, customer: %s\n", shortURL, linkID, customerID)
+
+	// Create DB records; order_id is nil at this point (Razorpay creates it internally on payment)
+	authReq := models.CreateAuthorizationOrderRequest{
+		UserID:              req.UserID,
+		AppName:             req.AppName,
+		AuthorizationAmount: req.Amount,
+		MaxAmount:           req.Amount,
+		StartAt:             req.StartAt,
+		Frequency:           req.Frequency,
+	}
+	// orderID is nil — Razorpay creates an internal order only when the user pays.
+	// payment_type and payment_link_id are set atomically in the same transaction.
+	recurringPayment, _, _, err := s.createAuthorizationDBRecords(authReq, customerID, nil,
+		utils.Metadata{"payment_type": "one_time"},
+		utils.Metadata{"razorpay_payment_link_id": linkID})
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Printf("[CreateOneTimePaymentLink] Created RecurringPayment: %s\n", recurringPayment.ID)
+
+	return &models.OneTimePaymentLinkResponse{ShortURL: shortURL}, nil
+}
+
+// VerifyOneTimePayment verifies the payment from in-app one-time checkout and activates the record.
+// Unlike VerifyAuthorizationPayment, no token_id extraction is attempted.
+func (s *recurringPaymentService) VerifyOneTimePayment(req models.VerifyOneTimePaymentRequest) (*models.RecurringPaymentResponse, error) {
+	paymentAttempt, err := s.repo.FindPaymentAttemptByOrderID(req.RazorpayOrderID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("payment attempt not found")
+		}
+		return nil, err
+	}
+
+	billingCycle, recurringPayment, config, err := s.getPaymentRelatedRecords(paymentAttempt.BillingCycleID)
+	if err != nil {
+		return nil, err
+	}
+
+	if !s.verifySignature(req.RazorpayOrderID+"|"+req.RazorpayPaymentID, req.RazorpaySignature, config.RazorpayKeySecret) {
+		return nil, errors.New("invalid signature")
+	}
+
+	razorpayClient := s.getRazorpayClient(config)
+	payment, err := razorpayClient.Payment.Fetch(req.RazorpayPaymentID, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch payment: %w", err)
+	}
+
+	if err := s.activateOneTimePayment(payment, paymentAttempt, billingCycle, recurringPayment); err != nil {
+		return nil, err
+	}
+
+	fmt.Printf("[VerifyOneTimePayment] Activated one-time payment: recurring_payment_id=%s\n", recurringPayment.ID)
+
+	response := recurringPayment.ToResponse()
+	return &response, nil
+}
+
+// activateOneTimePayment activates a one-time payment record after successful payment capture.
+// Unlike activateMandateFromPayment, no token_id is extracted or stored.
+func (s *recurringPaymentService) activateOneTimePayment(
+	paymentEntity map[string]interface{},
+	paymentAttempt *models.PaymentAttempt,
+	billingCycle *models.BillingCycle,
+	recurringPayment *models.RecurringPayment,
+) error {
+	if paymentAttempt.Status == models.PaymentAttemptStatusCaptured {
+		return nil
+	}
+
+	paymentID := ""
+	if pid, ok := paymentEntity["id"].(string); ok {
+		paymentID = pid
+	}
+
+	user, err := s.userRepo.FindByID(recurringPayment.UserID)
+	if err != nil {
+		return fmt.Errorf("failed to find user: %w", err)
+	}
+
+	if err := s.updateOneTimePaymentRecords(paymentAttempt, billingCycle, recurringPayment, paymentID); err != nil {
+		return err
+	}
+
+	go s.registerPurchaseMetaEvent(recurringPayment, paymentAttempt, billingCycle)
+	go s.sendPostHogRecurringPaymentCapturedEvent(recurringPayment, paymentAttempt, user)
+
+	return nil
+}
+
+// updateOneTimePaymentRecords persists the activated state for a one-time payment.
+// Differs from updateAuthorizationPaymentRecords: no TokenID is set, NextChargeAt is set to nil
+// so cron jobs never attempt future charges.
+func (s *recurringPaymentService) updateOneTimePaymentRecords(
+	paymentAttempt *models.PaymentAttempt,
+	billingCycle *models.BillingCycle,
+	recurringPayment *models.RecurringPayment,
+	paymentID string,
+) error {
+	tx := s.repo.BeginTransaction()
+	now := time.Now().UTC()
+
+	if paymentID != "" {
+		paymentAttempt.RazorpayPaymentID = &paymentID
+	}
+	paymentAttempt.Status = models.PaymentAttemptStatusCaptured
+	if err := s.repo.UpdatePaymentAttempt(tx, paymentAttempt); err != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to update payment attempt: %w", err)
+	}
+
+	billingCycle.Status = models.BillingCycleStatusPaid
+	billingCycle.LastAttemptAt = &now
+	if err := s.repo.UpdateBillingCycle(tx, billingCycle); err != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to update billing cycle: %w", err)
+	}
+
+	recurringPayment.Status = models.RecurringPaymentStatusActive
+	recurringPayment.LastChargedAt = &now
+	recurringPayment.NextChargeAt = nil // prevent cron jobs from processing this record
+	recurringPayment.Metadata["authorized_at"] = now.Format(time.RFC3339)
+	if err := s.repo.UpdateRecurringPayment(tx, recurringPayment); err != nil {
+		s.repo.RollbackTransaction(tx)
+		return fmt.Errorf("failed to update recurring payment: %w", err)
+	}
+
+	return s.repo.CommitTransaction(tx)
 }

@@ -15,6 +15,15 @@ func RegisterRecurringPaymentRoutes(router *gin.RouterGroup, handler *RecurringP
 		// Verify authorization payment and activate mandate
 		recurringPayments.POST("/verify-authorization-payment", handler.VerifyAuthorizationPayment)
 
+		// Create order for in-app one-time payment (no mandate, token_id stays nil)
+		recurringPayments.POST("/one-time-payment-order", handler.CreateOneTimePaymentOrder)
+
+		// Create hosted payment link for web one-time payment (no mandate, token_id stays nil)
+		recurringPayments.POST("/one-time-payment-link", handler.CreateOneTimePaymentLink)
+
+		// Verify one-time payment after in-app checkout SDK callback
+		recurringPayments.POST("/verify-one-time-payment", handler.VerifyOneTimePayment)
+
 		// Webhook endpoint for Razorpay events
 		recurringPayments.POST("/webhook", handler.HandleWebhook)
 

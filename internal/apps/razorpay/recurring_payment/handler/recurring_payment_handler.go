@@ -165,6 +165,86 @@ func (h *RecurringPaymentHandler) GetRecurringPaymentStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"data": response})
 }
 
+// CreateOneTimePaymentOrder handles POST /api/v1/recurring-payments/one-time-payment-order
+// Creates a plain Razorpay order for in-app one-time payment (no mandate/token)
+func (h *RecurringPaymentHandler) CreateOneTimePaymentOrder(c *gin.Context) {
+	var req models.CreateOneTimePaymentOrderRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Printf("[CreateOneTimePaymentOrder] Invalid request body: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	log.Printf("[CreateOneTimePaymentOrder] Request: user_id=%s, app_name=%s, amount=%d, start_at=%s",
+		req.UserID, req.AppName, req.Amount, req.StartAt.Format("2006-01-02"))
+
+	response, err := h.service.CreateOneTimePaymentOrder(req)
+	if err != nil {
+		log.Printf("[CreateOneTimePaymentOrder] Service error: %v", err)
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{"data": response})
+}
+
+// CreateOneTimePaymentLink handles POST /api/v1/recurring-payments/one-time-payment-link
+// Creates a Razorpay PaymentLink (hosted URL) for web-based one-time payment
+func (h *RecurringPaymentHandler) CreateOneTimePaymentLink(c *gin.Context) {
+	var req models.CreateOneTimePaymentLinkRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Printf("[CreateOneTimePaymentLink] Invalid request body: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	log.Printf("[CreateOneTimePaymentLink] Request: user_id=%s, app_name=%s, amount=%d, start_at=%s",
+		req.UserID, req.AppName, req.Amount, req.StartAt.Format("2006-01-02"))
+
+	response, err := h.service.CreateOneTimePaymentLink(req)
+	if err != nil {
+		log.Printf("[CreateOneTimePaymentLink] Service error: %v", err)
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{"data": response})
+}
+
+// VerifyOneTimePayment handles POST /api/v1/recurring-payments/verify-one-time-payment
+// Verifies a one-time payment after in-app checkout SDK callback
+func (h *RecurringPaymentHandler) VerifyOneTimePayment(c *gin.Context) {
+	var req models.VerifyOneTimePaymentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		log.Printf("[VerifyOneTimePayment] Invalid request body: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	log.Printf("[VerifyOneTimePayment] Request: order_id=%s, payment_id=%s",
+		req.RazorpayOrderID, req.RazorpayPaymentID)
+
+	response, err := h.service.VerifyOneTimePayment(req)
+	if err != nil {
+		log.Printf("[VerifyOneTimePayment] Service error: %v", err)
+		if err.Error() == "invalid signature" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "payment verification failed"})
+			return
+		}
+		if err.Error() == "payment attempt not found" {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data":    response,
+		"message": "one-time payment verified successfully",
+	})
+}
+
 // HandleWebhook handles POST /api/v1/recurring-payments/webhook
 // Receives and processes Razorpay webhook events
 func (h *RecurringPaymentHandler) HandleWebhook(c *gin.Context) {

@@ -222,3 +222,45 @@ type RecurringPaymentStatusResponse struct {
 	ActiveSubscription bool `json:"active_subscription"` // Has active recurring payment mandate
 	UsedFreeTrial      bool `json:"used_free_trial"`     // Ever completed authorization (availed free trial)
 }
+
+// ==================== One-Time Payment DTOs ====================
+
+// CreateOneTimePaymentOrderRequest represents the request for creating an in-app one-time payment order
+type CreateOneTimePaymentOrderRequest struct {
+	UserID  uuid.UUID `json:"user_id" binding:"required"`
+	AppName string    `json:"app_name" binding:"required,min=1,max=100"`
+	Amount  int64     `json:"amount" binding:"required,min=1"` // Amount in paise
+	StartAt time.Time `json:"start_at" binding:"required"`     // Used for end_at calculation and record-keeping
+	Frequency string  `json:"frequency" binding:"required,oneof=daily weekly fortnightly bimonthly monthly quarterly half_yearly yearly as_presented"`
+}
+
+// CreateOneTimePaymentLinkRequest represents the request for creating a hosted one-time payment link
+type CreateOneTimePaymentLinkRequest struct {
+	UserID  uuid.UUID `json:"user_id" binding:"required"`
+	AppName string    `json:"app_name" binding:"required,min=1,max=100"`
+	Amount  int64     `json:"amount" binding:"required,min=1"` // Amount in paise
+	StartAt time.Time `json:"start_at" binding:"required"`
+	Frequency string  `json:"frequency" binding:"required,oneof=daily weekly fortnightly bimonthly monthly quarterly half_yearly yearly as_presented"`
+}
+
+// VerifyOneTimePaymentRequest represents the request for verifying a one-time payment
+type VerifyOneTimePaymentRequest struct {
+	RazorpayOrderID   string `json:"razorpay_order_id" binding:"required"`
+	RazorpayPaymentID string `json:"razorpay_payment_id" binding:"required"`
+	RazorpaySignature string `json:"razorpay_signature" binding:"required"`
+}
+
+// OneTimePaymentOrderResponse represents the response for one-time payment order creation
+type OneTimePaymentOrderResponse struct {
+	RecurringPaymentID uuid.UUID `json:"recurring_payment_id"`
+	RazorpayOrderID    string    `json:"razorpay_order_id"`
+	RazorpayCustomerID string    `json:"razorpay_customer_id"`
+	Amount             int64     `json:"amount"` // Amount in paise
+	Currency           string    `json:"currency"`
+	KeyID              string    `json:"key_id"` // For frontend checkout SDK
+}
+
+// OneTimePaymentLinkResponse represents the response for one-time payment link creation
+type OneTimePaymentLinkResponse struct {
+	ShortURL string `json:"short_url"` // Hosted checkout URL
+}
