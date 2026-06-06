@@ -2,9 +2,9 @@ name: Charge Pending Payments
 
 on:
   schedule:
-    - cron: "0 19 * * *"   # 12:30 AM IST
-    - cron: "30 19 * * *"  # 1:00 AM IST
-    - cron: "0 20 * * *"   # 1:30 AM IST
+    - cron: "15 19 * * *" # 12:45 AM IST
+    - cron: "40 19 * * *" # 1:10 AM IST
+    - cron: "50 19 * * *" # 1:20 AM IST
   workflow_dispatch: # Allows manual triggering
 
 jobs:
