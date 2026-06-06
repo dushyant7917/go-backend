@@ -166,10 +166,21 @@ func buildFilterPreamble(category string) string {
 	switch {
 	case isStateCategory(category):
 		stateName := categoryToStateName(category)
-		additional = fmt.Sprintf(`- It is NOT specifically about %s — this includes national/international news and news from other Indian states. Sports and entertainment items are only kept if they are specifically about %s.`, stateName, stateName)
+		additional = fmt.Sprintf(`- The article is primarily about national or central government affairs (e.g. Parliament, Prime Minister, central ministers, national policies) with no direct %s angle.
+- The article is primarily about another Indian state and only mentions %s incidentally or not at all.
+- The article covers international news or events abroad with no direct %s connection.
+- The article is about a person, place, or event with no clear tie to %s (e.g. a national celebrity, a pan-India company, a court ruling from another state).
+- It is a sports or entertainment article that does not feature players, artists, teams, or events specifically from or representing %s.
+When in doubt about whether the article is truly %s-specific versus national or other-state coverage, SKIP it.`, stateName, stateName, stateName, stateName, stateName, stateName)
 	case category == "national":
-		additional = `- It is primarily about events confined to a single Indian state with no national significance (state-level local news, not truly national news).
-- It is international news unrelated to India.`
+		additional = `- The article is about a state government decision, state CM/minister, state budget, or state-level political appointment with no nationwide impact.
+- The article covers a local crime, state police operation, or law-and-order incident confined to one state.
+- The article is about a city- or state-level civic/municipal issue (roads, electricity, water supply in a specific city or state).
+- The article is about a state-level infrastructure or development project with no pan-India significance.
+- The article is about regional politics (state assembly, state election results for a single constituency, intra-party state-level factionalism) without broader national implications.
+- It is international news with no direct India angle.
+Truly national news involves: central government policies, Parliament, PM/President, Supreme Court rulings with nationwide impact, national elections, RBI/SEBI/ISRO/armed forces, or events affecting multiple states simultaneously.
+When in doubt about whether the article has genuine national significance versus being a single-state story, SKIP it.`
 	case category == "international":
 		additional = `- It covers only India's domestic affairs with no international angle (purely internal Indian news that does not involve other countries or world events).`
 	case category == "sports":
@@ -353,12 +364,13 @@ func main() {
 		{URL: "https://api.livehindustan.com/feeds/rss/haryana/rssfeed.xml", Category: "haryana"},
 		{URL: "https://api.livehindustan.com/feeds/rss/ncr/new-delhi/rssfeed.xml", Category: "delhi"},
 		{URL: "https://api.livehindustan.com/feeds/rss/uttar-pradesh/rssfeed.xml", Category: "uttar_pradesh"},
-		{URL: "https://api.livehindustan.com/feeds/rss/bihar/rssfeed.xml", Category: "bihar"},
 		{URL: "https://api.livehindustan.com/feeds/rss/rajasthan/rssfeed.xml", Category: "rajasthan"},
 		{URL: "https://api.livehindustan.com/feeds/rss/madhya-pradesh/rssfeed.xml", Category: "madhya_pradesh"},
 		{URL: "https://api.livehindustan.com/feeds/rss/jharkhand/rssfeed.xml", Category: "jharkhand"},
 		{URL: "https://api.livehindustan.com/feeds/rss/chhattisgarh/rssfeed.xml", Category: "chhattisgarh"},
 		{URL: "https://api.livehindustan.com/feeds/rss/uttarakhand/rssfeed.xml", Category: "uttarakhand"},
+		// States - Hindi only (OneIndia)
+		{URL: "https://hindi.oneindia.com/rss/feeds/hindi-bihar-fb.xml", Category: "bihar"},
 		// States - Hindi + regional language (Bhaskar)
 		{URL: "https://www.bhaskar.com/rss-v1--category-1743.xml", Category: "punjab"},
 		{URL: "https://www.bhaskar.com/rss-v1--category-2314.xml", Category: "gujarat"},

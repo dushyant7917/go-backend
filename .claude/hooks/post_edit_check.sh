@@ -28,4 +28,15 @@ if [ -z "$CONTEXT" ]; then
     exit 0
 fi
 
+# Avoid re-injecting the same diff on consecutive Stop events (prevents infinite loop).
+# If the diff hasn't changed since last review, skip.
+CACHE_FILE="/tmp/.claude_hook_last_diff_hash"
+CURRENT_HASH=$(printf '%s' "$CONTEXT" | shasum -a 256 | cut -d' ' -f1)
+LAST_HASH=$(cat "$CACHE_FILE" 2>/dev/null || true)
+
+if [ "$CURRENT_HASH" = "$LAST_HASH" ]; then
+    exit 0
+fi
+
+printf '%s' "$CURRENT_HASH" > "$CACHE_FILE"
 printf '%s' "$CONTEXT" | jq -Rs '{hookSpecificOutput: {hookEventName: "Stop", additionalContext: .}}'
