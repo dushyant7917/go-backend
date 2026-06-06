@@ -5,6 +5,8 @@ on:
     - cron: "15 19 * * *" # 12:45 AM IST
     - cron: "40 19 * * *" # 1:10 AM IST
     - cron: "50 19 * * *" # 1:20 AM IST
+    - cron: "30 21 * * *" # 3:00 AM IST
+    - cron: "40 22 * * *" # 4:10 AM IST
   workflow_dispatch: # Allows manual triggering
 
 jobs:
