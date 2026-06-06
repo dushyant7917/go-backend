@@ -2,8 +2,8 @@ name: Cleanup Orphan Profile Pictures
 
 on:
   schedule:
-    # Runs at 5:00 AM IST (11:30 PM UTC previous day) every Sunday
-    - cron: "30 23 * * 0"
+    # Runs at 8:00 AM IST (2:30 AM UTC) every Tuesday
+    - cron: "30 2 * * 2"
   workflow_dispatch: # Allows manual triggering
 
 jobs:

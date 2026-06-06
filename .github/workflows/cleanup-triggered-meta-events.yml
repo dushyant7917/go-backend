@@ -2,8 +2,8 @@ name: Cleanup Triggered Meta Events
 
 on:
   schedule:
-    # Runs at 6:30 AM IST (1:00 AM UTC) every Sunday
-    - cron: "0 1 * * 0"
+    # Runs at 8:00 AM IST (2:30 AM UTC) every Wednesday
+    - cron: "30 2 * * 3"
   workflow_dispatch: # Allows manual triggering
 
 jobs:

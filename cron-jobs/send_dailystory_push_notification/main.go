@@ -22,8 +22,8 @@ const (
 	userAgeDays     = 7
 	batchSize       = 10
 
-	// Notification delivery window: 10am–9pm IST = 4:30am–3:30pm UTC
-	windowStartHourUTC   = 4
+	// Notification delivery window: 9am–9pm IST = 3:30am–3:30pm UTC
+	windowStartHourUTC   = 3
 	windowStartMinuteUTC = 30
 	windowEndHourUTC     = 15
 	windowEndMinuteUTC   = 30

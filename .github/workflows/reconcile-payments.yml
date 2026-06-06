@@ -2,8 +2,8 @@ name: Reconcile Payments
 
 on:
   schedule:
-    # Runs at 1:00 AM IST (7:30 PM UTC previous day) every day
-    - cron: "30 19 * * *"
+    # Runs at 10:00 PM IST (4:30 PM UTC) every day
+    - cron: "30 16 * * *"
   workflow_dispatch: # Allows manual triggering
 
 jobs:

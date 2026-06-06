@@ -2,8 +2,8 @@ name: Cleanup Old News
 
 on:
   schedule:
-    # Runs at 4:30 AM IST (11:00 PM UTC previous day) every day
-    - cron: "0 23 * * *"
+    # Runs at 12:00 AM IST (6:30 PM UTC previous day) every day
+    - cron: "30 18 * * *"
   workflow_dispatch: # Allows manual triggering
 
 jobs:
@@ -46,7 +46,7 @@ jobs:
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
         run: |
           cd cron-jobs/cleanup_old_news
-          go run main.go 7
+          go run main.go 3
 
       - name: Notify on failure
         if: failure()
