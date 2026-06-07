@@ -2,12 +2,13 @@ name: Parse News RSS
 
 on:
   schedule:
-    - cron: "30 22 * * *"  # 4:00 AM IST
-    - cron: "30 0 * * *"   # 6:00 AM IST
-    - cron: "30 5 * * *"   # 11:00 AM IST
-    - cron: "30 6 * * *"   # 12:00 PM IST
-    - cron: "30 11 * * *"  # 5:00 PM IST
-    - cron: "30 13 * * *"  # 7:00 PM IST
+    - cron: "30 22 * * *" # 4:00 AM IST
+    - cron: "30 0 * * *" # 6:00 AM IST
+    - cron: "30 5 * * *" # 11:00 AM IST
+    - cron: "30 6 * * *" # 12:00 PM IST
+    - cron: "30 11 * * *" # 5:00 PM IST
+    - cron: "30 13 * * *" # 7:00 PM IST
+    - cron: "30 15 * * *" # 9:00 PM IST
   workflow_dispatch: # Allows manual triggering
 
 jobs:
@@ -46,6 +47,10 @@ jobs:
           R2_DS_NEWS_BUCKET_NAME: ${{ secrets.R2_DS_NEWS_BUCKET_NAME }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # If a variable is unset, the code falls back to its default (true / 0.90 / 48).
+          SEMANTIC_DEDUP_ENABLED: ${{ vars.SEMANTIC_DEDUP_ENABLED }}
+          SEMANTIC_DEDUP_THRESHOLD: ${{ vars.SEMANTIC_DEDUP_THRESHOLD }}
+          SEMANTIC_DEDUP_WINDOW_HOURS: ${{ vars.SEMANTIC_DEDUP_WINDOW_HOURS }}
         run: |
           cd cron-jobs/parse_news_rss
           go run main.go

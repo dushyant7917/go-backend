@@ -137,6 +137,15 @@ func main() {
 
 	log.Printf("[%s] ✓ Deleted %d records from database\n", timestamp, len(newsItems))
 
+	// Prune old wrong_category_news rows (LLM filter-rejection cache) using the same cutoff as news.
+	// These have no canonical news to cascade from, so they are aged out here by created_at.
+	wcResult := db.Where("created_at < ?", cutoffDate).Delete(&models.WrongCategoryNews{})
+	if wcResult.Error != nil {
+		log.Printf("[%s] ✗ Failed to prune wrong_category_news: %v\n", timestamp, wcResult.Error)
+	} else {
+		log.Printf("[%s] ✓ Pruned %d wrong_category_news rows older than %d days\n", timestamp, wcResult.RowsAffected, days)
+	}
+
 	// Delete media files from R2
 	if len(fileKeys) > 0 {
 		log.Printf("[%s] Deleting %d media files from R2 with 5 goroutines...\n", timestamp, len(fileKeys))

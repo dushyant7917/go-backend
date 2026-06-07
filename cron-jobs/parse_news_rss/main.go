@@ -9,13 +9,15 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"regexp"
-	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	dsmodels "go-backend/internal/apps/dailystory/models"
@@ -32,9 +34,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	"github.com/mmcdole/gofeed"
+	"github.com/pgvector/pgvector-go"
 	"golang.org/x/time/rate"
 	"google.golang.org/genai"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // computeContentHash returns a sha256 hex digest over normalized title + UTC date + source host.
@@ -74,21 +78,21 @@ type TranslationResult struct {
 }
 
 // categoryLanguageMapping maps each category to the full set of language codes that should be stored.
-// "hi" is listed explicitly so the set is self-documenting and the routing logic never needs to
-// assume a default base language.
-// Hindi-source categories always include "hi". Regional-source categories (te/ta/ml/kn) do NOT
-// include "hi" — their base language is the regional language itself.
+// The FIRST code in each list is the base language (the one the headline/summary are generated in;
+// see translateWithGemini); the rest are translation targets. National categories use a Hindi base;
+// state categories use their own regional language as base (Hindi-only states use "hi").
 var categoryLanguageMapping = map[string][]string{
 	// National categories — Hindi base + English + all 8 regional languages
 	"national":      {"hi", "en", "pa", "gu", "mr", "bn", "te", "ta", "ml", "kn"},
 	"international": {"hi", "en", "pa", "gu", "mr", "bn", "te", "ta", "ml", "kn"},
 	"sports":        {"hi", "en", "pa", "gu", "mr", "bn", "te", "ta", "ml", "kn"},
 	"entertainment": {"hi", "en", "pa", "gu", "mr", "bn", "te", "ta", "ml", "kn"},
-	// Hindi-source states — Hindi base + state's regional language
-	"punjab":      {"hi", "pa"},
-	"west_bengal": {"hi", "bn"},
-	"gujarat":     {"hi", "gu"},
-	"maharashtra": {"hi", "mr"},
+	// Hindi-source states with a distinct regional language — regional base (listed first) + Hindi.
+	// Base language is always the first code in the list (see translateWithGemini).
+	"punjab":      {"pa", "hi"},
+	"west_bengal": {"bn", "hi"},
+	"gujarat":     {"gu", "hi"},
+	"maharashtra": {"mr", "hi"},
 	// Hindi-source states — Hindi only
 	"himachal_pradesh": {"hi"},
 	"haryana":          {"hi"},
@@ -205,9 +209,25 @@ const (
 	geminiModel        = "gemini-2.5-flash-lite"
 	rateLimitPerMinute = 1000
 
+	// Embedding model + dimensionality for semantic deduplication. 768 dims keeps the vector within
+	// pgvector's HNSW index limit (2000) and is L2-normalized after truncation (required for MRL
+	// outputs < 3072).
+	embeddingModel      = "gemini-embedding-001"
+	embeddingDimensions = 768
+
 	// PostHog event names for news parsing
 	PostHogEventNewsParsingFailed    = "NEWS_PARSING_FAILED"
 	PostHogEventNewsParsingSucceeded = "NEWS_PARSING_SUCCEEDED"
+)
+
+// Semantic deduplication config, populated from env in main().
+var (
+	semanticDedupEnabled   bool
+	semanticDedupThreshold float64
+	semanticDedupWindow    time.Duration
+	// semanticStoreMutex makes the Phase-B "re-check + insert" atomic across item goroutines so two
+	// near-duplicate articles in the same run can't both be stored (they never collide on link/hash).
+	semanticStoreMutex sync.Mutex
 )
 
 // llmHeadlineGuidelines contains the shared guidelines for LLM headline creation
@@ -283,7 +303,8 @@ func main() {
 		}
 	}
 
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	startTime := time.Now()
+	timestamp := startTime.Format("2006-01-02 15:04:05")
 	log.Printf("[%s] Starting RSS news feed parser with translations\n", timestamp)
 
 	// Get Gemini API key
@@ -294,6 +315,18 @@ func main() {
 
 	// Initialize rate limiter (rateLimitPerMinute requests per minute, burst=1 for strict limiting)
 	rateLimiter := rate.NewLimiter(rate.Every(time.Minute/time.Duration(rateLimitPerMinute)), 1)
+
+	// Load semantic deduplication config (feature-flagged; defaults are safe for prod).
+	semanticDedupEnabled = utils.GetEnv("SEMANTIC_DEDUP_ENABLED", "true") != "false"
+	semanticDedupThreshold = 0.90
+	if t, err := strconv.ParseFloat(utils.GetEnv("SEMANTIC_DEDUP_THRESHOLD", "0.90"), 64); err == nil {
+		semanticDedupThreshold = t
+	}
+	semanticDedupWindow = 48 * time.Hour
+	if h, err := strconv.Atoi(utils.GetEnv("SEMANTIC_DEDUP_WINDOW_HOURS", "48")); err == nil && h > 0 {
+		semanticDedupWindow = time.Duration(h) * time.Hour
+	}
+	log.Printf("[%s] Semantic dedup: enabled=%t threshold=%.2f window=%s\n", timestamp, semanticDedupEnabled, semanticDedupThreshold, semanticDedupWindow)
 
 	// Connect to database
 	dbConfig := database.Config{
@@ -402,10 +435,18 @@ func main() {
 		{URL: "https://kannada.oneindia.com/rss/feeds/oneindia-kannada-fb.xml", Category: "karnataka"},
 	}
 
-	totalProcessed := 0
-	totalSkipped := 0
-	totalFailed := 0
-	var countersMutex sync.Mutex
+	var totalProcessed, totalSkipped, totalFailed int64
+
+	// Shared dependencies for per-item processing.
+	processor := &newsProcessor{
+		db:          db,
+		genai:       genaiClient,
+		r2:          r2Client,
+		bucket:      r2BucketName,
+		rateLimiter: rateLimiter,
+		httpClient:  httpClient,
+		timestamp:   timestamp,
+	}
 
 	// Track in-flight links to prevent duplicate processing across goroutines
 	var inFlightLinks sync.Map
@@ -467,35 +508,14 @@ func main() {
 
 				// Skip items without title
 				if item.Title == "" {
-					countersMutex.Lock()
-					totalSkipped++
-					countersMutex.Unlock()
+					atomic.AddInt64(&totalSkipped, 1)
 					continue
 				}
 
-				// Extract media link from extensions
-				mediaLink := ""
-				if media, ok := item.Extensions["media"]; ok {
-					if content, ok := media["content"]; ok && len(content) > 0 {
-						mediaLink = content[0].Attrs["url"]
-					}
-				}
-				// Fallback to enclosure if no media extension
-				if mediaLink == "" && len(item.Enclosures) > 0 {
-					mediaLink = item.Enclosures[0].URL
-				}
-				// Fallback: extract first <img src> from content:encoded
-				// Handles feeds like manatelangana.news and ntvtelugu.com that
-				// embed images in the HTML body instead of using standard media tags.
-				if mediaLink == "" && item.Content != "" {
-					mediaLink = extractImageFromContent(item.Content)
-				}
-
-				// Skip items without media link
+				// Resolve media link (media ext → enclosure → first <img> in content); skip if none
+				mediaLink := extractMediaLink(item)
 				if mediaLink == "" {
-					countersMutex.Lock()
-					totalSkipped++
-					countersMutex.Unlock()
+					atomic.AddInt64(&totalSkipped, 1)
 					continue
 				}
 
@@ -507,31 +527,23 @@ func main() {
 				isDuplicate, err := checkDuplicateItem(db, item.Link, contentHash)
 				if err != nil {
 					log.Printf("[%s] ✗ Database error checking duplicate: %v\n", timestamp, err)
-					countersMutex.Lock()
-					totalFailed++
-					countersMutex.Unlock()
+					atomic.AddInt64(&totalFailed, 1)
 					continue
 				}
 				if isDuplicate {
-					countersMutex.Lock()
-					totalSkipped++
-					countersMutex.Unlock()
+					atomic.AddInt64(&totalSkipped, 1)
 					continue
 				}
 
 				// Claim link in-flight; skip if another goroutine is already processing it
 				if _, alreadyProcessing := inFlightLinks.LoadOrStore(item.Link, true); alreadyProcessing {
-					countersMutex.Lock()
-					totalSkipped++
-					countersMutex.Unlock()
+					atomic.AddInt64(&totalSkipped, 1)
 					continue
 				}
 				// Claim hash in-flight; release link claim if the same content is already in-flight
 				if _, alreadyProcessing := inFlightLinks.LoadOrStore(contentHash, true); alreadyProcessing {
 					inFlightLinks.Delete(item.Link)
-					countersMutex.Lock()
-					totalSkipped++
-					countersMutex.Unlock()
+					atomic.AddInt64(&totalSkipped, 1)
 					continue
 				}
 
@@ -542,7 +554,7 @@ func main() {
 				itemWg.Add(1)
 				itemSemaphore <- struct{}{} // Acquire semaphore
 
-				go func(item *gofeed.Item, mediaLink string, publishedAt *time.Time, contentHash string, category string, targetLanguages []string) {
+				go func(item *gofeed.Item, mediaLink string, publishedAt *time.Time, contentHash string, category string, targetLanguages []string, sourceHost string) {
 					defer itemWg.Done()
 					defer func() { <-itemSemaphore }()
 					defer inFlightLinks.Delete(item.Link)
@@ -553,70 +565,15 @@ func main() {
 						}
 					}()
 
-					geminiCtx, geminiCancel := context.WithTimeout(context.Background(), 60*time.Second)
-					defer geminiCancel()
-					result, err := translateWithGemini(geminiCtx, genaiClient, item.Title, item.Description, targetLanguages, rateLimiter, category)
-					if err != nil {
-						log.Printf("[%s] ✗ Failed to convert/translate title '%s': %v\n", timestamp, item.Title, err)
-						countersMutex.Lock()
-						totalFailed++
-						countersMutex.Unlock()
-						return
+					switch processor.processItem(item, mediaLink, publishedAt, contentHash, category, targetLanguages, sourceHost) {
+					case outcomeProcessed:
+						atomic.AddInt64(&totalProcessed, 1)
+					case outcomeSkipped:
+						atomic.AddInt64(&totalSkipped, 1)
+					case outcomeFailed:
+						atomic.AddInt64(&totalFailed, 1)
 					}
-					if result.SkipItem {
-						log.Printf("[%s] ⊘ [%s] Skipped: %s | title: %s\n", timestamp, category, result.SkipReason, item.Title)
-						countersMutex.Lock()
-						totalSkipped++
-						countersMutex.Unlock()
-						return
-					}
-					if result.BaseHeadline == "" || result.BaseSummary == "" {
-						log.Printf("[%s] ✗ Gemini returned empty base headline or summary for '%s'\n", timestamp, item.Title)
-						countersMutex.Lock()
-						totalFailed++
-						countersMutex.Unlock()
-						return
-					}
-					for langCode, pair := range result.Translations {
-						if pair.Headline == "" || pair.Summary == "" {
-							log.Printf("[%s] ✗ Gemini returned empty %s translation for '%s'\n", timestamp, langCode, item.Title)
-							countersMutex.Lock()
-							totalFailed++
-							countersMutex.Unlock()
-							return
-						}
-					}
-
-					// Upload media to R2 if present (before DB transaction)
-					// If R2 upload fails, we don't insert in DB - maintaining atomicity
-					var mediaFileKey *string
-					if mediaLink != "" {
-						fileKey, err := uploadMediaToR2(r2Client, r2BucketName, mediaLink, httpClient)
-						if err != nil {
-							log.Printf("[%s] ✗ Failed to upload media to R2: %v\n", timestamp, err)
-							countersMutex.Lock()
-							totalFailed++
-							countersMutex.Unlock()
-							return
-						}
-						mediaFileKey = &fileKey
-					}
-
-					// Store in database atomically (with R2 cleanup on failure)
-					err = storeNewsWithTranslations(db, r2Client, r2BucketName, item.Link, contentHash, mediaFileKey, publishedAt, category, result)
-					if err != nil {
-						log.Printf("[%s] ✗ Failed to store news item: %v\n", timestamp, err)
-						countersMutex.Lock()
-						totalFailed++
-						countersMutex.Unlock()
-						return
-					}
-
-					countersMutex.Lock()
-					totalProcessed++
-					countersMutex.Unlock()
-
-				}(item, mediaLink, publishedAt, contentHash, rssFeed.Category, targetLanguages)
+				}(item, mediaLink, publishedAt, contentHash, rssFeed.Category, targetLanguages, sourceHost)
 			}
 
 			log.Printf("[%s] ✓ Finished processing feed: %s\n", timestamp, rssFeed.URL)
@@ -629,13 +586,166 @@ func main() {
 	// Wait for all news items to complete
 	itemWg.Wait()
 
-	log.Printf("[%s] ✓ RSS news feed parsing completed: %d processed, %d skipped, %d failed\n", timestamp, totalProcessed, totalSkipped, totalFailed)
+	elapsed := time.Since(startTime)
+	log.Printf("[%s] ✓ RSS news feed parsing completed in %dm %02ds: %d processed, %d skipped, %d failed\n",
+		timestamp, int(elapsed.Minutes()), int(elapsed.Seconds())%60, totalProcessed, totalSkipped, totalFailed)
 
-	// Emit PostHog events with final counts
-	sendPostHogNewsParsingEvent(posthogClient, posthogConfig, PostHogEventNewsParsingSucceeded, totalProcessed)
-	sendPostHogNewsParsingEvent(posthogClient, posthogConfig, PostHogEventNewsParsingFailed, totalFailed)
+	// Emit PostHog events with final counts (safe to read directly: all goroutines have finished).
+	sendPostHogNewsParsingEvent(posthogClient, posthogConfig, PostHogEventNewsParsingSucceeded, int(totalProcessed))
+	sendPostHogNewsParsingEvent(posthogClient, posthogConfig, PostHogEventNewsParsingFailed, int(totalFailed))
 
 	os.Exit(0)
+}
+
+// itemOutcome is the result of processing a single news item.
+type itemOutcome int
+
+const (
+	outcomeProcessed itemOutcome = iota
+	outcomeSkipped
+	outcomeFailed
+)
+
+// newsProcessor holds the shared dependencies for processing news items.
+type newsProcessor struct {
+	db          *gorm.DB
+	genai       *genai.Client
+	r2          *storage.R2Client
+	bucket      string
+	rateLimiter *rate.Limiter
+	httpClient  *http.Client
+	timestamp   string
+}
+
+// extractMediaLink resolves an item's media URL in priority order: <media:content> → enclosure →
+// first <img> in the HTML content (for feeds that embed images in the body). Returns "" if none.
+func extractMediaLink(item *gofeed.Item) string {
+	if media, ok := item.Extensions["media"]; ok {
+		if content, ok := media["content"]; ok && len(content) > 0 {
+			if u := content[0].Attrs["url"]; u != "" {
+				return u
+			}
+		}
+	}
+	if len(item.Enclosures) > 0 && item.Enclosures[0].URL != "" {
+		return item.Enclosures[0].URL
+	}
+	if item.Content != "" {
+		return extractImageFromContent(item.Content)
+	}
+	return ""
+}
+
+// processItem runs the full per-item pipeline (translate → filter → embed → Phase-A dedup → upload →
+// Phase-B store) and returns the outcome. Counter bookkeeping is handled by the caller.
+func (p *newsProcessor) processItem(item *gofeed.Item, mediaLink string, publishedAt *time.Time, contentHash, category string, targetLanguages []string, sourceHost string) itemOutcome {
+	geminiCtx, geminiCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer geminiCancel()
+
+	result, err := translateWithGemini(geminiCtx, p.genai, item.Title, item.Description, targetLanguages, p.rateLimiter, category)
+	if err != nil {
+		log.Printf("[%s] ✗ Failed to convert/translate title '%s': %v\n", p.timestamp, item.Title, err)
+		return outcomeFailed
+	}
+	if result.SkipItem {
+		log.Printf("[%s] ⊘ [%s] Skipped: %s | title: %s\n", p.timestamp, category, result.SkipReason, item.Title)
+		// Remember the rejection so later runs short-circuit this item before re-running the
+		// (single) filter+translate LLM call.
+		recordWrongCategoryNews(p.db, item.Link, contentHash, category, result.SkipReason, sourceHost)
+		return outcomeSkipped
+	}
+	if result.BaseHeadline == "" || result.BaseSummary == "" {
+		log.Printf("[%s] ✗ Gemini returned empty base headline or summary for '%s'\n", p.timestamp, item.Title)
+		return outcomeFailed
+	}
+	for langCode, pair := range result.Translations {
+		if pair.Headline == "" || pair.Summary == "" {
+			log.Printf("[%s] ✗ Gemini returned empty %s translation for '%s'\n", p.timestamp, langCode, item.Title)
+			return outcomeFailed
+		}
+	}
+
+	// Generate the semantic embedding from the base-language headline + summary, then check for an
+	// existing similar article in the same category (Phase A, pre-upload).
+	var embedding []float32
+	if semanticDedupEnabled {
+		embText := result.BaseHeadline + "\n" + result.BaseSummary
+		embedding, err = generateEmbedding(geminiCtx, p.genai, embText, p.rateLimiter)
+		if err != nil {
+			log.Printf("[%s] ✗ Failed to generate embedding for '%s': %v\n", p.timestamp, item.Title, err)
+			return outcomeFailed
+		}
+
+		isDup, canonicalID, similarity, err := findSemanticDuplicate(p.db, embedding, category)
+		if err != nil {
+			log.Printf("[%s] ✗ Semantic dedup search failed for '%s': %v\n", p.timestamp, item.Title, err)
+			return outcomeFailed
+		}
+		if isDup {
+			log.Printf("[%s] ⊘ [%s] Semantic duplicate (%.3f) of %s | title: %s\n", p.timestamp, category, similarity, canonicalID, item.Title)
+			recordSimilarNews(p.db, canonicalID, item.Link, contentHash, category, similarity, sourceHost)
+			return outcomeSkipped
+		}
+	}
+
+	// Upload media to R2 before the DB transaction; if upload fails we don't insert (atomicity).
+	var mediaFileKey *string
+	if mediaLink != "" {
+		fileKey, err := uploadMediaToR2(p.r2, p.bucket, mediaLink, p.httpClient)
+		if err != nil {
+			log.Printf("[%s] ✗ Failed to upload media to R2: %v\n", p.timestamp, err)
+			return outcomeFailed
+		}
+		mediaFileKey = &fileKey
+	}
+
+	if semanticDedupEnabled {
+		return p.storeWithDedup(item, contentHash, category, sourceHost, publishedAt, result, embedding, mediaFileKey)
+	}
+
+	// Semantic dedup disabled: store directly (storeNewsWithTranslations cleans up R2 on failure).
+	if err := storeNewsWithTranslations(p.db, p.r2, p.bucket, item.Link, contentHash, mediaFileKey, publishedAt, category, result, embedding); err != nil {
+		log.Printf("[%s] ✗ Failed to store news item: %v\n", p.timestamp, err)
+		return outcomeFailed
+	}
+	return outcomeProcessed
+}
+
+// storeWithDedup performs the locked Phase-B re-check and store. The mutex makes "search + insert"
+// atomic across goroutines so two near-duplicates in the same run (which never collide on
+// link/hash) can't both be inserted. The R2 upload already happened outside the lock, so the
+// critical section stays short; the locked work is wrapped so the mutex is always released.
+func (p *newsProcessor) storeWithDedup(item *gofeed.Item, contentHash, category, sourceHost string, publishedAt *time.Time, result TranslationResult, embedding []float32, mediaFileKey *string) itemOutcome {
+	isDup, canonicalID, similarity, storeAttempted, err := func() (bool, uuid.UUID, float32, bool, error) {
+		semanticStoreMutex.Lock()
+		defer semanticStoreMutex.Unlock()
+		dup, cid, sim, ferr := findSemanticDuplicate(p.db, embedding, category)
+		if ferr != nil {
+			return false, uuid.Nil, 0, false, ferr
+		}
+		if dup {
+			return true, cid, sim, false, nil
+		}
+		serr := storeNewsWithTranslations(p.db, p.r2, p.bucket, item.Link, contentHash, mediaFileKey, publishedAt, category, result, embedding)
+		return false, uuid.Nil, 0, true, serr
+	}()
+
+	if err != nil {
+		log.Printf("[%s] ✗ Failed to store/dedup news item '%s': %v\n", p.timestamp, item.Title, err)
+		// On a dedup-search error the store was never attempted, so the R2 upload is orphaned and we
+		// clean it here. On a store error, storeNewsWithTranslations already cleaned up its own file.
+		if !storeAttempted {
+			cleanupR2Orphan(p.r2, p.bucket, mediaFileKey)
+		}
+		return outcomeFailed
+	}
+	if isDup {
+		cleanupR2Orphan(p.r2, p.bucket, mediaFileKey)
+		log.Printf("[%s] ⊘ [%s] Semantic duplicate on re-check (%.3f) of %s | title: %s\n", p.timestamp, category, similarity, canonicalID, item.Title)
+		recordSimilarNews(p.db, canonicalID, item.Link, contentHash, category, similarity, sourceHost)
+		return outcomeSkipped
+	}
+	return outcomeProcessed
 }
 
 // translateWithGemini determines the base language and additional translation targets from
@@ -657,20 +767,9 @@ func translateWithGemini(ctx context.Context, client *genai.Client, title, descr
 		sourceText = description
 	}
 
-	// Determine base language and additional translations
-	var baseLang string
-	var additionalLangs []string
-	if slices.Contains(targetLanguages, "hi") {
-		baseLang = "hi"
-		for _, lang := range targetLanguages {
-			if lang != "hi" {
-				additionalLangs = append(additionalLangs, lang)
-			}
-		}
-	} else {
-		baseLang = targetLanguages[0]
-		additionalLangs = targetLanguages[1:]
-	}
+	// The first code in the category's list is the base language; the rest are translation targets.
+	baseLang := targetLanguages[0]
+	additionalLangs := targetLanguages[1:]
 
 	return callGeminiTranslate(ctx, client, sourceText, baseLang, additionalLangs, category)
 }
@@ -817,19 +916,140 @@ func callGeminiAPI(ctx context.Context, client *genai.Client, prompt string) (st
 	return response.Candidates[0].Content.Parts[0].Text, nil
 }
 
-// checkDuplicateItem returns true if a news record already exists matching either the article
-// link or the content hash. Both checks together catch the same article re-appearing under a
-// different URL in a later run.
+// checkDuplicateItem returns true if the article (by link or content hash) is already known and
+// should not be reprocessed — it is either stored as a canonical news record, previously dropped as
+// a semantic duplicate (similar_news), or previously rejected by the LLM filter (wrong_category_news).
+// The similar_news and wrong_category_news checks let later cron runs short-circuit known items
+// before any translation/embedding call.
 func checkDuplicateItem(db *gorm.DB, link, contentHash string) (bool, error) {
-	var existing dsmodels.News
-	result := db.Where("link = ? OR content_hash = ?", link, contentHash).First(&existing)
-	if result.Error == nil {
-		return true, nil
-	}
-	if result.Error != gorm.ErrRecordNotFound {
-		return false, fmt.Errorf("error checking duplicate: %w", result.Error)
+	// Models are checked in cheap-first / most-likely-first order; the first match short-circuits.
+	for _, model := range []any{&dsmodels.News{}, &dsmodels.SimilarNews{}, &dsmodels.WrongCategoryNews{}} {
+		var count int64
+		if err := db.Model(model).
+			Where("link = ? OR content_hash = ?", link, contentHash).
+			Limit(1).Count(&count).Error; err != nil {
+			return false, fmt.Errorf("error checking duplicate in %T: %w", model, err)
+		}
+		if count > 0 {
+			return true, nil
+		}
 	}
 	return false, nil
+}
+
+// recordWrongCategoryNews stores an LLM-filtered-out article so later runs short-circuit it before
+// re-running the filter+translate call. Conflicts on the unique link are ignored.
+func recordWrongCategoryNews(db *gorm.DB, link, contentHash, category, skipReason, sourceHost string) {
+	rec := dsmodels.WrongCategoryNews{
+		Link:        link,
+		ContentHash: &contentHash,
+		Category:    category,
+		SkipReason:  truncate(skipReason, 500),
+		SourceHost:  truncate(sourceHost, 255),
+	}
+	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&rec).Error; err != nil {
+		log.Printf("Failed to record wrong_category_news for %s: %v", link, err)
+	}
+}
+
+// truncate shortens s to at most maxChars runes (Postgres varchar(n) counts characters, not bytes,
+// which matters for multibyte Indic text). Returns s unchanged when already within the limit.
+func truncate(s string, maxChars int) string {
+	runes := []rune(s)
+	if len(runes) <= maxChars {
+		return s
+	}
+	return string(runes[:maxChars])
+}
+
+// generateEmbedding returns an L2-normalized embedding for text using gemini-embedding-001 truncated
+// to embeddingDimensions. Normalization is required because MRL outputs below 3072 dims are not
+// returned normalized, and cosine search assumes unit vectors.
+func generateEmbedding(ctx context.Context, client *genai.Client, text string, rateLimiter *rate.Limiter) ([]float32, error) {
+	if err := rateLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limiter wait failed: %w", err)
+	}
+
+	dim := int32(embeddingDimensions)
+	contents := []*genai.Content{
+		{Role: genai.RoleUser, Parts: []*genai.Part{{Text: text}}},
+	}
+	config := &genai.EmbedContentConfig{
+		TaskType:             "SEMANTIC_SIMILARITY",
+		OutputDimensionality: &dim,
+	}
+
+	response, err := client.Models.EmbedContent(ctx, embeddingModel, contents, config)
+	if err != nil {
+		return nil, fmt.Errorf("Gemini embedding error: %w", err)
+	}
+	if len(response.Embeddings) == 0 || len(response.Embeddings[0].Values) == 0 {
+		return nil, fmt.Errorf("no embedding in Gemini response")
+	}
+
+	vec := response.Embeddings[0].Values
+	normalizeL2(vec)
+	return vec, nil
+}
+
+// normalizeL2 scales vec in place to unit length. No-op for a zero vector.
+func normalizeL2(vec []float32) {
+	var sumSq float64
+	for _, v := range vec {
+		sumSq += float64(v) * float64(v)
+	}
+	if sumSq == 0 {
+		return
+	}
+	norm := math.Sqrt(sumSq)
+	for i := range vec {
+		vec[i] = float32(float64(vec[i]) / norm)
+	}
+}
+
+// findSemanticDuplicate finds the most similar existing news article in the same category within the
+// configured time window. It returns whether the best match's cosine similarity meets the threshold,
+// the matched (canonical) news id, and that similarity. Search is intentionally source-agnostic so
+// it catches both cross-source and same-source near-duplicates.
+func findSemanticDuplicate(db *gorm.DB, embedding []float32, category string) (bool, uuid.UUID, float32, error) {
+	since := time.Now().Add(-semanticDedupWindow)
+	vec := pgvector.NewVector(embedding)
+
+	var match struct {
+		ID         uuid.UUID
+		Similarity float64
+	}
+	// Casts (?::vector) make the parameter type explicit so the cosine operator resolves regardless
+	// of driver parameter-type inference.
+	err := db.Raw(`
+		SELECT id, 1 - (embedding <=> ?::vector) AS similarity
+		FROM news
+		WHERE category = ? AND embedding IS NOT NULL AND created_at >= ?
+		ORDER BY embedding <=> ?::vector
+		LIMIT 1`, vec, category, since, vec).Scan(&match).Error
+	if err != nil {
+		return false, uuid.Nil, 0, fmt.Errorf("semantic search failed: %w", err)
+	}
+	if match.ID == uuid.Nil {
+		return false, uuid.Nil, 0, nil
+	}
+	return match.Similarity >= semanticDedupThreshold, match.ID, float32(match.Similarity), nil
+}
+
+// recordSimilarNews stores a dropped semantic duplicate so later runs short-circuit it before any
+// LLM/embedding call. Conflicts on the unique link are ignored (the same dup link may re-appear).
+func recordSimilarNews(db *gorm.DB, canonicalID uuid.UUID, link, contentHash, category string, similarity float32, sourceHost string) {
+	rec := dsmodels.SimilarNews{
+		NewsID:          canonicalID,
+		Link:            link,
+		ContentHash:     &contentHash,
+		Category:        category,
+		SimilarityScore: &similarity,
+		SourceHost:      truncate(sourceHost, 255),
+	}
+	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&rec).Error; err != nil {
+		log.Printf("Failed to record similar_news for %s: %v", link, err)
+	}
 }
 
 // parsePublishedAt robustly parses the published date from an RSS item
@@ -891,7 +1111,7 @@ func tryParseDate(dateStr string) *time.Time {
 
 // storeNewsWithTranslations stores news and translations atomically.
 // If the DB transaction fails and media was already uploaded to R2, it cleans up the orphaned file.
-func storeNewsWithTranslations(db *gorm.DB, r2Client *storage.R2Client, bucketName, link, contentHash string, mediaFileKey *string, publishedAt *time.Time, category string, result TranslationResult) error {
+func storeNewsWithTranslations(db *gorm.DB, r2Client *storage.R2Client, bucketName, link, contentHash string, mediaFileKey *string, publishedAt *time.Time, category string, result TranslationResult, embedding []float32) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -904,6 +1124,13 @@ func storeNewsWithTranslations(db *gorm.DB, r2Client *storage.R2Client, bucketNa
 			Status:       "approved",
 			PublishedAt:  publishedAt,
 			MediaFileKey: mediaFileKey,
+		}
+
+		// Persist the embedding when present; leave it nil otherwise so the column stays NULL (an
+		// empty vector would fail the vector(768) dimension check).
+		if len(embedding) > 0 {
+			v := pgvector.NewVector(embedding)
+			news.Embedding = &v
 		}
 
 		if err := tx.Create(&news).Error; err != nil {
@@ -933,14 +1160,22 @@ func storeNewsWithTranslations(db *gorm.DB, r2Client *storage.R2Client, bucketNa
 	})
 
 	// If DB transaction failed and we uploaded media to R2, clean up the orphan file
-	if err != nil && mediaFileKey != nil {
-		cleanupErr := r2Client.DeleteFile(bucketName, *mediaFileKey)
-		if cleanupErr != nil {
-			log.Printf("Failed to cleanup R2 file after DB error: %v", cleanupErr)
-		}
+	if err != nil {
+		cleanupR2Orphan(r2Client, bucketName, mediaFileKey)
 	}
 
 	return err
+}
+
+// cleanupR2Orphan best-effort deletes an uploaded media file whose news item was not stored (a dedup
+// drop or a DB failure). It is a no-op when key is nil.
+func cleanupR2Orphan(r2Client *storage.R2Client, bucket string, key *string) {
+	if key == nil {
+		return
+	}
+	if err := r2Client.DeleteFile(bucket, *key); err != nil {
+		log.Printf("Failed to cleanup R2 orphan %s: %v", *key, err)
+	}
 }
 
 // uploadMediaToR2 handles media upload to R2
