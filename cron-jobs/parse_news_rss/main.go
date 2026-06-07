@@ -394,35 +394,37 @@ func main() {
 		{URL: "https://www.bhaskar.com/rss-v1--category-1741.xml", Category: "chhattisgarh"},
 		// States - Hindi only (LiveHindustan)
 		{URL: "https://api.livehindustan.com/feeds/rss/himachal-pradesh/rssfeed.xml", Category: "himachal_pradesh"},
-		{URL: "https://api.livehindustan.com/feeds/rss/haryana/rssfeed.xml", Category: "haryana"},
 		{URL: "https://api.livehindustan.com/feeds/rss/ncr/new-delhi/rssfeed.xml", Category: "delhi"},
 		{URL: "https://api.livehindustan.com/feeds/rss/uttar-pradesh/rssfeed.xml", Category: "uttar_pradesh"},
 		{URL: "https://api.livehindustan.com/feeds/rss/rajasthan/rssfeed.xml", Category: "rajasthan"},
 		{URL: "https://api.livehindustan.com/feeds/rss/madhya-pradesh/rssfeed.xml", Category: "madhya_pradesh"},
 		{URL: "https://api.livehindustan.com/feeds/rss/jharkhand/rssfeed.xml", Category: "jharkhand"},
-		{URL: "https://api.livehindustan.com/feeds/rss/chhattisgarh/rssfeed.xml", Category: "chhattisgarh"},
 		{URL: "https://api.livehindustan.com/feeds/rss/uttarakhand/rssfeed.xml", Category: "uttarakhand"},
 		// States - Hindi only (OneIndia)
 		{URL: "https://hindi.oneindia.com/rss/feeds/hindi-bihar-fb.xml", Category: "bihar"},
+		{URL: "https://hindi.oneindia.com/rss/feeds/hindi-delhi-fb.xml", Category: "delhi"},
+		{URL: "https://hindi.oneindia.com/rss/feeds/hindi-uttar-pradesh-fb.xml", Category: "uttar_pradesh"},
 		// States - Hindi + regional language (Bhaskar)
 		{URL: "https://www.bhaskar.com/rss-v1--category-1743.xml", Category: "punjab"},
-		{URL: "https://www.bhaskar.com/rss-v1--category-2314.xml", Category: "gujarat"},
 		{URL: "https://www.bhaskar.com/rss-v1--category-2318.xml", Category: "maharashtra"},
 		// States - Hindi + regional language (LiveHindustan)
-		{URL: "https://api.livehindustan.com/feeds/rss/west-bengal/rssfeed.xml", Category: "west_bengal"},
 		{URL: "https://api.livehindustan.com/feeds/rss/punjab/rssfeed.xml", Category: "punjab"},
 		{URL: "https://api.livehindustan.com/feeds/rss/gujarat/rssfeed.xml", Category: "gujarat"},
 		{URL: "https://api.livehindustan.com/feeds/rss/maharashtra/rssfeed.xml", Category: "maharashtra"},
-		// national categories - Hindi source, all 8 regional languages (Bhaskar)
-		{URL: "https://www.bhaskar.com/rss-v1--category-1061.xml", Category: "national"},
-		{URL: "https://www.bhaskar.com/rss-v1--category-1125.xml", Category: "international"},
-		{URL: "https://www.bhaskar.com/rss-v1--category-1053.xml", Category: "sports"},
-		{URL: "https://www.bhaskar.com/rss-v1--category-3998.xml", Category: "entertainment"},
-		// national categories - Hindi source, all 8 regional languages (LiveHindustan)
-		{URL: "https://api.livehindustan.com/feeds/rss/national/rssfeed.xml", Category: "national"},
-		{URL: "https://api.livehindustan.com/feeds/rss/international/rssfeed.xml", Category: "international"},
-		{URL: "https://api.livehindustan.com/feeds/rss/sports/rssfeed.xml", Category: "sports"},
-		{URL: "https://api.livehindustan.com/feeds/rss/entertainment/rssfeed.xml", Category: "entertainment"},
+		// States - Hindi + regional language (OneIndia)
+		{URL: "https://hindi.oneindia.com/rss/feeds/hindi-punjab-fb.xml", Category: "punjab"},
+		{URL: "https://hindi.oneindia.com/rss/feeds/hindi-maharashtra-fb.xml", Category: "maharashtra"},
+		// Gujarat - Gujarati source (Gujarat Samachar)
+		{URL: "https://www.gujaratsamachar.com/rss/category/gujarat", Category: "gujarat"},
+		// West Bengal - English source (Indian Express Kolkata)
+		{URL: "https://indianexpress.com/section/cities/kolkata/feed/", Category: "west_bengal"},
+		// national categories - English source, Hindi base + all 8 regional languages (The Hindu + NDTV)
+		{URL: "https://www.thehindu.com/news/national/feeder/default.rss", Category: "national"},
+		{URL: "https://feeds.feedburner.com/ndtvnews-india-news", Category: "national"},
+		{URL: "https://www.thehindu.com/news/international/feeder/default.rss", Category: "international"},
+		{URL: "https://feeds.feedburner.com/ndtvnews-world-news", Category: "international"},
+		{URL: "https://feeds.feedburner.com/ndtvsports-latest", Category: "sports"},
+		{URL: "https://feeds.feedburner.com/ndtvmovies-latest", Category: "entertainment"},
 		// Telangana - Telugu source
 		{URL: "https://www.manatelangana.news/feed", Category: "telangana"},
 		{URL: "https://ntvtelugu.com/feed", Category: "telangana"},
