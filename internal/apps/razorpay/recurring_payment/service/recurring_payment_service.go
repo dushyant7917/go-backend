@@ -308,9 +308,20 @@ func (s *recurringPaymentService) handlePaymentCaptured(
 	}
 	billingCycle.NextAttemptAt = nil // No more attempts needed - cycle is paid
 
-	// Schedule next charge
-	nextCharge := s.calculateNextChargeDate(*recurringPayment)
+	// Schedule next charge; for yearly plans that succeeded on a retry, shorten tenure
+	var nextCharge time.Time
+	if recurringPayment.Frequency == "yearly" && paymentAttempt.AttemptNumber > 1 {
+		tenureMonths := calculateActualTenureMonths(paymentAttempt.AttemptNumber)
+		nextCharge = billingCycle.StartAt.AddDate(0, tenureMonths, 0)
+		newEndAt := nextCharge.Add(-24 * time.Hour)
+		billingCycle.EndAt = &newEndAt
+	} else {
+		nextCharge = s.calculateNextChargeDate(*recurringPayment)
+	}
 	recurringPayment.NextChargeAt = &nextCharge
+
+	// Sync billing cycle amount to the actual captured amount
+	billingCycle.Amount = paymentAttempt.Amount
 
 	// Emit Meta event for Purchase
 	go s.registerPurchaseMetaEvent(recurringPayment, paymentAttempt, billingCycle)
@@ -444,19 +455,57 @@ func isMandateError(errorCode string) bool {
 		lowerCode == "mandate_not_active"
 }
 
-// calculateAttemptAmount calculates the amount to charge based on attempt number
-// First 3 attempts: maxAmount (full amount)
-// 4th attempt onwards: maxAmount - 5 rupees (500 paise) per attempt above 3
-func calculateAttemptAmount(maxAmount int64, attemptNumber int) int64 {
-	if attemptNumber <= 3 {
-		return maxAmount
+const (
+	deductionMonthly int64 = 1000  // ₹10 per retry attempt
+	deductionYearly  int64 = 10000 // ₹100 per retry attempt
+	minChargeAmount  int64 = 9900  // ₹99 floor for monthly/yearly plans
+)
+
+// calculateAttemptAmount calculates the amount to charge based on attempt number and frequency.
+// Monthly: ₹10 deduction per attempt from attempt 2, floor ₹99.
+// Yearly: ₹100 deduction per attempt from attempt 2, floor ₹99.
+// All other frequencies: original logic (₹5/attempt from attempt 4, ₹1 floor).
+func calculateAttemptAmount(maxAmount int64, attemptNumber int, frequency string) int64 {
+	switch frequency {
+	case "monthly", "yearly":
+		if attemptNumber <= 1 {
+			return maxAmount
+		}
+		deduction := deductionMonthly
+		if frequency == "yearly" {
+			deduction = deductionYearly
+		}
+		calculated := maxAmount - int64(attemptNumber-1)*deduction
+		if calculated < minChargeAmount {
+			return minChargeAmount
+		}
+		return calculated
+	default:
+		if attemptNumber <= 3 {
+			return maxAmount
+		}
+		discount := int64((attemptNumber - 3) * 500)
+		if discount >= maxAmount {
+			return 100
+		}
+		return maxAmount - discount
 	}
-	// Decrease by 5 rupees (500 paise) for each attempt above 3
-	discount := int64((attemptNumber - 3) * 500)
-	if discount >= maxAmount {
-		return 100 // Minimum 1 rupee (100 paise)
+}
+
+// calculateActualTenureMonths returns the subscription tenure in months for a yearly plan
+// based on which attempt number succeeded. Attempt 1 → 12 months (full year),
+// attempts 2–3 → 3 months, attempts 4–5 → 2 months, attempt 6+ → 1 month.
+func calculateActualTenureMonths(attemptNumber int) int {
+	switch {
+	case attemptNumber <= 1:
+		return 12
+	case attemptNumber <= 3:
+		return 3
+	case attemptNumber <= 5:
+		return 2
+	default:
+		return 1
 	}
-	return maxAmount - discount
 }
 
 // saveRecordsInTransaction saves all records in a single transaction
@@ -1736,7 +1785,7 @@ func (s *recurringPaymentService) createRetryOrder(
 		return "", fmt.Errorf("billing cycle next_attempt_at is nil")
 	}
 
-	amount := calculateAttemptAmount(rp.MaxAmount, attemptNumber)
+	amount := calculateAttemptAmount(rp.MaxAmount, attemptNumber, rp.Frequency)
 	orderData := map[string]interface{}{
 		"amount":          amount,
 		"currency":        "INR",
@@ -1801,7 +1850,7 @@ func (s *recurringPaymentService) createRetryDBRecords(
 		return fmt.Errorf("failed to update billing cycle: %w", err)
 	}
 
-	amount := calculateAttemptAmount(rp.MaxAmount, attemptNumber)
+	amount := calculateAttemptAmount(rp.MaxAmount, attemptNumber, rp.Frequency)
 	paymentAttempt := &models.PaymentAttempt{
 		BillingCycleID:  bc.ID,
 		AttemptNumber:   attemptNumber,
@@ -1837,18 +1886,21 @@ func (s *recurringPaymentService) processNewBillingCycleForPayment(rp models.Rec
 	}
 
 	nextCycleNumber := len(billingCycles)
-	amount := calculateAttemptAmount(rp.MaxAmount, 1) // First attempt of new cycle
+	amount := calculateAttemptAmount(rp.MaxAmount, 1, rp.Frequency) // First attempt of new cycle
 	nextChargeAt := s.calculateNextChargeDate(rp)
 	endAt := nextChargeAt.Add(-24 * time.Hour)
 
-	// Check if billing cycle would extend beyond mandate expiry BEFORE creating order
-	if rp.EndAt != nil && endAt.After(*rp.EndAt) {
-		// Mark as expired - mandate ends before this billing cycle would complete
+	// Check if the charge date itself is on or after mandate expiry BEFORE creating order.
+	// We gate on rp.NextChargeAt (the actual charge date for this cycle) rather than endAt,
+	// so that shortened yearly cycles — whose access period extends beyond the mandate window
+	// but whose charge date falls within it — are not incorrectly blocked.
+	if rp.EndAt != nil && rp.NextChargeAt != nil && !rp.NextChargeAt.Before(*rp.EndAt) {
+		// Mark as expired - charge date is on or after mandate expiry
 		rp.Status = models.RecurringPaymentStatusExpired
 		if err := s.repo.UpdateRecurringPayment(nil, &rp); err != nil {
 			return fmt.Errorf("failed to update recurring payment: %w", err)
 		}
-		return fmt.Errorf("billing cycle end_at (%s) would exceed mandate end_at (%s)", endAt.Format(time.RFC3339), rp.EndAt.Format(time.RFC3339))
+		return fmt.Errorf("next charge date (%s) is on or after mandate end_at (%s)", rp.NextChargeAt.Format(time.RFC3339), rp.EndAt.Format(time.RFC3339))
 	}
 
 	user, err := s.userRepo.FindByID(rp.UserID)
