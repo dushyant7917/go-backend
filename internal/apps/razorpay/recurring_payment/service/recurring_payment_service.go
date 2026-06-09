@@ -456,7 +456,7 @@ func isMandateError(errorCode string) bool {
 }
 
 const (
-	deductionMonthly int64 = 1000  // ₹10 per retry attempt
+	deductionMonthly int64 = 2500  // ₹25 per retry attempt
 	deductionYearly  int64 = 10000 // ₹100 per retry attempt
 	minChargeAmount  int64 = 9900  // ₹99 floor for monthly/yearly plans
 )
