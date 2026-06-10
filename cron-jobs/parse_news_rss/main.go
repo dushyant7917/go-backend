@@ -250,9 +250,12 @@ func (t *browserUserAgentTransport) RoundTrip(req *http.Request) (*http.Response
 	return t.RoundTripper.RoundTrip(req)
 }
 
-// Shared HTTP client for connection reuse
+// Shared HTTP client for connection reuse.
+// Uses browserUserAgentTransport so image CDNs (e.g. NDTV) that reject Go's default
+// User-Agent respond with 200 instead of 403.
 var httpClient = &http.Client{
-	Timeout: 30 * time.Second,
+	Timeout:   30 * time.Second,
+	Transport: &browserUserAgentTransport{http.DefaultTransport},
 }
 
 // imgSrcRegex extracts the src attribute of the first <img> tag in HTML content.
@@ -418,13 +421,11 @@ func main() {
 		{URL: "https://www.gujaratsamachar.com/rss/category/gujarat", Category: "gujarat"},
 		// West Bengal - English source (Indian Express Kolkata)
 		{URL: "https://indianexpress.com/section/cities/kolkata/feed/", Category: "west_bengal"},
-		// national categories - English source, Hindi base + all 8 regional languages (The Hindu + NDTV)
+		// national categories - English source, Hindi base + all 8 regional languages (The Hindu)
 		{URL: "https://www.thehindu.com/news/national/feeder/default.rss", Category: "national"},
-		{URL: "https://feeds.feedburner.com/ndtvnews-india-news", Category: "national"},
 		{URL: "https://www.thehindu.com/news/international/feeder/default.rss", Category: "international"},
-		{URL: "https://feeds.feedburner.com/ndtvnews-world-news", Category: "international"},
-		{URL: "https://feeds.feedburner.com/ndtvsports-latest", Category: "sports"},
-		{URL: "https://feeds.feedburner.com/ndtvmovies-latest", Category: "entertainment"},
+		{URL: "https://www.thehindu.com/sport/other-sports/feeder/default.rss", Category: "sports"},
+		{URL: "https://www.thehindu.com/entertainment/movies/feeder/default.rss", Category: "entertainment"},
 		// Telangana - Telugu source
 		{URL: "https://www.manatelangana.news/feed", Category: "telangana"},
 		{URL: "https://ntvtelugu.com/feed", Category: "telangana"},
@@ -482,13 +483,10 @@ func main() {
 			log.Printf("[%s] Parsing feed: %s (category: %s)\n", timestamp, rssFeed.URL, rssFeed.Category)
 
 			// Create a new parser for each goroutine (gofeed.Parser is not thread-safe).
-			// Some feeds (e.g. manatelangana.news) block the default gofeed User-Agent with 403,
-			// so we use a browser-like User-Agent.
+			// Reuse the shared httpClient for connection pooling; it already carries
+			// browserUserAgentTransport so feeds that reject Go's default UA still work.
 			fp := gofeed.NewParser()
-			fp.Client = &http.Client{
-				Timeout:   30 * time.Second,
-				Transport: &browserUserAgentTransport{http.DefaultTransport},
-			}
+			fp.Client = httpClient
 			feed, err := fp.ParseURL(rssFeed.URL)
 			if err != nil {
 				log.Printf("[%s] ✗ Failed to parse feed %s: %v\n", timestamp, rssFeed.URL, err)
