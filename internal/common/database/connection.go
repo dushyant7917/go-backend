@@ -54,15 +54,16 @@ type Config struct {
 
 // NewConnection creates a connection for the web server (ServerPoolProfile).
 func NewConnection(config Config) (*gorm.DB, error) {
-	return newConnectionWithProfile(config, ServerPoolProfile)
+	return newConnectionWithProfile(config, ServerPoolProfile, logger.Info)
 }
 
 // NewCronConnection creates a connection for cron jobs (CronPoolProfile).
+// Uses Warn log level to suppress verbose SQL logs (e.g. vector embeddings in queries).
 func NewCronConnection(config Config) (*gorm.DB, error) {
-	return newConnectionWithProfile(config, CronPoolProfile)
+	return newConnectionWithProfile(config, CronPoolProfile, logger.Warn)
 }
 
-func newConnectionWithProfile(config Config, profile PoolProfile) (*gorm.DB, error) {
+func newConnectionWithProfile(config Config, profile PoolProfile, logLevel logger.LogLevel) (*gorm.DB, error) {
 	dsn := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
 		config.Host,
@@ -74,7 +75,7 @@ func newConnectionWithProfile(config Config, profile PoolProfile) (*gorm.DB, err
 	)
 
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info),
+		Logger: logger.Default.LogMode(logLevel),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
