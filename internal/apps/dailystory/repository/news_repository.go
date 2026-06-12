@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"go-backend/internal/apps/dailystory/models"
@@ -10,9 +12,10 @@ import (
 
 // NewsRepository defines the interface for news data operations
 type NewsRepository interface {
-	FindAllPaginated(category, languageCode, status string, createdAtFrom *time.Time, page, pageSize int) ([]models.NewsResponse, int64, error)
+	FindAllPaginated(category, subCategory, languageCode, status string, createdAtFrom *time.Time, page, pageSize int) ([]models.NewsResponse, int64, error)
 	FindByID(id string) (*models.News, error)
 	Update(news *models.News) error
+	BulkUpdateNewsMediaFileKey(items []models.BulkUpdateNewsMediaFileKeyItem) error
 }
 
 // newsRepository implements NewsRepository
@@ -25,8 +28,8 @@ func NewNewsRepository(db *gorm.DB) NewsRepository {
 	return &newsRepository{db: db}
 }
 
-// FindAllPaginated retrieves news with pagination and optional category, language code, status, and created_at_from filters
-func (r *newsRepository) FindAllPaginated(category, languageCode, status string, createdAtFrom *time.Time, page, pageSize int) ([]models.NewsResponse, int64, error) {
+// FindAllPaginated retrieves news with pagination and optional category, sub_category, language code, status, and created_at_from filters
+func (r *newsRepository) FindAllPaginated(category, subCategory, languageCode, status string, createdAtFrom *time.Time, page, pageSize int) ([]models.NewsResponse, int64, error) {
 	var results []models.NewsResponse
 	var total int64
 
@@ -34,9 +37,9 @@ func (r *newsRepository) FindAllPaginated(category, languageCode, status string,
 	query := r.db.Table("news").
 		Select(`
 			news.id,
-			news.link,
 			news.media_file_key,
 			news.category,
+			news.sub_category,
 			news.status,
 			news_translations.title,
 			news_translations.summary,
@@ -53,6 +56,11 @@ func (r *newsRepository) FindAllPaginated(category, languageCode, status string,
 		query = query.Where("news.category = ?", category)
 	}
 
+	// Apply sub_category filter if provided
+	if subCategory != "" {
+		query = query.Where("news.sub_category = ?", subCategory)
+	}
+
 	// Apply language code filter if provided
 	if languageCode != "" {
 		query = query.Where("news_translations.language_code = ?", languageCode)
@@ -67,6 +75,9 @@ func (r *newsRepository) FindAllPaginated(category, languageCode, status string,
 	if createdAtFrom != nil {
 		query = query.Where("news.created_at >= ?", createdAtFrom)
 	}
+
+	// Only return news with media
+	query = query.Where("news.media_file_key IS NOT NULL")
 
 	// Get total count
 	if err := query.Count(&total).Error; err != nil {
@@ -101,4 +112,31 @@ func (r *newsRepository) FindByID(id string) (*models.News, error) {
 // Update updates a news article
 func (r *newsRepository) Update(news *models.News) error {
 	return r.db.Save(news).Error
+}
+
+// BulkUpdateNewsMediaFileKey sets media_file_key for multiple news articles in a single SQL statement
+func (r *newsRepository) BulkUpdateNewsMediaFileKey(items []models.BulkUpdateNewsMediaFileKeyItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+
+	now := time.Now().UTC()
+	placeholders := make([]string, 0, len(items))
+	args := make([]interface{}, 0, len(items)*2)
+
+	for i, item := range items {
+		base := i*2 + 1
+		placeholders = append(placeholders, fmt.Sprintf("($%d::uuid, $%d::text)", base, base+1))
+		args = append(args, item.ID, item.MediaFileKey)
+	}
+
+	query := fmt.Sprintf(`
+		UPDATE news AS n
+		SET media_file_key = v.media_file_key, updated_at = $%d
+		FROM (VALUES %s) AS v(id, media_file_key)
+		WHERE n.id = v.id
+	`, len(args)+1, strings.Join(placeholders, ", "))
+	args = append(args, now)
+
+	return r.db.Exec(query, args...).Error
 }

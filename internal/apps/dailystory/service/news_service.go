@@ -12,10 +12,14 @@ import (
 	"gorm.io/gorm"
 )
 
+// ErrNewsNotFound is returned when a news article cannot be found by ID
+var ErrNewsNotFound = errors.New("news not found")
+
 // NewsService defines the interface for news business logic
 type NewsService interface {
-	ListNewsPaginated(category, languageCode, status string, createdAtFrom *time.Time, page, pageSize int) (*models.PaginatedNewsResponse, error)
+	ListNewsPaginated(category, subCategory, languageCode, status string, createdAtFrom *time.Time, page, pageSize int) (*models.PaginatedNewsResponse, error)
 	UpdateNews(id string, req *models.UpdateNewsRequest) (*models.News, error)
+	BulkUpdateNewsMediaFileKey(req *models.BulkUpdateNewsMediaFileKeyRequest) error
 }
 
 // newsService implements NewsService
@@ -29,19 +33,19 @@ func NewNewsService(repo repository.NewsRepository) NewsService {
 }
 
 // ListNewsPaginated retrieves news with pagination and optional filters
-func (s *newsService) ListNewsPaginated(category, languageCode, status string, createdAtFrom *time.Time, page, pageSize int) (*models.PaginatedNewsResponse, error) {
+func (s *newsService) ListNewsPaginated(category, subCategory, languageCode, status string, createdAtFrom *time.Time, page, pageSize int) (*models.PaginatedNewsResponse, error) {
 	// Validate page and pageSize
 	if page < 1 {
 		page = 1
 	}
 	if pageSize < 1 {
-		pageSize = 10 // default page size
+		pageSize = 20 // default page size
 	}
 	if pageSize > 100 {
 		pageSize = 100 // max page size
 	}
 
-	news, total, err := s.repo.FindAllPaginated(category, languageCode, status, createdAtFrom, page, pageSize)
+	news, total, err := s.repo.FindAllPaginated(category, subCategory, languageCode, status, createdAtFrom, page, pageSize)
 	if err != nil {
 		return nil, err
 	}
@@ -85,18 +89,21 @@ func (s *newsService) ListNewsPaginated(category, languageCode, status string, c
 	}, nil
 }
 
+// BulkUpdateNewsMediaFileKey sets media_file_key for multiple news articles in a single SQL statement
+func (s *newsService) BulkUpdateNewsMediaFileKey(req *models.BulkUpdateNewsMediaFileKeyRequest) error {
+	return s.repo.BulkUpdateNewsMediaFileKey(req.Items)
+}
+
 // UpdateNews updates a news article
 func (s *newsService) UpdateNews(id string, req *models.UpdateNewsRequest) (*models.News, error) {
-	// Find existing news
 	news, err := s.repo.FindByID(id)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.New("news not found")
+			return nil, ErrNewsNotFound
 		}
 		return nil, err
 	}
 
-	// Update fields if provided
 	if req.Link != nil {
 		news.Link = *req.Link
 	}
@@ -113,7 +120,6 @@ func (s *newsService) UpdateNews(id string, req *models.UpdateNewsRequest) (*mod
 		news.PublishedAt = req.PublishedAt
 	}
 	if req.Metadata != nil {
-		// Merge metadata: only update/add provided keys, preserve existing
 		if news.Metadata == nil {
 			news.Metadata = make(utils.Metadata)
 		}
@@ -122,7 +128,6 @@ func (s *newsService) UpdateNews(id string, req *models.UpdateNewsRequest) (*mod
 		}
 	}
 
-	// Save changes
 	if err := s.repo.Update(news); err != nil {
 		return nil, err
 	}

@@ -7,6 +7,7 @@ func RegisterNewsRoutes(router *gin.RouterGroup, handler *NewsHandler, newsPoste
 	news := router.Group("/dailystory/news")
 	{
 		news.GET("", handler.ListNews)
+		news.PATCH("/media-file-key", handler.BulkUpdateNewsMediaFileKey)
 		news.PUT("/:id", handler.UpdateNews)
 	}
 

@@ -1,13 +1,10 @@
-name: Retry Failed Billing Cycles
+name: Generate News Media
 
 on:
-  schedule:
-    # Runs at 2:00 AM IST (8:30 PM UTC) every day
-    - cron: "30 20 * * *"
-  workflow_dispatch: # Allows manual triggering
+  workflow_dispatch: # Disabled scheduled runs; manual trigger only
 
 jobs:
-  retry-failed-billing-cycles:
+  generate-news-media:
     runs-on: ubuntu-latest
 
     steps:
@@ -17,7 +14,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.21"
+          go-version: "1.24"
 
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -30,7 +27,7 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Run retry failed billing cycles job (Cron B)
+      - name: Run generate news media
         env:
           GO_ENV: ${{ secrets.GO_ENV }}
           DB_HOST: ${{ secrets.DB_HOST }}
@@ -39,17 +36,16 @@ jobs:
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_SSL_MODE: ${{ secrets.DB_SSL_MODE }}
-          RAZORPAY_KEY_ID: ${{ secrets.RAZORPAY_KEY_ID }}
-          RAZORPAY_KEY_SECRET: ${{ secrets.RAZORPAY_KEY_SECRET }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
-          EXPO_PUSH_TOKEN: ${{ secrets.EXPO_PUSH_TOKEN }}
-          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          MODAL_ENQUEUE_URL: ${{ secrets.MODAL_ENQUEUE_URL }}
+          MODAL_PROXY_AUTH_TOKEN_ID: ${{ secrets.MODAL_PROXY_AUTH_TOKEN_ID }}
+          MODAL_PROXY_AUTH_TOKEN_SECRET: ${{ secrets.MODAL_PROXY_AUTH_TOKEN_SECRET }}
         run: |
-          cd cron-jobs/retry_failed_billing_cycles
+          cd cron-jobs/generate_news_media
           go run main.go
 
       - name: Notify on failure
         if: failure()
         run: |
-          echo "Retry failed billing cycles job failed"
+          echo "Generate news media failed"
           echo "Check the logs above for details"

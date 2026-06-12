@@ -1,4 +1,10 @@
 {
+  "permissions": {
+    "allow": [
+      "Skill(code-review)",
+      "Skill(code-review:*)"
+    ]
+  },
   "hooks": {
     "Stop": [
       {
@@ -18,15 +24,15 @@
         "hooks": [
           {
             "type": "command",
-            "if": "Bash(make build)",
             "command": "find /Users/dushyant7917/D7/go-backend/bin -maxdepth 1 -type f -delete 2>/dev/null || true",
+            "if": "Bash(make build)",
             "timeout": 10,
             "statusMessage": "Cleaning up build artifacts..."
           },
           {
             "type": "command",
-            "if": "Bash(go build *)",
             "command": "bash /Users/dushyant7917/D7/go-backend/.claude/hooks/cleanup_build_artifacts.sh",
+            "if": "Bash(go build *)",
             "timeout": 10,
             "statusMessage": "Cleaning up build artifacts..."
           }

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -26,7 +27,7 @@ func NewNewsHandler(service service.NewsService) *NewsHandler {
 func (h *NewsHandler) ListNews(c *gin.Context) {
 	// Default pagination values
 	page := 1
-	pageSize := 10
+	pageSize := 20
 
 	// Parse page parameter
 	if pageStr := c.Query("page"); pageStr != "" {
@@ -44,6 +45,7 @@ func (h *NewsHandler) ListNews(c *gin.Context) {
 
 	// Get optional filter parameters
 	category := c.Query("category")
+	subCategory := c.Query("sub_category")
 	languageCode := c.Query("language_code")
 	status := c.Query("status")
 
@@ -56,13 +58,29 @@ func (h *NewsHandler) ListNews(c *gin.Context) {
 		}
 	}
 
-	resp, err := h.service.ListNewsPaginated(category, languageCode, status, createdAtFrom, page, pageSize)
+	resp, err := h.service.ListNewsPaginated(category, subCategory, languageCode, status, createdAtFrom, page, pageSize)
 	if err != nil {
 		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
 	c.JSON(http.StatusOK, resp)
+}
+
+// BulkUpdateNewsMediaFileKey handles PATCH /api/v1/dailystory/news/media-file-key
+func (h *NewsHandler) BulkUpdateNewsMediaFileKey(c *gin.Context) {
+	var req models.BulkUpdateNewsMediaFileKeyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.service.BulkUpdateNewsMediaFileKey(&req); err != nil {
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"updated": len(req.Items)})
 }
 
 // UpdateNews handles PUT /api/v1/dailystory/news/:id
@@ -81,6 +99,10 @@ func (h *NewsHandler) UpdateNews(c *gin.Context) {
 
 	news, err := h.service.UpdateNews(id, &req)
 	if err != nil {
+		if errors.Is(err, service.ErrNewsNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
 		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}

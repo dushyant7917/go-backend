@@ -16,9 +16,11 @@ type News struct {
 	ContentHash  *string          `json:"content_hash,omitempty" gorm:"type:varchar(64);uniqueIndex"`
 	MediaFileKey *string          `json:"media_file_key,omitempty" gorm:"type:varchar(512)"`
 	Category     string           `json:"category" gorm:"type:varchar(100);not null"`
+	SubCategory  *string          `json:"sub_category,omitempty" gorm:"type:varchar(100)"`
 	Status       string           `json:"status" gorm:"type:varchar(50);not null;default:'published'"`
 	PublishedAt  *time.Time       `json:"published_at,omitempty"`
 	Embedding    *pgvector.Vector `json:"-" gorm:"type:vector(768)"`
+	ImagePrompt  *string          `json:"image_prompt,omitempty" gorm:"type:text"`
 	Metadata     utils.Metadata   `json:"metadata" gorm:"type:jsonb;not null;default:'{}'"`
 	CreatedAt    time.Time        `json:"created_at"`
 	UpdatedAt    time.Time        `json:"updated_at"`
@@ -39,6 +41,7 @@ type SimilarNews struct {
 	Link            string    `json:"link" gorm:"type:varchar(2048);not null;unique"`
 	ContentHash     *string   `json:"content_hash,omitempty" gorm:"type:varchar(64)"`
 	Category        string    `json:"category" gorm:"type:varchar(100)"`
+	SubCategory     *string   `json:"sub_category,omitempty" gorm:"type:varchar(100)"`
 	SimilarityScore *float32  `json:"similarity_score,omitempty" gorm:"type:real"`
 	SourceHost      string    `json:"source_host,omitempty" gorm:"type:varchar(255)"`
 	CreatedAt       time.Time `json:"created_at"`
@@ -88,10 +91,10 @@ func (NewsTranslation) TableName() string {
 // NewsResponse represents a news article with its translated title
 type NewsResponse struct {
 	ID           uuid.UUID      `json:"id"`
-	Link         string         `json:"link"`
 	MediaFileKey *string        `json:"-"`                    // Internal field, not exposed in JSON
 	MediaLink    *string        `json:"media_link,omitempty"` // Computed from MediaFileKey
 	Category     string         `json:"category"`
+	SubCategory  *string        `json:"sub_category,omitempty"`
 	Status       string         `json:"status"`
 	Title        string         `json:"title"`
 	Summary      string         `json:"summary"`
@@ -121,4 +124,15 @@ type UpdateNewsRequest struct {
 	Status       *string                `json:"status,omitempty"`
 	PublishedAt  *time.Time             `json:"published_at,omitempty"`
 	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// BulkUpdateNewsMediaFileKeyItem is one entry in a bulk media_file_key update
+type BulkUpdateNewsMediaFileKeyItem struct {
+	ID           string `json:"id" binding:"required,uuid"`
+	MediaFileKey string `json:"media_file_key" binding:"required"`
+}
+
+// BulkUpdateNewsMediaFileKeyRequest is the request body for bulk updating media_file_key
+type BulkUpdateNewsMediaFileKeyRequest struct {
+	Items []BulkUpdateNewsMediaFileKeyItem `json:"items" binding:"required,min=1"`
 }

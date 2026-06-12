@@ -32,7 +32,7 @@ var ServerPoolProfile = PoolProfile{
 }
 
 // CronPoolProfile is optimized for cron jobs:
-//   - MaxOpenConns matches max goroutines (12) to prevent pool exhaustion
+//   - MaxOpenConns matches max goroutines (11) to prevent pool exhaustion
 //   - MaxIdleConns is low (2) because the process exits after the job finishes
 //   - ConnMaxIdleTime is short to free PostgreSQL resources quickly
 var CronPoolProfile = PoolProfile{

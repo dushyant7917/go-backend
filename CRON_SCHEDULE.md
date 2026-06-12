@@ -4,48 +4,42 @@ Single source of truth for all scheduled GitHub Actions cron jobs.
 Workflows live in [.github/workflows/](.github/workflows/). All can also be run manually via `workflow_dispatch`.
 
 > Times shown in **IST** (UTC+5:30). GitHub Actions cron is in **UTC**.
-> Last updated: 2026-06-08
+> Last updated: 2026-06-12 (billing jobs shifted +1 hr)
 
 ## Daily Timeline (IST)
 
 | IST Time | Job | Frequency | Workflow |
 |---|---|---|---|
-| 12:00 AM | Reconcile Payments | Daily | [reconcile-payments.yml](.github/workflows/reconcile-payments.yml) |
-| 12:30 AM | Process New Billing Cycles | Daily | [process-new-billing-cycles.yml](.github/workflows/process-new-billing-cycles.yml) |
-| 1:00 AM | Retry Failed Billing Cycles | Daily | [retry-failed-billing-cycles.yml](.github/workflows/retry-failed-billing-cycles.yml) |
-| 1:45 AM | Charge Pending Payments | Daily | [charge-pending-payments.yml](.github/workflows/charge-pending-payments.yml) |
-| 2:10 AM | Charge Pending Payments | Daily | [charge-pending-payments.yml](.github/workflows/charge-pending-payments.yml) |
-| 4:00 AM | Parse News RSS | Daily | [parse-news-rss.yml](.github/workflows/parse-news-rss.yml) |
-| 5:00 AM | Parse News RSS | Daily | [parse-news-rss.yml](.github/workflows/parse-news-rss.yml) |
+| 1:00 AM | Reconcile Payments | Daily | [reconcile-payments.yml](.github/workflows/reconcile-payments.yml) |
+| 1:30 AM | Process New Billing Cycles | Daily | [process-new-billing-cycles.yml](.github/workflows/process-new-billing-cycles.yml) |
+| 2:00 AM | Retry Failed Billing Cycles | Daily | [retry-failed-billing-cycles.yml](.github/workflows/retry-failed-billing-cycles.yml) |
+| 2:45 AM | Charge Pending Payments | Daily | [charge-pending-payments.yml](.github/workflows/charge-pending-payments.yml) |
+| 3:10 AM | Charge Pending Payments | Daily | [charge-pending-payments.yml](.github/workflows/charge-pending-payments.yml) |
+| 5:00 AM | Parse News Serper → Generate News Media | Daily | [parse-news-serper.yml](.github/workflows/parse-news-serper.yml) |
 | 7:00 AM | Send DailyStory Push Notification | Daily | [send-dailystory-push-notification.yml](.github/workflows/send-dailystory-push-notification.yml) |
 | 8:00 AM | Cleanup Orphan News Media | Weekly (Sun) | [cleanup-orphan-news-media.yml](.github/workflows/cleanup-orphan-news-media.yml) |
 | 8:00 AM | Cleanup Old Posters | Weekly (Mon) | [cleanup-old-posters.yml](.github/workflows/cleanup-old-posters.yml) |
 | 8:00 AM | Cleanup Orphan Profile Pictures | Weekly (Tue) | [cleanup-orphan-profile-pictures.yml](.github/workflows/cleanup-orphan-profile-pictures.yml) |
 | 8:00 AM | Cleanup Triggered Meta Events | Weekly (Wed) | [cleanup-triggered-meta-events.yml](.github/workflows/cleanup-triggered-meta-events.yml) |
-| 11:00 AM | Parse News RSS | Daily | [parse-news-rss.yml](.github/workflows/parse-news-rss.yml) |
-| 12:00 PM | Parse News RSS | Daily | [parse-news-rss.yml](.github/workflows/parse-news-rss.yml) |
+| 11:00 AM | Parse News Serper → Generate News Media | Daily | [parse-news-serper.yml](.github/workflows/parse-news-serper.yml) |
+| 2:30 PM | Parse News Serper → Generate News Media | Daily | [parse-news-serper.yml](.github/workflows/parse-news-serper.yml) |
 | 4:00 PM | Send Subscription Activity Report | Daily | [send-subscription-activity-report.yml](.github/workflows/send-subscription-activity-report.yml) |
-| 5:00 PM | Parse News RSS | Daily | [parse-news-rss.yml](.github/workflows/parse-news-rss.yml) |
-| 7:00 PM | Parse News RSS | Daily | [parse-news-rss.yml](.github/workflows/parse-news-rss.yml) |
-| 9:00 PM | Parse News RSS | Daily | [parse-news-rss.yml](.github/workflows/parse-news-rss.yml) |
 | 11:00 PM | Cleanup Old News | Daily | [cleanup-old-news.yml](.github/workflows/cleanup-old-news.yml) |
 
 ## Active Jobs (by workflow)
 
 ### Charge Pending Payments — Daily
 Cron expressions (UTC):
-- `15 20 * * *` → 1:45 AM IST
-- `40 20 * * *` → 2:10 AM IST
+- `15 21 * * *` → 2:45 AM IST
+- `40 21 * * *` → 3:10 AM IST
 
-### Parse News RSS — Daily
+### Parse News Serper — Daily
+Runs `parse-news-serper` job, then chains into `generate-news-media` job on success.
+
 Cron expressions (UTC):
-- `30 22 * * *` → 4:00 AM IST
 - `30 23 * * *` → 5:00 AM IST
 - `30 5 * * *` → 11:00 AM IST
-- `30 6 * * *` → 12:00 PM IST
-- `30 11 * * *` → 5:00 PM IST
-- `30 13 * * *` → 7:00 PM IST
-- `30 15 * * *` → 9:00 PM IST
+- `0 9 * * *` → 2:30 PM IST
 
 ### Single-run daily jobs
 | Job | Cron (UTC) | IST |
@@ -53,9 +47,9 @@ Cron expressions (UTC):
 | Cleanup Old News | `30 17 * * *` | 11:00 PM |
 | Send DailyStory Push Notification | `30 1 * * *` | 7:00 AM |
 | Send Subscription Activity Report | `30 10 * * *` | 4:00 PM |
-| Reconcile Payments | `30 18 * * *` | 12:00 AM |
-| Process New Billing Cycles | `0 19 * * *` | 12:30 AM |
-| Retry Failed Billing Cycles | `30 19 * * *` | 1:00 AM |
+| Reconcile Payments | `30 19 * * *` | 1:00 AM |
+| Process New Billing Cycles | `0 20 * * *` | 1:30 AM |
+| Retry Failed Billing Cycles | `30 20 * * *` | 2:00 AM |
 
 ### Weekly cleanup jobs
 | Job | Cron (UTC) | IST | Day |
@@ -69,6 +63,8 @@ Cron expressions (UTC):
 
 | Job | Workflow |
 |---|---|
+| Parse News RSS | [parse-news-rss.yml](.github/workflows/parse-news-rss.yml) |
+| Generate News Media (standalone) | [generate-news-media.yml](.github/workflows/generate-news-media.yml) |
 | Cleanup Old Templates | [cleanup-old-templates.yml](.github/workflows/cleanup-old-templates.yml) |
 | Cleanup Orphan Posters | [cleanup-orphan-posters.yml](.github/workflows/cleanup-orphan-posters.yml) |
 | Cleanup Orphan Templates | [cleanup-orphan-templates.yml](.github/workflows/cleanup-orphan-templates.yml) |
