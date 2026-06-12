@@ -861,13 +861,13 @@ Then generate an English image generation prompt for this news article.
 %s
 
 Image prompt guidelines:
-- Write a hyper-realistic photographic description in English for Flux Klein 4B image generation
-- Include geographic context: %s, India
-- Focus on the key subject/event; include culturally relevant visual elements
-- If humans are present: show at most one person, clearly defined hands tucked close to the body or holding a single object, full body or upper body only (no cropped limbs), neutral symmetrical pose
-- Use negative framing for faces: sharp facial features, natural skin texture, anatomically correct proportions
-- Do not include any text, letters, alphabets, or numbers in the image
-- Keep it under 100 words
+- Write a photorealistic, camera-captured scene in English for Flux Klein 4B; Klein renders exactly what you write so be specific and descriptive
+- Include geographic context: %s, India; add culturally relevant visual elements
+- Lighting is the highest-impact element: specify source (golden hour sunlight, overcast sky, interior tungsten), quality (soft/diffused or harsh/directional), and direction
+- Camera details: name a real camera and lens (e.g. "Canon EOS R5, 35mm f/1.8, eye-level") and shot type (wide establishing shot, medium portrait, close-up)
+- Textures: request authentic surface qualities — natural skin with visible pores, fabric weave, weathered surfaces, environmental imperfections
+- If people appear: natural postures and expressions; photorealistic skin with natural imperfections and correct anatomy
+- Purely visual scene; all elements photographic with no typographic content anywhere in the frame
 
 Respond ONLY with a JSON object in this exact format:
 {

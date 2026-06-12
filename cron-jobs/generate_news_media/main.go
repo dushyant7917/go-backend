@@ -119,7 +119,7 @@ func fetchNewsWithoutMedia(db *gorm.DB) ([]newsItem, error) {
 		}
 		items = append(items, newsItem{
 			ID:          n.ID.String(),
-			ImagePrompt: *n.ImagePrompt + " No text, letters, numbers, signs, or written words anywhere in the image.",
+			ImagePrompt: *n.ImagePrompt + " Purely photographic scene, visual elements only.",
 		})
 	}
 	return items, nil
