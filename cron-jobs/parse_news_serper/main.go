@@ -493,9 +493,10 @@ func main() {
 	itemSemaphore := make(chan struct{}, maxConcurrentItems)
 	var itemWg sync.WaitGroup
 
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	maxConcurrentFetch := 6
+	fetchSemaphore := make(chan struct{}, maxConcurrentFetch)
+	var fetchWg sync.WaitGroup
 
-	// Process remaining areas in Serper batches
 	for batchStart := 0; batchStart < len(remaining); batchStart += serperBatch {
 		end := batchStart + serperBatch
 		if end > len(remaining) {
@@ -503,90 +504,100 @@ func main() {
 		}
 		batch := remaining[batchStart:end]
 
-		log.Printf("[%s] Fetching Serper batch %d-%d\n", timestamp, batchStart+1, end)
+		fetchWg.Add(1)
+		fetchSemaphore <- struct{}{}
 
-		results, err := fetchSerperBatch(batch, serperAPIKey, rng, timestamp)
-		if err != nil {
-			log.Printf("[%s] ✗ Serper batch error (areas %d-%d): %v\n", timestamp, batchStart+1, end, err)
-			continue
-		}
+		go func(batch []areaEntry, batchStart, end int) {
+			defer fetchWg.Done()
+			defer func() { <-fetchSemaphore }()
 
-		// Build a lookup from the query string to its areaEntry so that
-		// results can be matched by searchParameters.q rather than by index.
-		queryToEntry := make(map[string]areaEntry, len(batch))
-		for _, e := range batch {
-			queryToEntry[e.areaName+", "+e.state.Name] = e
-		}
+			localRng := rand.New(rand.NewSource(time.Now().UnixNano() + int64(batchStart)))
+			log.Printf("[%s] Fetching Serper batch %d-%d\n", timestamp, batchStart+1, end)
 
-		for _, result := range results {
-			entry, ok := queryToEntry[result.SearchParameters.Q]
-			if !ok {
-				log.Printf("[%s] ✗ No matching area for Serper result q=%q\n", timestamp, result.SearchParameters.Q)
-				continue
-			}
-			if len(result.News) == 0 {
-				continue
+			results, err := fetchSerperBatch(batch, serperAPIKey, localRng, timestamp)
+			if err != nil {
+				log.Printf("[%s] ✗ Serper batch error (areas %d-%d): %v\n", timestamp, batchStart+1, end, err)
+				return
 			}
 
-			for _, item := range result.News {
-				item.Title = strings.TrimSpace(item.Title)
-				item.Snippet = strings.TrimSpace(item.Snippet)
+			// Build a lookup from the query string to its areaEntry so that
+			// results can be matched by searchParameters.q rather than by index.
+			queryToEntry := make(map[string]areaEntry, len(batch))
+			for _, e := range batch {
+				queryToEntry[e.areaName+", "+e.state.Name] = e
+			}
 
-				if item.Title == "" || item.Link == "" {
-					atomic.AddInt64(&totalSkipped, 1)
+			for _, result := range results {
+				entry, ok := queryToEntry[result.SearchParameters.Q]
+				if !ok {
+					log.Printf("[%s] ✗ No matching area for Serper result q=%q\n", timestamp, result.SearchParameters.Q)
+					continue
+				}
+				if len(result.News) == 0 {
 					continue
 				}
 
-				contentHash := computeContentHash(item.Title, item.Source)
+				for _, item := range result.News {
+					item.Title = strings.TrimSpace(item.Title)
+					item.Snippet = strings.TrimSpace(item.Snippet)
 
-				isDuplicate, err := checkDuplicateItem(db, item.Link, contentHash)
-				if err != nil {
-					log.Printf("[%s] ✗ DB error checking duplicate: %v\n", timestamp, err)
-					atomic.AddInt64(&totalFailed, 1)
-					continue
-				}
-				if isDuplicate {
-					atomic.AddInt64(&totalSkipped, 1)
-					continue
-				}
-
-				if _, alreadyProcessing := inFlightLinks.LoadOrStore(item.Link, true); alreadyProcessing {
-					atomic.AddInt64(&totalSkipped, 1)
-					continue
-				}
-				if _, alreadyProcessing := inFlightLinks.LoadOrStore(contentHash, true); alreadyProcessing {
-					inFlightLinks.Delete(item.Link)
-					atomic.AddInt64(&totalSkipped, 1)
-					continue
-				}
-
-				itemWg.Add(1)
-				itemSemaphore <- struct{}{}
-
-				go func(item serperNewsItem, entry areaEntry, contentHash string) {
-					defer itemWg.Done()
-					defer func() { <-itemSemaphore }()
-					defer inFlightLinks.Delete(item.Link)
-					defer inFlightLinks.Delete(contentHash)
-					defer func() {
-						if r := recover(); r != nil {
-							log.Printf("[%s] PANIC in item goroutine: %v\n", timestamp, r)
-						}
-					}()
-
-					switch processor.processItem(item, entry.state, entry.areaKey, contentHash) {
-					case outcomeProcessed:
-						atomic.AddInt64(&totalProcessed, 1)
-					case outcomeSkipped:
+					if item.Title == "" || item.Link == "" {
 						atomic.AddInt64(&totalSkipped, 1)
-					case outcomeFailed:
-						atomic.AddInt64(&totalFailed, 1)
+						continue
 					}
-				}(item, entry, contentHash)
+
+					contentHash := computeContentHash(item.Title, item.Source)
+
+					isDuplicate, err := checkDuplicateItem(db, item.Link, contentHash)
+					if err != nil {
+						log.Printf("[%s] ✗ DB error checking duplicate: %v\n", timestamp, err)
+						atomic.AddInt64(&totalFailed, 1)
+						continue
+					}
+					if isDuplicate {
+						atomic.AddInt64(&totalSkipped, 1)
+						continue
+					}
+
+					if _, alreadyProcessing := inFlightLinks.LoadOrStore(item.Link, true); alreadyProcessing {
+						atomic.AddInt64(&totalSkipped, 1)
+						continue
+					}
+					if _, alreadyProcessing := inFlightLinks.LoadOrStore(contentHash, true); alreadyProcessing {
+						inFlightLinks.Delete(item.Link)
+						atomic.AddInt64(&totalSkipped, 1)
+						continue
+					}
+
+					itemWg.Add(1)
+					itemSemaphore <- struct{}{}
+
+					go func(item serperNewsItem, entry areaEntry, contentHash string) {
+						defer itemWg.Done()
+						defer func() { <-itemSemaphore }()
+						defer inFlightLinks.Delete(item.Link)
+						defer inFlightLinks.Delete(contentHash)
+						defer func() {
+							if r := recover(); r != nil {
+								log.Printf("[%s] PANIC in item goroutine: %v\n", timestamp, r)
+							}
+						}()
+
+						switch processor.processItem(item, entry.state, entry.areaKey, contentHash) {
+						case outcomeProcessed:
+							atomic.AddInt64(&totalProcessed, 1)
+						case outcomeSkipped:
+							atomic.AddInt64(&totalSkipped, 1)
+						case outcomeFailed:
+							atomic.AddInt64(&totalFailed, 1)
+						}
+					}(item, entry, contentHash)
+				}
 			}
-		}
+		}(batch, batchStart, end)
 	}
 
+	fetchWg.Wait()
 	itemWg.Wait()
 
 	elapsed := time.Since(startTime)
