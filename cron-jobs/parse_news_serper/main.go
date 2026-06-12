@@ -1112,7 +1112,8 @@ Image prompt guidelines:
 - Camera details: name a real camera and lens (e.g. "Canon EOS R5, 35mm f/1.8, eye-level") and shot type (wide establishing shot, medium portrait, close-up)
 - Textures: request authentic surface qualities — natural skin with visible pores, fabric weave, weathered surfaces, environmental imperfections
 - If people appear: natural postures and expressions; photorealistic skin with natural imperfections and correct anatomy
-- Purely visual scene; all elements photographic with no typographic content anywhere in the frame
+- If text must appear in the scene, describe it explicitly: specify the exact words in quotes (in English), placement, font style, and surface it appears on (e.g. a billboard reading "VOTE 2024", bold sans-serif, center frame)
+- Purely visual scene; all elements photographic with no typographic content anywhere in the frame unless text is explicitly requested above
 
 Respond ONLY with a JSON object in this exact format:
 {
