@@ -1037,7 +1037,7 @@ func storeNewsWithTranslations(db *gorm.DB, link, contentHash, stateKey, dKey st
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	publishedAt := time.Now().UTC().Truncate(24 * time.Hour)
+	publishedAt := time.Now().UTC()
 	sub := dKey
 
 	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
