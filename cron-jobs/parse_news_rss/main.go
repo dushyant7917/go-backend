@@ -386,56 +386,56 @@ func main() {
 	// List of RSS feeds with their categories
 	rssFeeds := []RSSFeed{
 		// States - Hindi only (Bhaskar)
-		{URL: "https://www.bhaskar.com/rss-v1--category-12084.xml", Category: "himachal_pradesh"},
-		{URL: "https://www.bhaskar.com/rss-v1--category-1742.xml", Category: "haryana"},
-		{URL: "https://www.bhaskar.com/rss-v1--category-7140.xml", Category: "delhi"},
-		{URL: "https://www.bhaskar.com/rss-v1--category-2052.xml", Category: "uttar_pradesh"},
-		{URL: "https://www.bhaskar.com/rss-v1--category-3679.xml", Category: "bihar"},
-		{URL: "https://www.bhaskar.com/rss-v1--category-1740.xml", Category: "rajasthan"},
-		{URL: "https://www.bhaskar.com/rss-v1--category-1739.xml", Category: "madhya_pradesh"},
-		{URL: "https://www.bhaskar.com/rss-v1--category-3682.xml", Category: "jharkhand"},
-		{URL: "https://www.bhaskar.com/rss-v1--category-1741.xml", Category: "chhattisgarh"},
+		// {URL: "https://www.bhaskar.com/rss-v1--category-12084.xml", Category: "himachal_pradesh"},
+		// {URL: "https://www.bhaskar.com/rss-v1--category-1742.xml", Category: "haryana"},
+		// {URL: "https://www.bhaskar.com/rss-v1--category-7140.xml", Category: "delhi"},
+		// {URL: "https://www.bhaskar.com/rss-v1--category-2052.xml", Category: "uttar_pradesh"},
+		// {URL: "https://www.bhaskar.com/rss-v1--category-3679.xml", Category: "bihar"},
+		// {URL: "https://www.bhaskar.com/rss-v1--category-1740.xml", Category: "rajasthan"},
+		// {URL: "https://www.bhaskar.com/rss-v1--category-1739.xml", Category: "madhya_pradesh"},
+		// {URL: "https://www.bhaskar.com/rss-v1--category-3682.xml", Category: "jharkhand"},
+		// {URL: "https://www.bhaskar.com/rss-v1--category-1741.xml", Category: "chhattisgarh"},
 		// States - Hindi only (LiveHindustan)
-		{URL: "https://api.livehindustan.com/feeds/rss/himachal-pradesh/rssfeed.xml", Category: "himachal_pradesh"},
-		{URL: "https://api.livehindustan.com/feeds/rss/ncr/new-delhi/rssfeed.xml", Category: "delhi"},
-		{URL: "https://api.livehindustan.com/feeds/rss/uttar-pradesh/rssfeed.xml", Category: "uttar_pradesh"},
-		{URL: "https://api.livehindustan.com/feeds/rss/rajasthan/rssfeed.xml", Category: "rajasthan"},
-		{URL: "https://api.livehindustan.com/feeds/rss/madhya-pradesh/rssfeed.xml", Category: "madhya_pradesh"},
-		{URL: "https://api.livehindustan.com/feeds/rss/jharkhand/rssfeed.xml", Category: "jharkhand"},
-		{URL: "https://api.livehindustan.com/feeds/rss/uttarakhand/rssfeed.xml", Category: "uttarakhand"},
+		// {URL: "https://api.livehindustan.com/feeds/rss/himachal-pradesh/rssfeed.xml", Category: "himachal_pradesh"},
+		// {URL: "https://api.livehindustan.com/feeds/rss/ncr/new-delhi/rssfeed.xml", Category: "delhi"},
+		// {URL: "https://api.livehindustan.com/feeds/rss/uttar-pradesh/rssfeed.xml", Category: "uttar_pradesh"},
+		// {URL: "https://api.livehindustan.com/feeds/rss/rajasthan/rssfeed.xml", Category: "rajasthan"},
+		// {URL: "https://api.livehindustan.com/feeds/rss/madhya-pradesh/rssfeed.xml", Category: "madhya_pradesh"},
+		// {URL: "https://api.livehindustan.com/feeds/rss/jharkhand/rssfeed.xml", Category: "jharkhand"},
+		// {URL: "https://api.livehindustan.com/feeds/rss/uttarakhand/rssfeed.xml", Category: "uttarakhand"},
 		// States - Hindi only (OneIndia)
-		{URL: "https://hindi.oneindia.com/rss/feeds/hindi-bihar-fb.xml", Category: "bihar"},
-		{URL: "https://hindi.oneindia.com/rss/feeds/hindi-delhi-fb.xml", Category: "delhi"},
-		{URL: "https://hindi.oneindia.com/rss/feeds/hindi-uttar-pradesh-fb.xml", Category: "uttar_pradesh"},
+		// {URL: "https://hindi.oneindia.com/rss/feeds/hindi-bihar-fb.xml", Category: "bihar"},
+		// {URL: "https://hindi.oneindia.com/rss/feeds/hindi-delhi-fb.xml", Category: "delhi"},
+		// {URL: "https://hindi.oneindia.com/rss/feeds/hindi-uttar-pradesh-fb.xml", Category: "uttar_pradesh"},
 		// States - Hindi + regional language (Bhaskar)
-		{URL: "https://www.bhaskar.com/rss-v1--category-1743.xml", Category: "punjab"},
-		{URL: "https://www.bhaskar.com/rss-v1--category-2318.xml", Category: "maharashtra"},
+		// {URL: "https://www.bhaskar.com/rss-v1--category-1743.xml", Category: "punjab"},
+		// {URL: "https://www.bhaskar.com/rss-v1--category-2318.xml", Category: "maharashtra"},
 		// States - Hindi + regional language (LiveHindustan)
-		{URL: "https://api.livehindustan.com/feeds/rss/punjab/rssfeed.xml", Category: "punjab"},
-		{URL: "https://api.livehindustan.com/feeds/rss/gujarat/rssfeed.xml", Category: "gujarat"},
-		{URL: "https://api.livehindustan.com/feeds/rss/maharashtra/rssfeed.xml", Category: "maharashtra"},
+		// {URL: "https://api.livehindustan.com/feeds/rss/punjab/rssfeed.xml", Category: "punjab"},
+		// {URL: "https://api.livehindustan.com/feeds/rss/gujarat/rssfeed.xml", Category: "gujarat"},
+		// {URL: "https://api.livehindustan.com/feeds/rss/maharashtra/rssfeed.xml", Category: "maharashtra"},
 		// States - Hindi + regional language (OneIndia)
-		{URL: "https://hindi.oneindia.com/rss/feeds/hindi-punjab-fb.xml", Category: "punjab"},
-		{URL: "https://hindi.oneindia.com/rss/feeds/hindi-maharashtra-fb.xml", Category: "maharashtra"},
+		// {URL: "https://hindi.oneindia.com/rss/feeds/hindi-punjab-fb.xml", Category: "punjab"},
+		// {URL: "https://hindi.oneindia.com/rss/feeds/hindi-maharashtra-fb.xml", Category: "maharashtra"},
 		// Gujarat - Gujarati source (Gujarat Samachar)
-		{URL: "https://www.gujaratsamachar.com/rss/category/gujarat", Category: "gujarat"},
+		// {URL: "https://www.gujaratsamachar.com/rss/category/gujarat", Category: "gujarat"},
 		// West Bengal - English source (Indian Express Kolkata)
-		{URL: "https://indianexpress.com/section/cities/kolkata/feed/", Category: "west_bengal"},
+		// {URL: "https://indianexpress.com/section/cities/kolkata/feed/", Category: "west_bengal"},
 		// national categories - English source, Hindi base + all 8 regional languages (The Hindu)
 		{URL: "https://www.thehindu.com/news/national/feeder/default.rss", Category: "national"},
 		{URL: "https://www.thehindu.com/news/international/feeder/default.rss", Category: "international"},
 		{URL: "https://www.thehindu.com/sport/other-sports/feeder/default.rss", Category: "sports"},
 		{URL: "https://www.thehindu.com/entertainment/movies/feeder/default.rss", Category: "entertainment"},
 		// Telangana - Telugu source
-		{URL: "https://www.manatelangana.news/feed", Category: "telangana"},
-		{URL: "https://ntvtelugu.com/feed", Category: "telangana"},
+		// {URL: "https://www.manatelangana.news/feed", Category: "telangana"},
+		// {URL: "https://ntvtelugu.com/feed", Category: "telangana"},
 		// Tamil Nadu - Tamil source
-		{URL: "https://tamil.oneindia.com/rss/feeds/oneindia-tamil-fb.xml", Category: "tamil_nadu"},
+		// {URL: "https://tamil.oneindia.com/rss/feeds/oneindia-tamil-fb.xml", Category: "tamil_nadu"},
 		// Kerala - Malayalam source
-		{URL: "https://malayalam.oneindia.com/rss/feeds/oneindia-malayalam-fb.xml", Category: "kerala"},
-		{URL: "https://www.onmanorama.com/kerala.feeds.onmrss.xml", Category: "kerala"},
+		// {URL: "https://malayalam.oneindia.com/rss/feeds/oneindia-malayalam-fb.xml", Category: "kerala"},
+		// {URL: "https://www.onmanorama.com/kerala.feeds.onmrss.xml", Category: "kerala"},
 		// Karnataka - Kannada source
-		{URL: "https://kannada.oneindia.com/rss/feeds/oneindia-kannada-fb.xml", Category: "karnataka"},
+		// {URL: "https://kannada.oneindia.com/rss/feeds/oneindia-kannada-fb.xml", Category: "karnataka"},
 	}
 
 	var totalProcessed, totalSkipped, totalFailed int64
