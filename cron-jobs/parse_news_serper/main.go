@@ -13,10 +13,12 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	dsmodels "go-backend/internal/apps/dailystory/models"
@@ -308,14 +310,26 @@ const (
 	geminiModel                 = "gemini-2.5-flash-lite"
 	embeddingModel              = "gemini-embedding-001"
 	embeddingDimensions         = 768
-	llmRateLimitPerMinute       = 5000
-	embeddingRateLimitPerMinute = 1000
+	llmRateLimitPerMinute       = 8000 // API limit 10K RPM; 8K gives 20% headroom; 8K×1000tok=8M<10M TPM
+	embeddingRateLimitPerMinute = 2000 // TPM-constrained: 2000×1800tok=3.6M<5M TPM (API RPM limit is 5K)
 
 	PostHogEventNewsParsingFailed    = "NEWS_PARSING_FAILED"
 	PostHogEventNewsParsingSucceeded = "NEWS_PARSING_SUCCEEDED"
 
-	areaCapWindow = 12 * time.Hour
-	areaCapLimit  = 20
+	areaCapWindow      = 12 * time.Hour
+	areaCapLimit       = 20
+	embeddingBatchSize = 20
+	dbBatchSize        = 50
+
+	// Worker pool sizes — derived from rate limits and DB connection pool (max 11).
+	// LLM workers: 50 goroutines × ~2s/call ≈ 1500 actual RPM, well under 8000 RPM limiter.
+	// Embedding workers: 5 goroutines; limiter caps at 2000 RPM batches (~1800 tok each) = 3.6M TPM.
+	// DB workers: 9 keeps concurrent queries under the 11-connection cron pool limit.
+	// Fetch workers: ceil(573 areas / 100 per batch) = 6 max Serper batches in parallel.
+	llmWorkers       = 50
+	embeddingWorkers = 5
+	dbWorkers        = 9
+	fetchWorkers     = 6
 )
 
 const llmHeadlineGuidelines = `Headline guidelines:
@@ -332,7 +346,6 @@ var (
 	semanticDedupEnabled   bool
 	semanticDedupThreshold float64
 	semanticDedupWindow    time.Duration
-	semanticStoreMutex     sync.Mutex
 )
 
 // ==================== Shared HTTP client ====================
@@ -374,7 +387,6 @@ func languageCodeToName(code string) string {
 	}
 }
 
-// fullAreaKey returns the composite key used to identify an area bucket.
 func fullAreaKey(stateKey, dKey string) string {
 	return stateKey + ":" + dKey
 }
@@ -385,6 +397,63 @@ type areaEntry struct {
 	state    stateInfo
 	areaKey  string
 	areaName string
+}
+
+// ==================== Pipeline types ====================
+
+type dedupStore struct {
+	links         sync.Map // link → struct{}
+	contentHashes sync.Map // contentHash → struct{}
+}
+
+func (d *dedupStore) contains(link, contentHash string) bool {
+	if _, ok := d.links.Load(link); ok {
+		return true
+	}
+	if _, ok := d.contentHashes.Load(contentHash); ok {
+		return true
+	}
+	return false
+}
+
+func (d *dedupStore) add(link, contentHash string) {
+	d.links.Store(link, struct{}{})
+	d.contentHashes.Store(contentHash, struct{}{})
+}
+
+type rawNewsItem struct {
+	item        serperNewsItem
+	entry       areaEntry
+	contentHash string
+	done        func() // deletes both link and contentHash from inFlightLinks
+}
+
+type translatedNewsItem struct {
+	rawNewsItem
+	result translationResult
+}
+
+type embeddedNewsItem struct {
+	translatedNewsItem
+	embedding []float32 // nil when semanticDedupEnabled=false
+}
+
+// ==================== Per-area mutex map ====================
+
+type areaLocks struct {
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
+}
+
+func (a *areaLocks) get(key string) *sync.Mutex {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if m, ok := a.locks[key]; ok {
+		return m
+	}
+	m := &sync.Mutex{}
+	a.locks[key] = m
+	return m
 }
 
 // ==================== main ====================
@@ -445,7 +514,9 @@ func main() {
 	posthogClient := analytics.NewPostHogClient()
 	posthogConfig := getPostHogConfig(posthogConfigRepo, timestamp)
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	genaiClient, err := genai.NewClient(ctx, &genai.ClientConfig{APIKey: geminiAPIKey})
 	if err != nil {
 		log.Fatalf("[%s] ✗ Failed to create Gemini client: %v\n", timestamp, err)
@@ -464,12 +535,12 @@ func main() {
 	}
 	log.Printf("[%s] Total areas: %d\n", timestamp, len(allAreas))
 
-	// Pre-check area cap: single query to find areas already at limit
+	// Phase 0: pre-load area caps and dedup store before any goroutines start
 	fullAreas := loadFullAreas(db, timestamp)
 	var skippedAreas int
 	var remaining []areaEntry
 	for _, e := range allAreas {
-		if fullAreas[fullAreaKey(e.state.StateKey, e.areaKey)] {
+		if _, ok := fullAreas[fullAreaKey(e.state.StateKey, e.areaKey)]; ok {
 			skippedAreas++
 		} else {
 			remaining = append(remaining, e)
@@ -477,24 +548,209 @@ func main() {
 	}
 	log.Printf("[%s] Areas skipped (cap reached): %d, remaining: %d\n", timestamp, skippedAreas, len(remaining))
 
-	var totalProcessed, totalSkipped, totalFailed int64
+	store := loadDedupStore(db, timestamp)
 
-	processor := &newsProcessor{
-		db:                   db,
-		genai:                genaiClient,
-		llmRateLimiter:       llmRateLimiter,
-		embeddingRateLimiter: embeddingRateLimiter,
-		timestamp:            timestamp,
+	var totalProcessed, totalSkipped, totalFailed int64
+	var inFlightLinks sync.Map
+	areaLk := &areaLocks{locks: make(map[string]*sync.Mutex)}
+
+	// Channels
+	rawNewsItemsCh := make(chan rawNewsItem, 500)
+	translatedNewsItemsCh := make(chan translatedNewsItem, 500)
+	embeddedNewsItemsCh := make(chan embeddedNewsItem, 50)
+	newsItemBatchesCh := make(chan []translatedNewsItem, 10)
+	dbBatchesCh := make(chan []embeddedNewsItem, 10)
+
+	// ── Phase 4a: DB workers ─────────────────────────────────────────
+	var dbWg sync.WaitGroup
+	for range dbWorkers {
+		dbWg.Add(1)
+		go func() {
+			defer dbWg.Done()
+			for batch := range dbBatchesCh {
+				processBatch(db, batch, store, areaLk, timestamp, &totalProcessed, &totalSkipped, &totalFailed)
+			}
+		}()
 	}
 
-	var inFlightLinks sync.Map
+	// ── Phase 4b: DB batcher ─────────────────────────────────────────
+	var dbBatcherWg sync.WaitGroup
+	dbBatcherWg.Add(1)
+	go func() {
+		defer dbBatcherWg.Done()
+		defer close(dbBatchesCh) // always close so DB workers exit cleanly on ctx.Done early return
+		batch := make([]embeddedNewsItem, 0, dbBatchSize)
+		for item := range embeddedNewsItemsCh {
+			batch = append(batch, item)
+			if len(batch) == dbBatchSize {
+				select {
+				case dbBatchesCh <- batch:
+					batch = make([]embeddedNewsItem, 0, dbBatchSize)
+				case <-ctx.Done():
+					for _, it := range batch {
+						it.done()
+						atomic.AddInt64(&totalSkipped, 1)
+					}
+					return
+				}
+			}
+		}
+		if len(batch) > 0 {
+			select {
+			case dbBatchesCh <- batch:
+			case <-ctx.Done():
+				for _, it := range batch {
+					it.done()
+					atomic.AddInt64(&totalSkipped, 1)
+				}
+			}
+		}
+	}()
 
-	maxConcurrentItems := 8
-	itemSemaphore := make(chan struct{}, maxConcurrentItems)
-	var itemWg sync.WaitGroup
+	// ── Phase 3: Embedding ───────────────────────────────────────────
+	var embedWg sync.WaitGroup
+	var embBatcherWg sync.WaitGroup
 
-	maxConcurrentFetch := 6
-	fetchSemaphore := make(chan struct{}, maxConcurrentFetch)
+	if semanticDedupEnabled {
+		// Embedding workers
+		for range embeddingWorkers {
+			embedWg.Add(1)
+			go func() {
+				defer embedWg.Done()
+				for batch := range newsItemBatchesCh {
+					embeddings, err := generateEmbeddingBatch(ctx, genaiClient, batch, embeddingRateLimiter)
+					if err != nil {
+						outcome := &totalFailed
+						if ctx.Err() != nil {
+							outcome = &totalSkipped
+						}
+						for _, item := range batch {
+							item.done()
+							atomic.AddInt64(outcome, 1)
+						}
+						continue
+					}
+					for i, item := range batch {
+						embedded := embeddedNewsItem{translatedNewsItem: item, embedding: embeddings[i]}
+						select {
+						case embeddedNewsItemsCh <- embedded:
+						case <-ctx.Done():
+							item.done()
+							atomic.AddInt64(&totalSkipped, 1)
+						}
+					}
+				}
+			}()
+		}
+
+		// Embedding batcher (1)
+		embBatcherWg.Add(1)
+		go func() {
+			defer embBatcherWg.Done()
+			defer close(newsItemBatchesCh) // always close so embedding workers exit cleanly on ctx.Done early return
+			batch := make([]translatedNewsItem, 0, embeddingBatchSize)
+			for item := range translatedNewsItemsCh {
+				batch = append(batch, item)
+				if len(batch) == embeddingBatchSize {
+					select {
+					case newsItemBatchesCh <- batch:
+						batch = make([]translatedNewsItem, 0, embeddingBatchSize)
+					case <-ctx.Done():
+						for _, it := range batch {
+							it.done()
+							atomic.AddInt64(&totalSkipped, 1)
+						}
+						return
+					}
+				}
+			}
+			if len(batch) > 0 {
+				select {
+				case newsItemBatchesCh <- batch:
+				case <-ctx.Done():
+					for _, it := range batch {
+						it.done()
+						atomic.AddInt64(&totalSkipped, 1)
+					}
+				}
+			}
+		}()
+	} else {
+		// Semantic dedup disabled: pass items through with nil embedding directly
+		close(newsItemBatchesCh)
+		embBatcherWg.Add(1)
+		go func() {
+			defer embBatcherWg.Done()
+			for item := range translatedNewsItemsCh {
+				embedded := embeddedNewsItem{translatedNewsItem: item, embedding: nil}
+				select {
+				case embeddedNewsItemsCh <- embedded:
+				case <-ctx.Done():
+					item.done()
+					atomic.AddInt64(&totalSkipped, 1)
+				}
+			}
+		}()
+	}
+
+	// ── Phase 2: LLM workers ────────────────────────────────────────
+	var llmWg sync.WaitGroup
+	for range llmWorkers {
+		llmWg.Add(1)
+		go func() {
+			defer llmWg.Done()
+			for raw := range rawNewsItemsCh {
+				if ctx.Err() != nil {
+					raw.done()
+					atomic.AddInt64(&totalSkipped, 1)
+					continue
+				}
+
+				result, err := callGeminiTranslate(ctx, genaiClient, raw.item.Title, raw.item.Snippet, raw.entry.state, llmRateLimiter)
+				if err != nil {
+					log.Printf("[%s] ✗ Gemini failed for '%s': %v\n", timestamp, raw.item.Title, err)
+					raw.done()
+					if ctx.Err() != nil {
+						atomic.AddInt64(&totalSkipped, 1)
+					} else {
+						atomic.AddInt64(&totalFailed, 1)
+					}
+					continue
+				}
+
+				if result.BaseHeadline == "" || result.BaseSummary == "" || result.ImagePrompt == "" {
+					log.Printf("[%s] ✗ Empty headline/summary/prompt for '%s'\n", timestamp, raw.item.Title)
+					raw.done()
+					atomic.AddInt64(&totalFailed, 1)
+					continue
+				}
+				valid := true
+				for langCode, pair := range result.Translations {
+					if pair.Headline == "" || pair.Summary == "" {
+						log.Printf("[%s] ✗ Empty %s translation for '%s'\n", timestamp, langCode, raw.item.Title)
+						valid = false
+						break
+					}
+				}
+				if !valid {
+					raw.done()
+					atomic.AddInt64(&totalFailed, 1)
+					continue
+				}
+
+				translated := translatedNewsItem{rawNewsItem: raw, result: result}
+				select {
+				case translatedNewsItemsCh <- translated:
+				case <-ctx.Done():
+					raw.done()
+					atomic.AddInt64(&totalSkipped, 1)
+				}
+			}
+		}()
+	}
+
+	// ── Phase 1: Serper fetch ────────────────────────────────────────
+	fetchSemaphore := make(chan struct{}, fetchWorkers)
 	var fetchWg sync.WaitGroup
 
 	for batchStart := 0; batchStart < len(remaining); batchStart += serperBatch {
@@ -511,17 +767,19 @@ func main() {
 			defer fetchWg.Done()
 			defer func() { <-fetchSemaphore }()
 
+			if ctx.Err() != nil {
+				return
+			}
+
 			localRng := rand.New(rand.NewSource(time.Now().UnixNano() + int64(batchStart)))
 			log.Printf("[%s] Fetching Serper batch %d-%d\n", timestamp, batchStart+1, end)
 
-			results, err := fetchSerperBatch(batch, serperAPIKey, localRng, timestamp)
+			results, err := fetchSerperBatch(ctx, batch, serperAPIKey, localRng, timestamp)
 			if err != nil {
 				log.Printf("[%s] ✗ Serper batch error (areas %d-%d): %v\n", timestamp, batchStart+1, end, err)
 				return
 			}
 
-			// Build a lookup from the query string to its areaEntry so that
-			// results can be matched by searchParameters.q rather than by index.
 			queryToEntry := make(map[string]areaEntry, len(batch))
 			for _, e := range batch {
 				queryToEntry[e.areaName+", "+e.state.Name] = e
@@ -533,11 +791,12 @@ func main() {
 					log.Printf("[%s] ✗ No matching area for Serper result q=%q\n", timestamp, result.SearchParameters.Q)
 					continue
 				}
-				if len(result.News) == 0 {
-					continue
-				}
 
 				for _, item := range result.News {
+					if ctx.Err() != nil {
+						return
+					}
+
 					item.Title = strings.TrimSpace(item.Title)
 					item.Snippet = strings.TrimSpace(item.Snippet)
 
@@ -548,71 +807,77 @@ func main() {
 
 					contentHash := computeContentHash(item.Title, item.Source)
 
-					isDuplicate, err := checkDuplicateItem(db, item.Link, contentHash)
-					if err != nil {
-						log.Printf("[%s] ✗ DB error checking duplicate: %v\n", timestamp, err)
-						atomic.AddInt64(&totalFailed, 1)
-						continue
-					}
-					if isDuplicate {
+					if store.contains(item.Link, contentHash) {
 						atomic.AddInt64(&totalSkipped, 1)
 						continue
 					}
 
-					if _, alreadyProcessing := inFlightLinks.LoadOrStore(item.Link, true); alreadyProcessing {
+					if _, alreadyProcessing := inFlightLinks.LoadOrStore(item.Link, struct{}{}); alreadyProcessing {
 						atomic.AddInt64(&totalSkipped, 1)
 						continue
 					}
-					if _, alreadyProcessing := inFlightLinks.LoadOrStore(contentHash, true); alreadyProcessing {
+					if _, alreadyProcessing := inFlightLinks.LoadOrStore(contentHash, struct{}{}); alreadyProcessing {
 						inFlightLinks.Delete(item.Link)
 						atomic.AddInt64(&totalSkipped, 1)
 						continue
 					}
 
-					itemWg.Add(1)
-					itemSemaphore <- struct{}{}
+					link := item.Link
+					hash := contentHash
+					raw := rawNewsItem{
+						item:        item,
+						entry:       entry,
+						contentHash: contentHash,
+						done: func() {
+							inFlightLinks.Delete(link)
+							inFlightLinks.Delete(hash)
+						},
+					}
 
-					go func(item serperNewsItem, entry areaEntry, contentHash string) {
-						defer itemWg.Done()
-						defer func() { <-itemSemaphore }()
-						defer inFlightLinks.Delete(item.Link)
-						defer inFlightLinks.Delete(contentHash)
-						defer func() {
-							if r := recover(); r != nil {
-								log.Printf("[%s] PANIC in item goroutine: %v\n", timestamp, r)
-							}
-						}()
-
-						switch processor.processItem(item, entry.state, entry.areaKey, contentHash) {
-						case outcomeProcessed:
-							atomic.AddInt64(&totalProcessed, 1)
-						case outcomeSkipped:
-							atomic.AddInt64(&totalSkipped, 1)
-						case outcomeFailed:
-							atomic.AddInt64(&totalFailed, 1)
-						}
-					}(item, entry, contentHash)
+					select {
+					case rawNewsItemsCh <- raw:
+					case <-ctx.Done():
+						raw.done()
+						atomic.AddInt64(&totalSkipped, 1)
+						return
+					}
 				}
 			}
 		}(batch, batchStart, end)
 	}
 
+	// ── Teardown: drain in dependency order ──────────────────────────
 	fetchWg.Wait()
-	itemWg.Wait()
+	close(rawNewsItemsCh)
+
+	llmWg.Wait()
+	close(translatedNewsItemsCh)
+
+	embBatcherWg.Wait() // embedding batcher closes newsItemBatchesCh and exits
+	embedWg.Wait()      // embedding workers drain newsItemBatchesCh and exit
+	close(embeddedNewsItemsCh)
+
+	dbBatcherWg.Wait() // DB batcher closes dbBatchesCh and exits
+	dbWg.Wait()        // DB workers drain dbBatchesCh and exit
 
 	elapsed := time.Since(startTime)
-	log.Printf("[%s] ✓ Completed in %dm %02ds: %d processed, %d skipped, %d failed\n",
-		timestamp, int(elapsed.Minutes()), int(elapsed.Seconds())%60, totalProcessed, totalSkipped, totalFailed)
+	if ctx.Err() != nil {
+		log.Printf("[%s] ⚠ Run interrupted after %dm %02ds: %d processed, %d skipped, %d failed\n",
+			timestamp, int(elapsed.Minutes()), int(elapsed.Seconds())%60, totalProcessed, totalSkipped, totalFailed)
+	} else {
+		log.Printf("[%s] ✓ Completed in %dm %02ds: %d processed, %d skipped, %d failed\n",
+			timestamp, int(elapsed.Minutes()), int(elapsed.Seconds())%60, totalProcessed, totalSkipped, totalFailed)
+	}
 
-	sendPostHogEvent(posthogClient, posthogConfig, PostHogEventNewsParsingSucceeded, int(totalProcessed))
+	if ctx.Err() == nil {
+		sendPostHogEvent(posthogClient, posthogConfig, PostHogEventNewsParsingSucceeded, int(totalProcessed))
+	}
 	sendPostHogEvent(posthogClient, posthogConfig, PostHogEventNewsParsingFailed, int(totalFailed))
-
-	os.Exit(0)
 }
 
 // ==================== Serper batch fetch ====================
 
-func fetchSerperBatch(entries []areaEntry, apiKey string, rng *rand.Rand, timestamp string) ([]serperBatchResult, error) {
+func fetchSerperBatch(ctx context.Context, entries []areaEntry, apiKey string, rng *rand.Rand, timestamp string) ([]serperBatchResult, error) {
 	queries := make([]serperQuery, len(entries))
 	for i, e := range entries {
 		queries[i] = serperQuery{
@@ -634,7 +899,11 @@ func fetchSerperBatch(entries []areaEntry, apiKey string, rng *rand.Rand, timest
 		if attempt > 1 {
 			jitter := time.Duration(2*attempt)*time.Second + time.Duration(rng.Intn(1000))*time.Millisecond
 			log.Printf("[%s] Serper retry %d/%d in %v\n", timestamp, attempt, maxAttempts, jitter.Round(time.Millisecond))
-			time.Sleep(jitter)
+			select {
+			case <-time.After(jitter):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 		}
 
 		req, err := http.NewRequest(http.MethodPost, serperEndpoint, bytes.NewReader(body))
@@ -659,6 +928,9 @@ func fetchSerperBatch(entries []areaEntry, apiKey string, rng *rand.Rand, timest
 
 		if resp.StatusCode != http.StatusOK {
 			lastErr = fmt.Errorf("serper returned %d: %s", resp.StatusCode, string(respBody))
+			if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+				return nil, lastErr
+			}
 			continue
 		}
 
@@ -673,9 +945,7 @@ func fetchSerperBatch(entries []areaEntry, apiKey string, rng *rand.Rand, timest
 
 // ==================== Area cap ====================
 
-// loadFullAreas returns a set of "stateKey:areaKey" strings for areas
-// that already have >= areaCapLimit news items in the last areaCapWindow.
-func loadFullAreas(db *gorm.DB, timestamp string) map[string]bool {
+func loadFullAreas(db *gorm.DB, timestamp string) map[string]struct{} {
 	since := time.Now().Add(-areaCapWindow)
 	var rows []struct {
 		Category    string
@@ -690,16 +960,15 @@ func loadFullAreas(db *gorm.DB, timestamp string) map[string]bool {
 		HAVING COUNT(*) >= ?`, since, areaCapLimit).Scan(&rows).Error
 	if err != nil {
 		log.Printf("[%s] ✗ Failed to load area caps: %v\n", timestamp, err)
-		return map[string]bool{}
+		return map[string]struct{}{}
 	}
-	full := make(map[string]bool, len(rows))
+	full := make(map[string]struct{}, len(rows))
 	for _, r := range rows {
-		full[fullAreaKey(r.Category, r.SubCategory)] = true
+		full[fullAreaKey(r.Category, r.SubCategory)] = struct{}{}
 	}
 	return full
 }
 
-// areaCount returns the current count of news items for the given area in the cap window.
 func areaCount(db *gorm.DB, stateKey, dKey string) (int64, error) {
 	since := time.Now().Add(-areaCapWindow)
 	var count int64
@@ -709,113 +978,89 @@ func areaCount(db *gorm.DB, stateKey, dKey string) (int64, error) {
 	return count, err
 }
 
-// ==================== Item processor ====================
+// ==================== Dedup store ====================
 
-type itemOutcome int
+func loadDedupStore(db *gorm.DB, timestamp string) *dedupStore {
+	store := &dedupStore{}
+	since := time.Now().Add(-semanticDedupWindow)
 
-const (
-	outcomeProcessed itemOutcome = iota
-	outcomeSkipped
-	outcomeFailed
-)
-
-type newsProcessor struct {
-	db                   *gorm.DB
-	genai                *genai.Client
-	llmRateLimiter       *rate.Limiter
-	embeddingRateLimiter *rate.Limiter
-	timestamp            string
-}
-
-func (p *newsProcessor) processItem(item serperNewsItem, state stateInfo, dKey, contentHash string) itemOutcome {
-	translateCtx, translateCancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer translateCancel()
-
-	result, err := callGeminiTranslate(translateCtx, p.genai, item.Title, item.Snippet, state, p.llmRateLimiter)
-	if err != nil {
-		log.Printf("[%s] ✗ Gemini failed for '%s': %v\n", p.timestamp, item.Title, err)
-		return outcomeFailed
+	var newsRows []struct {
+		Link        string
+		ContentHash *string
 	}
-	if result.BaseHeadline == "" || result.BaseSummary == "" {
-		log.Printf("[%s] ✗ Empty headline/summary for '%s'\n", p.timestamp, item.Title)
-		return outcomeFailed
-	}
-	for langCode, pair := range result.Translations {
-		if pair.Headline == "" || pair.Summary == "" {
-			log.Printf("[%s] ✗ Empty %s translation for '%s'\n", p.timestamp, langCode, item.Title)
-			return outcomeFailed
-		}
-	}
-
-	var embedding []float32
-	if semanticDedupEnabled {
-		embText := result.BaseHeadline + "\n" + result.BaseSummary
-		embedCtx, embedCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer embedCancel()
-		var err error
-		embedding, err = generateEmbedding(embedCtx, p.genai, embText, p.embeddingRateLimiter)
-		if err != nil {
-			log.Printf("[%s] ✗ Embedding failed for '%s': %v\n", p.timestamp, item.Title, err)
-			return outcomeFailed
-		}
-
-		// Phase A: optimistic dedup check before entering the critical section.
-		isDup, canonicalID, similarity, err := findSemanticDuplicate(p.db, embedding, state.StateKey, dKey)
-		if err != nil {
-			log.Printf("[%s] ✗ Semantic dedup search failed for '%s': %v\n", p.timestamp, item.Title, err)
-			return outcomeFailed
-		}
-		if isDup {
-			log.Printf("[%s] ⊘ [%s/%s] Semantic dup (%.3f) of %s | '%s'\n", p.timestamp, state.StateKey, dKey, similarity, canonicalID, item.Title)
-			recordSimilarNews(p.db, canonicalID, item.Link, contentHash, state.StateKey, dKey, similarity)
-			return outcomeSkipped
-		}
-	}
-
-	// Phase B: mutex-protected cap check + optional dedup re-check + store.
-	// Passing nil embedding skips the dedup re-check (semantic dedup disabled).
-	return p.storeWithDedup(item, state.StateKey, dKey, contentHash, result, embedding)
-}
-
-func (p *newsProcessor) storeWithDedup(item serperNewsItem, stateKey, dKey, contentHash string, result translationResult, embedding []float32) itemOutcome {
-	isDup, canonicalID, similarity, err := func() (bool, uuid.UUID, float32, error) {
-		semanticStoreMutex.Lock()
-		defer semanticStoreMutex.Unlock()
-
-		count, cerr := areaCount(p.db, stateKey, dKey)
-		if cerr != nil {
-			return false, uuid.Nil, 0, fmt.Errorf("cap re-check failed: %w", cerr)
-		}
-		if count >= areaCapLimit {
-			return true, uuid.Nil, 0, nil
-		}
-
-		if len(embedding) > 0 {
-			dup, cid, sim, ferr := findSemanticDuplicate(p.db, embedding, stateKey, dKey)
-			if ferr != nil {
-				return false, uuid.Nil, 0, ferr
-			}
-			if dup {
-				return true, cid, sim, nil
+	if err := db.Model(&dsmodels.News{}).
+		Select("link, content_hash").
+		Where("created_at >= ?", since).
+		Find(&newsRows).Error; err != nil {
+		log.Printf("[%s] ✗ Failed to load news dedup store: %v\n", timestamp, err)
+	} else {
+		for _, r := range newsRows {
+			store.links.Store(r.Link, struct{}{})
+			if r.ContentHash != nil {
+				store.contentHashes.Store(*r.ContentHash, struct{}{})
 			}
 		}
-		return false, uuid.Nil, 0, storeNewsWithTranslations(p.db, item.Link, contentHash, stateKey, dKey, result, embedding)
-	}()
+	}
 
-	if err != nil {
-		log.Printf("[%s] ✗ Store/dedup failed for '%s': %v\n", p.timestamp, item.Title, err)
-		return outcomeFailed
+	var simRows []struct {
+		Link        string
+		ContentHash *string
 	}
-	if isDup {
-		if canonicalID != uuid.Nil {
-			log.Printf("[%s] ⊘ [%s/%s] Semantic dup on re-check (%.3f) of %s | '%s'\n", p.timestamp, stateKey, dKey, similarity, canonicalID, item.Title)
-			recordSimilarNews(p.db, canonicalID, item.Link, contentHash, stateKey, dKey, similarity)
-		} else {
-			log.Printf("[%s] ⊘ [%s/%s] Area cap reached on re-check | '%s'\n", p.timestamp, stateKey, dKey, item.Title)
+	if err := db.Model(&dsmodels.SimilarNews{}).
+		Select("link, content_hash").
+		Where("created_at >= ?", since).
+		Find(&simRows).Error; err != nil {
+		log.Printf("[%s] ✗ Failed to load similar_news dedup store: %v\n", timestamp, err)
+	} else {
+		for _, r := range simRows {
+			store.links.Store(r.Link, struct{}{})
+			if r.ContentHash != nil {
+				store.contentHashes.Store(*r.ContentHash, struct{}{})
+			}
 		}
-		return outcomeSkipped
 	}
-	return outcomeProcessed
+
+	log.Printf("[%s] ✓ Dedup store loaded\n", timestamp)
+	return store
+}
+
+// ==================== Gemini retry ====================
+
+func isRetryableGeminiError(err error) bool {
+	s := err.Error()
+	return strings.Contains(s, "429") ||
+		strings.Contains(s, "RESOURCE_EXHAUSTED") ||
+		strings.Contains(s, "503") ||
+		strings.Contains(s, "UNAVAILABLE")
+}
+
+func retryGemini(ctx context.Context, fn func() error) error {
+	const maxAttempts = 3
+	for attempt := range maxAttempts {
+		err := fn()
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return err
+		}
+		if !isRetryableGeminiError(err) {
+			return err
+		}
+		if attempt == maxAttempts-1 {
+			break
+		}
+		base := time.Duration(1<<attempt) * time.Second
+		jitter := time.Duration(rand.Int63n(int64(base)))
+		backoff := base + jitter
+		log.Printf("Gemini transient error, retrying in %v (attempt %d/%d): %v", backoff, attempt+1, maxAttempts, err)
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return fmt.Errorf("gemini: all %d attempts failed", maxAttempts)
 }
 
 // ==================== Gemini ====================
@@ -883,7 +1128,11 @@ Original %s news content: "%s"`,
 		baseLangName, baseLangName, translationFields,
 		baseLangName, sourceText)
 
-	raw, err := callGeminiAPIIntoMap(ctx, client, prompt)
+	// Use pipeline ctx (not context.Background) so SIGTERM propagates
+	translateCtx, translateCancel := context.WithTimeout(ctx, 60*time.Second)
+	defer translateCancel()
+
+	raw, err := callGeminiAPIIntoMap(translateCtx, client, prompt)
 	if err != nil {
 		return translationResult{}, err
 	}
@@ -924,7 +1173,12 @@ func callGeminiAPI(ctx context.Context, client *genai.Client, prompt string) (st
 	}
 	config := &genai.GenerateContentConfig{ResponseMIMEType: "application/json"}
 
-	response, err := client.Models.GenerateContent(ctx, geminiModel, contents, config)
+	var response *genai.GenerateContentResponse
+	err := retryGemini(ctx, func() error {
+		var err error
+		response, err = client.Models.GenerateContent(ctx, geminiModel, contents, config)
+		return err
+	})
 	if err != nil {
 		return "", fmt.Errorf("Gemini API error: %w", err)
 	}
@@ -936,28 +1190,45 @@ func callGeminiAPI(ctx context.Context, client *genai.Client, prompt string) (st
 
 // ==================== Embedding ====================
 
-func generateEmbedding(ctx context.Context, client *genai.Client, text string, rateLimiter *rate.Limiter) ([]float32, error) {
+func generateEmbeddingBatch(ctx context.Context, client *genai.Client, items []translatedNewsItem, rateLimiter *rate.Limiter) ([][]float32, error) {
 	if err := rateLimiter.Wait(ctx); err != nil {
 		return nil, fmt.Errorf("rate limiter: %w", err)
 	}
+
 	dim := int32(embeddingDimensions)
-	contents := []*genai.Content{
-		{Role: genai.RoleUser, Parts: []*genai.Part{{Text: text}}},
+	contents := make([]*genai.Content, len(items))
+	for i, item := range items {
+		embText := item.result.BaseHeadline + "\n" + item.result.BaseSummary
+		contents[i] = &genai.Content{
+			Role:  genai.RoleUser,
+			Parts: []*genai.Part{{Text: embText}},
+		}
 	}
 	config := &genai.EmbedContentConfig{
 		TaskType:             "SEMANTIC_SIMILARITY",
 		OutputDimensionality: &dim,
 	}
-	response, err := client.Models.EmbedContent(ctx, embeddingModel, contents, config)
+
+	var response *genai.EmbedContentResponse
+	err := retryGemini(ctx, func() error {
+		var err error
+		response, err = client.Models.EmbedContent(ctx, embeddingModel, contents, config)
+		return err
+	})
 	if err != nil {
-		return nil, fmt.Errorf("Gemini embedding error: %w", err)
+		return nil, fmt.Errorf("embedding batch failed: %w", err)
 	}
-	if len(response.Embeddings) == 0 || len(response.Embeddings[0].Values) == 0 {
-		return nil, fmt.Errorf("no embedding in Gemini response")
+	if len(response.Embeddings) != len(items) {
+		return nil, fmt.Errorf("expected %d embeddings, got %d", len(items), len(response.Embeddings))
 	}
-	vec := response.Embeddings[0].Values
-	normalizeL2(vec)
-	return vec, nil
+
+	embeddings := make([][]float32, len(items))
+	for i, emb := range response.Embeddings {
+		vec := emb.Values
+		normalizeL2(vec)
+		embeddings[i] = vec
+	}
+	return embeddings, nil
 }
 
 func normalizeL2(vec []float32) {
@@ -974,30 +1245,235 @@ func normalizeL2(vec []float32) {
 	}
 }
 
-// ==================== Semantic dedup ====================
+// ==================== Phase 4: DB write ====================
 
-func findSemanticDuplicate(db *gorm.DB, embedding []float32, stateKey, dKey string) (bool, uuid.UUID, float32, error) {
+type semanticDupInfo struct {
+	CanonicalID uuid.UUID
+	Similarity  float32
+}
+
+func processBatch(
+	db *gorm.DB,
+	batch []embeddedNewsItem,
+	store *dedupStore,
+	areaLk *areaLocks,
+	timestamp string,
+	totalProcessed, totalSkipped, totalFailed *int64,
+) {
+	// Guarantee done() is called for every item regardless of exit path.
+	// done() deletes both link and contentHash from inFlightLinks.
+	defer func() {
+		for _, item := range batch {
+			item.done()
+		}
+	}()
+
+	// Group batch by area, preserving insertion order for deterministic processing.
+	type areaGroup struct {
+		stateKey string
+		dKey     string
+		items    []embeddedNewsItem
+	}
+	var areaOrder []string
+	groups := make(map[string]*areaGroup)
+	for _, item := range batch {
+		sk := item.entry.state.StateKey
+		dk := item.entry.areaKey
+		key := fullAreaKey(sk, dk)
+		if _, ok := groups[key]; !ok {
+			areaOrder = append(areaOrder, key)
+			groups[key] = &areaGroup{stateKey: sk, dKey: dk}
+		}
+		groups[key].items = append(groups[key].items, item)
+	}
+
 	since := time.Now().Add(-semanticDedupWindow)
-	vec := pgvector.NewVector(embedding)
 
-	var match struct {
+	for _, key := range areaOrder {
+		grp := groups[key]
+
+		// Acquire only this area's mutex; release before moving to the next area.
+		mu := areaLk.get(key)
+		mu.Lock()
+
+		count, err := areaCount(db, grp.stateKey, grp.dKey)
+		if err != nil {
+			log.Printf("[%s] ✗ areaCount failed for %s: %v\n", timestamp, key, err)
+			mu.Unlock()
+			for range grp.items {
+				atomic.AddInt64(totalFailed, 1)
+			}
+			continue
+		}
+
+		remaining := int64(areaCapLimit) - count
+		if remaining <= 0 {
+			log.Printf("[%s] ⊘ [%s] Area cap reached\n", timestamp, key)
+			mu.Unlock()
+			for range grp.items {
+				atomic.AddInt64(totalSkipped, 1)
+			}
+			continue
+		}
+
+		candidates := grp.items
+		if int64(len(candidates)) > remaining {
+			for _, item := range candidates[remaining:] {
+				log.Printf("[%s] ⊘ [%s] Area cap trim | '%s'\n", timestamp, key, item.item.Title)
+				atomic.AddInt64(totalSkipped, 1)
+			}
+			candidates = candidates[:remaining]
+		}
+
+		// Semantic dedup: one CROSS JOIN LATERAL query per area group (skip if embeddings are nil).
+		var toInsert []embeddedNewsItem
+		if semanticDedupEnabled && len(candidates) > 0 {
+			dupMap, err := bulkSemanticDedup(db, candidates, grp.stateKey, grp.dKey, since)
+			if err != nil {
+				log.Printf("[%s] ✗ Semantic dedup failed for %s: %v\n", timestamp, key, err)
+				mu.Unlock()
+				for range candidates {
+					atomic.AddInt64(totalFailed, 1)
+				}
+				continue
+			}
+			for i, item := range candidates {
+				if info, isDup := dupMap[i]; isDup {
+					log.Printf("[%s] ⊘ [%s] Semantic dup (%.3f) of %s | '%s'\n", timestamp, key, info.Similarity, info.CanonicalID, item.item.Title)
+					recordSimilarNews(db, info.CanonicalID, item.item.Link, item.contentHash, grp.stateKey, grp.dKey, info.Similarity)
+					store.add(item.item.Link, item.contentHash)
+					atomic.AddInt64(totalSkipped, 1)
+				} else {
+					toInsert = append(toInsert, item)
+				}
+			}
+		} else {
+			toInsert = candidates
+		}
+
+		if len(toInsert) > 0 {
+			if err := bulkInsertNewsWithTranslations(db, toInsert, grp.stateKey, grp.dKey); err != nil {
+				log.Printf("[%s] ✗ Bulk insert failed for %s: %v\n", timestamp, key, err)
+				mu.Unlock()
+				for range toInsert {
+					atomic.AddInt64(totalFailed, 1)
+				}
+				continue
+			}
+			for _, item := range toInsert {
+				store.add(item.item.Link, item.contentHash)
+				atomic.AddInt64(totalProcessed, 1)
+			}
+		}
+
+		mu.Unlock()
+	}
+}
+
+func bulkSemanticDedup(db *gorm.DB, items []embeddedNewsItem, stateKey, dKey string, since time.Time) (map[int]semanticDupInfo, error) {
+	valueParts := make([]string, len(items))
+	args := make([]any, 0, len(items)+4)
+	for i, item := range items {
+		valueParts[i] = fmt.Sprintf("(%d, ?::vector)", i)
+		args = append(args, pgvector.NewVector(item.embedding))
+	}
+	args = append(args, stateKey, dKey, since, semanticDedupThreshold)
+
+	query := fmt.Sprintf(`
+		WITH incoming(idx, embedding) AS (
+			VALUES %s
+		)
+		SELECT i.idx, n.id, 1 - (n.embedding <=> i.embedding) AS similarity
+		FROM incoming i
+		CROSS JOIN LATERAL (
+			SELECT id, embedding
+			FROM news
+			WHERE category = ? AND sub_category = ? AND embedding IS NOT NULL AND created_at >= ?
+			ORDER BY embedding <=> i.embedding
+			LIMIT 1
+		) n
+		WHERE 1 - (n.embedding <=> i.embedding) >= ?`,
+		strings.Join(valueParts, ", "))
+
+	var results []struct {
+		Idx        int
 		ID         uuid.UUID
 		Similarity float64
 	}
-	err := db.Raw(`
-		SELECT id, 1 - (embedding <=> ?::vector) AS similarity
-		FROM news
-		WHERE category = ? AND sub_category = ? AND embedding IS NOT NULL AND created_at >= ?
-		ORDER BY embedding <=> ?::vector
-		LIMIT 1`, vec, stateKey, dKey, since, vec).Scan(&match).Error
-	if err != nil {
-		return false, uuid.Nil, 0, fmt.Errorf("semantic search failed: %w", err)
+	if err := db.Raw(query, args...).Scan(&results).Error; err != nil {
+		return nil, fmt.Errorf("bulk semantic dedup query failed: %w", err)
 	}
-	if match.ID == uuid.Nil {
-		return false, uuid.Nil, 0, nil
+
+	dupMap := make(map[int]semanticDupInfo, len(results))
+	for _, r := range results {
+		dupMap[r.Idx] = semanticDupInfo{
+			CanonicalID: r.ID,
+			Similarity:  float32(r.Similarity),
+		}
 	}
-	return match.Similarity >= semanticDedupThreshold, match.ID, float32(match.Similarity), nil
+	return dupMap, nil
 }
+
+func bulkInsertNewsWithTranslations(db *gorm.DB, items []embeddedNewsItem, stateKey, dKey string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		publishedAt := time.Now().UTC()
+		sub := dKey
+
+		newsItems := make([]dsmodels.News, len(items))
+		for i, item := range items {
+			n := dsmodels.News{
+				Link:        item.item.Link,
+				ContentHash: &item.contentHash,
+				Category:    stateKey,
+				SubCategory: &sub,
+				Status:      "approved",
+				PublishedAt: &publishedAt,
+			}
+			if item.result.ImagePrompt != "" {
+				n.ImagePrompt = &item.result.ImagePrompt
+			}
+			if len(item.embedding) > 0 {
+				v := pgvector.NewVector(item.embedding)
+				n.Embedding = &v
+			}
+			newsItems[i] = n
+		}
+
+		// GORM populates newsItems[i].ID via RETURNING after bulk create.
+		if err := tx.Create(&newsItems).Error; err != nil {
+			return fmt.Errorf("failed to bulk create news: %w", err)
+		}
+
+		var translations []dsmodels.NewsTranslation
+		for i, item := range items {
+			newsID := newsItems[i].ID
+			translations = append(translations, dsmodels.NewsTranslation{
+				NewsID:       newsID,
+				Title:        item.result.BaseHeadline,
+				Summary:      item.result.BaseSummary,
+				LanguageCode: item.result.BaseLanguageCode,
+			})
+			for langCode, pair := range item.result.Translations {
+				translations = append(translations, dsmodels.NewsTranslation{
+					NewsID:       newsID,
+					Title:        strings.TrimSpace(pair.Headline),
+					Summary:      strings.TrimSpace(pair.Summary),
+					LanguageCode: langCode,
+				})
+			}
+		}
+
+		if err := tx.Create(&translations).Error; err != nil {
+			return fmt.Errorf("failed to bulk create translations: %w", err)
+		}
+		return nil
+	})
+}
+
+// ==================== Semantic dedup ====================
 
 func recordSimilarNews(db *gorm.DB, canonicalID uuid.UUID, link, contentHash, stateKey, dKey string, similarity float32) {
 	sub := dKey
@@ -1012,74 +1488,6 @@ func recordSimilarNews(db *gorm.DB, canonicalID uuid.UUID, link, contentHash, st
 	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&rec).Error; err != nil {
 		log.Printf("Failed to record similar_news for %s: %v", link, err)
 	}
-}
-
-// ==================== Dedup check ====================
-
-func checkDuplicateItem(db *gorm.DB, link, contentHash string) (bool, error) {
-	for _, model := range []any{&dsmodels.News{}, &dsmodels.SimilarNews{}} {
-		var count int64
-		if err := db.Model(model).
-			Where("link = ? OR content_hash = ?", link, contentHash).
-			Count(&count).Error; err != nil {
-			return false, fmt.Errorf("error checking duplicate in %T: %w", model, err)
-		}
-		if count > 0 {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// ==================== Store ====================
-
-func storeNewsWithTranslations(db *gorm.DB, link, contentHash, stateKey, dKey string, result translationResult, embedding []float32) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	publishedAt := time.Now().UTC()
-	sub := dKey
-
-	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		news := dsmodels.News{
-			Link:        link,
-			ContentHash: &contentHash,
-			Category:    stateKey,
-			SubCategory: &sub,
-			Status:      "approved",
-			PublishedAt: &publishedAt,
-		}
-
-		if result.ImagePrompt != "" {
-			news.ImagePrompt = &result.ImagePrompt
-		}
-
-		if len(embedding) > 0 {
-			v := pgvector.NewVector(embedding)
-			news.Embedding = &v
-		}
-
-		if err := tx.Create(&news).Error; err != nil {
-			return fmt.Errorf("failed to create news: %w", err)
-		}
-
-		translationsToCreate := []dsmodels.NewsTranslation{
-			{NewsID: news.ID, Title: result.BaseHeadline, Summary: result.BaseSummary, LanguageCode: result.BaseLanguageCode},
-		}
-		for langCode, pair := range result.Translations {
-			translationsToCreate = append(translationsToCreate, dsmodels.NewsTranslation{
-				NewsID:       news.ID,
-				Title:        strings.TrimSpace(pair.Headline),
-				Summary:      strings.TrimSpace(pair.Summary),
-				LanguageCode: langCode,
-			})
-		}
-
-		if err := tx.Create(&translationsToCreate).Error; err != nil {
-			return fmt.Errorf("failed to create translations: %w", err)
-		}
-		return nil
-	})
 }
 
 // ==================== PostHog ====================
