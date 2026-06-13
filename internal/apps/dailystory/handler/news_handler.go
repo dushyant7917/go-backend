@@ -27,7 +27,7 @@ func NewNewsHandler(service service.NewsService) *NewsHandler {
 func (h *NewsHandler) ListNews(c *gin.Context) {
 	// Default pagination values
 	page := 1
-	pageSize := 20
+	pageSize := 10
 
 	// Parse page parameter
 	if pageStr := c.Query("page"); pageStr != "" {

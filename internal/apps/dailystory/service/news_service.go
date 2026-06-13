@@ -39,10 +39,10 @@ func (s *newsService) ListNewsPaginated(category, subCategory, languageCode, sta
 		page = 1
 	}
 	if pageSize < 1 {
-		pageSize = 20 // default page size
+		pageSize = 10 // default page size
 	}
-	if pageSize > 100 {
-		pageSize = 100 // max page size
+	if pageSize > 30 {
+		pageSize = 30 // max page size
 	}
 
 	news, total, err := s.repo.FindAllPaginated(category, subCategory, languageCode, status, createdAtFrom, page, pageSize)
