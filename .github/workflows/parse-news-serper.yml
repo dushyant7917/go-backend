@@ -2,8 +2,8 @@ name: Parse News Serper
 
 on:
   schedule:
-    - cron: "30 23 * * *" # 5:00 AM IST
-    - cron: "30 5 * * *" # 11:00 AM IST
+    - cron: "30 0 * * *" # 6:00 AM IST
+    - cron: "30 3 * * *" # 9:00 AM IST
     - cron: "0 9 * * *" # 2:30 PM IST
   workflow_dispatch: # Allows manual triggering
 
