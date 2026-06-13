@@ -53,6 +53,19 @@ func areaKey(area string) string {
 	return strings.ToLower(strings.ReplaceAll(area, " ", "_"))
 }
 
+func getAreaCapLimit() int {
+	ist := time.FixedZone("IST", 19800) // UTC+5:30 (5*3600 + 30*60); FixedZone avoids system tzdata dependency
+	hour := time.Now().In(ist).Hour()
+	switch {
+	case hour >= 6 && hour < 9:
+		return 6
+	case hour >= 9 && hour < 12:
+		return 12
+	default:
+		return 20
+	}
+}
+
 // 18 states, 573 areas total.
 var states = []stateInfo{
 	{
@@ -317,7 +330,6 @@ const (
 	PostHogEventNewsParsingSucceeded = "NEWS_PARSING_SUCCEEDED"
 
 	areaCapWindow      = 12 * time.Hour
-	areaCapLimit       = 20
 	embeddingBatchSize = 20
 	dbBatchSize        = 50
 
@@ -957,7 +969,7 @@ func loadFullAreas(db *gorm.DB, timestamp string) map[string]struct{} {
 		FROM news
 		WHERE sub_category IS NOT NULL AND created_at >= ?
 		GROUP BY category, sub_category
-		HAVING COUNT(*) >= ?`, since, areaCapLimit).Scan(&rows).Error
+		HAVING COUNT(*) >= ?`, since, getAreaCapLimit()).Scan(&rows).Error
 	if err != nil {
 		log.Printf("[%s] ✗ Failed to load area caps: %v\n", timestamp, err)
 		return map[string]struct{}{}
@@ -1312,7 +1324,7 @@ func processBatch(
 			continue
 		}
 
-		remaining := int64(areaCapLimit) - count
+		remaining := int64(getAreaCapLimit()) - count
 		if remaining <= 0 {
 			log.Printf("[%s] ⊘ [%s] Area cap reached\n", timestamp, key)
 			mu.Unlock()
