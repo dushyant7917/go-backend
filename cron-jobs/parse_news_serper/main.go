@@ -1253,6 +1253,11 @@ type semanticDupInfo struct {
 	Similarity  float32
 }
 
+type intraDupInfo struct {
+	item       embeddedNewsItem
+	similarity float32
+}
+
 func processBatch(
 	db *gorm.DB,
 	batch []embeddedNewsItem,
@@ -1350,6 +1355,19 @@ func processBatch(
 			}
 		} else {
 			toInsert = candidates
+		}
+
+		// Intra-batch semantic dedup: drop items similar to an earlier
+		// candidate in the same batch (not yet in DB, so bulkSemanticDedup
+		// cannot catch them).
+		if semanticDedupEnabled && len(toInsert) > 1 {
+			var intraDups []intraDupInfo
+			toInsert, intraDups = intraBatchSemanticDedup(toInsert)
+			for _, d := range intraDups {
+				log.Printf("[%s] ⊘ [%s] Intra-batch semantic dup (%.3f) | '%s'\n", timestamp, key, d.similarity, d.item.item.Title)
+				store.add(d.item.item.Link, d.item.contentHash)
+				atomic.AddInt64(totalSkipped, 1)
+			}
 		}
 
 		if len(toInsert) > 0 {
@@ -1472,6 +1490,46 @@ func bulkInsertNewsWithTranslations(db *gorm.DB, items []embeddedNewsItem, state
 		}
 		return nil
 	})
+}
+
+// ==================== Intra-batch semantic dedup ====================
+
+// dotProduct computes the dot product of two L2-normalised vectors.
+// For normalised vectors dot product == cosine similarity.
+func dotProduct(a, b []float32) float32 {
+	var sum float32
+	for i := range a {
+		sum += a[i] * b[i]
+	}
+	return sum
+}
+
+// intraBatchSemanticDedup removes items that are semantically similar to an
+// earlier item in the same slice. Items must have L2-normalised embeddings.
+// Returns accepted items and the ones that were dropped (with their similarity
+// score against the closest accepted item).
+func intraBatchSemanticDedup(items []embeddedNewsItem) (accepted []embeddedNewsItem, dups []intraDupInfo) {
+	for _, item := range items {
+		if len(item.embedding) == 0 {
+			accepted = append(accepted, item)
+			continue
+		}
+		var maxSim float32
+		for _, acc := range accepted {
+			if len(acc.embedding) == 0 {
+				continue
+			}
+			if sim := dotProduct(item.embedding, acc.embedding); sim > maxSim {
+				maxSim = sim
+			}
+		}
+		if maxSim >= float32(semanticDedupThreshold) {
+			dups = append(dups, intraDupInfo{item: item, similarity: maxSim})
+		} else {
+			accepted = append(accepted, item)
+		}
+	}
+	return
 }
 
 // ==================== Semantic dedup ====================
