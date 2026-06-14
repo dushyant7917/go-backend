@@ -28,7 +28,7 @@ var ServerPoolProfile = PoolProfile{
 	MaxOpenConns:    20,
 	MaxIdleConns:    20,
 	ConnMaxLifetime: 10 * time.Minute,
-	ConnMaxIdleTime: 5 * time.Minute,
+	ConnMaxIdleTime: 10 * time.Minute,
 }
 
 // CronPoolProfile is optimized for cron jobs:
