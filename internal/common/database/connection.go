@@ -25,10 +25,10 @@ type PoolProfile struct {
 //   - MaxIdleConns keeps a few connections warm for fast API response without
 //     pinning idle backend slots on PostgreSQL
 var ServerPoolProfile = PoolProfile{
-	MaxOpenConns:    20,
-	MaxIdleConns:    20,
-	ConnMaxLifetime: 15 * time.Minute,
-	ConnMaxIdleTime: 10 * time.Minute,
+	MaxOpenConns:    100,
+	MaxIdleConns:    70,
+	ConnMaxLifetime: 30 * time.Minute,
+	ConnMaxIdleTime: 30 * time.Minute,
 }
 
 // CronPoolProfile is optimized for cron jobs:
