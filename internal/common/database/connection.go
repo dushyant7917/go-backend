@@ -27,7 +27,7 @@ type PoolProfile struct {
 var ServerPoolProfile = PoolProfile{
 	MaxOpenConns:    20,
 	MaxIdleConns:    20,
-	ConnMaxLifetime: 10 * time.Minute,
+	ConnMaxLifetime: 15 * time.Minute,
 	ConnMaxIdleTime: 10 * time.Minute,
 }
 
