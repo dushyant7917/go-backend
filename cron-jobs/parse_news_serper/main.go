@@ -1118,14 +1118,15 @@ Then generate an English image generation prompt for this news article.
 %s
 
 Image prompt guidelines:
-- Write a photorealistic, camera-captured scene in English for Flux Klein 4B; Klein renders exactly what you write so be specific and descriptive
-- Include geographic context: %s, India; add culturally relevant visual elements
-- Lighting is the highest-impact element: specify source (golden hour sunlight, overcast sky, interior tungsten), quality (soft/diffused or harsh/directional), and direction
-- Camera details: name a real camera and lens (e.g. "Canon EOS R5, 35mm f/1.8, eye-level") and shot type (wide establishing shot, medium portrait, close-up)
-- Textures: request authentic surface qualities — natural skin with visible pores, fabric weave, weathered surfaces, environmental imperfections
-- If people appear: natural postures and expressions; photorealistic skin with natural imperfections and correct anatomy
-- If text must appear in the scene, describe it explicitly: specify the exact words in quotes (in English), placement, font style, and surface it appears on (e.g. a billboard reading "VOTE 2024", bold sans-serif, center frame)
-- Purely visual scene; all elements photographic with no typographic content anywhere in the frame unless text is explicitly requested above
+- Write an animated, illustrated scene in English for Flux Klein 4B; Klein renders exactly what you write so be specific and descriptive
+- Style: vibrant 2D animation style, bold outlines, flat or cel-shaded colors, stylized proportions — like a high-quality animated film or editorial illustration
+- Include geographic context: %s, India; add culturally relevant visual elements with stylized artistic flair
+- Lighting: use expressive, stylized lighting — dramatic color gradients, glowing skies, rim-lit figures, or stylized shadow shapes
+- Composition: describe the layout clearly — wide establishing shot, medium two-shot, or close-up — with a clean, graphic foreground and background separation
+- Characters: stylized animated figures with expressive faces and body language; avoid photorealistic skin or anatomy
+- Colors: rich, saturated palette with intentional color harmony; use warm/cool contrast to add depth
+- If text must appear in the scene, describe it explicitly: specify the exact words in quotes (in English), placement, font style, and surface it appears on (e.g. a sign reading "VOTE 2024", bold rounded sans-serif, center frame)
+- Purely visual scene; no typographic content anywhere in the frame unless text is explicitly requested above
 
 Respond ONLY with a JSON object in this exact format:
 {
