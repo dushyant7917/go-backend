@@ -4,7 +4,7 @@ Single source of truth for all scheduled GitHub Actions cron jobs.
 Workflows live in [.github/workflows/](.github/workflows/). All can also be run manually via `workflow_dispatch`.
 
 > Times shown in **IST** (UTC+5:30). GitHub Actions cron is in **UTC**.
-> Last updated: 2026-06-13 (parse-news-serper shifted to 6 AM / 9 AM / 2:30 PM IST; parse-news-rss re-activated)
+> Last updated: 2026-06-16 (charge-pending-payments shifted to 4:40 AM / 5:00 AM IST)
 
 ## Daily Timeline (IST)
 
@@ -13,8 +13,8 @@ Workflows live in [.github/workflows/](.github/workflows/). All can also be run 
 | 1:00 AM | Reconcile Payments | Daily | [reconcile-payments.yml](.github/workflows/reconcile-payments.yml) |
 | 1:30 AM | Process New Billing Cycles | Daily | [process-new-billing-cycles.yml](.github/workflows/process-new-billing-cycles.yml) |
 | 2:00 AM | Retry Failed Billing Cycles | Daily | [retry-failed-billing-cycles.yml](.github/workflows/retry-failed-billing-cycles.yml) |
-| 2:45 AM | Charge Pending Payments | Daily | [charge-pending-payments.yml](.github/workflows/charge-pending-payments.yml) |
-| 3:10 AM | Charge Pending Payments | Daily | [charge-pending-payments.yml](.github/workflows/charge-pending-payments.yml) |
+| 4:40 AM | Charge Pending Payments | Daily | [charge-pending-payments.yml](.github/workflows/charge-pending-payments.yml) |
+| 5:00 AM | Charge Pending Payments | Daily | [charge-pending-payments.yml](.github/workflows/charge-pending-payments.yml) |
 | 6:00 AM | Parse News Serper → Generate News Media | Daily | [parse-news-serper.yml](.github/workflows/parse-news-serper.yml) |
 | 6:30 AM | Parse News RSS | Daily | [parse-news-rss.yml](.github/workflows/parse-news-rss.yml) |
 | 7:00 AM | Send DailyStory Push Notification | Daily | [send-dailystory-push-notification.yml](.github/workflows/send-dailystory-push-notification.yml) |
@@ -31,8 +31,8 @@ Workflows live in [.github/workflows/](.github/workflows/). All can also be run 
 
 ### Charge Pending Payments — Daily
 Cron expressions (UTC):
-- `15 21 * * *` → 2:45 AM IST
-- `40 21 * * *` → 3:10 AM IST
+- `10 23 * * *` → 4:40 AM IST
+- `30 23 * * *` → 5:00 AM IST
 
 ### Parse News Serper — Daily
 Runs `parse-news-serper` job, then chains into `generate-news-media` job on success.
