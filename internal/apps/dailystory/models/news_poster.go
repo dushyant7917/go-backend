@@ -53,3 +53,41 @@ type NewsPosterResponse struct {
 	CreatedAt         time.Time      `json:"created_at"`
 	UpdatedAt         time.Time      `json:"updated_at"`
 }
+
+// NewsPosterPrefillRow is a flat struct used internally for DB scanning in FindPrefillData.
+type NewsPosterPrefillRow struct {
+	UserName          *string
+	UserPhone         *string
+	UserDetail        string
+	DisplayPhone      bool
+	ProfilePictureKey *string
+	UserLanguageCode  *string
+	NewsExists        bool
+	NewsTitle         *string
+	NewsSummary       *string
+	MediaFileKey      *string
+}
+
+// NewsPosterPrefillUserData is the user sub-object in the prefill response.
+type NewsPosterPrefillUserData struct {
+	Name               *string `json:"name"`
+	Phone              *string `json:"phone"`
+	Detail             string  `json:"detail"`
+	DisplayPhone       bool    `json:"display_phone"`
+	ProfilePictureKey  *string `json:"-"`
+	ProfilePictureLink *string `json:"profile_picture_link"`
+	LanguageCode       *string `json:"language_code"`
+}
+
+// NewsPosterPrefillNewsData is the news sub-object in the prefill response.
+type NewsPosterPrefillNewsData struct {
+	Title     *string `json:"title"`
+	Summary   *string `json:"summary"`
+	MediaLink *string `json:"media_link"`
+}
+
+// NewsPosterPrefillResponse is the response for GET /dailystory/news-posters/prefill-data
+type NewsPosterPrefillResponse struct {
+	User *NewsPosterPrefillUserData `json:"user"`
+	News *NewsPosterPrefillNewsData `json:"news"`
+}

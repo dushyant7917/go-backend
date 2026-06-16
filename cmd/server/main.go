@@ -212,7 +212,7 @@ func main() {
 	// Initialize News Poster dependencies (within DailyStory)
 	newsPosterRepo := dailystoryRepository.NewNewsPosterRepository(db)
 	newsPosterSvc := dailystoryService.NewNewsPosterService(newsPosterRepo)
-	newsPosterH := dailystoryHandler.NewNewsPosterHandler(newsPosterSvc)
+	newsPosterH := dailystoryHandler.NewNewsPosterHandler(newsPosterSvc, recurringPaymentRepo, r2ClientFactory)
 
 	// Initialize Combined Subscription Status handler (dailystory)
 	dailystoryH := dailystoryHandler.NewDailystoryHandler(subscriptionRepo, recurringPaymentRepo, metaEventSvc)

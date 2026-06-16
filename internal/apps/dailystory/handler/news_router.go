@@ -15,5 +15,6 @@ func RegisterNewsRoutes(router *gin.RouterGroup, handler *NewsHandler, newsPoste
 	newsPosters := router.Group("/dailystory/news-posters")
 	{
 		newsPosters.POST("", newsPosterHandler.CreateNewsPoster)
+		newsPosters.GET("/prefill-data", newsPosterHandler.GetNewsPosterPrefillData)
 	}
 }

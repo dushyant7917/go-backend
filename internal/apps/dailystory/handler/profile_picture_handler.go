@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -11,10 +12,26 @@ import (
 	r2ConfigService "go-backend/internal/apps/r2/config/service"
 	"go-backend/internal/common/constants"
 	commonResponse "go-backend/internal/common/response"
+	"go-backend/pkg/storage"
 	"go-backend/pkg/utils"
 
 	"github.com/gin-gonic/gin"
 )
+
+// dailyStoryUsersR2Client resolves the R2 client and bucket name for the DailyStory users bucket (profile pictures).
+func dailyStoryUsersR2Client(factory *r2ConfigService.R2ClientFactory) (*storage.R2Client, string, error) {
+	bucketName := os.Getenv("R2_DS_USERS_BUCKET_NAME")
+	if bucketName == "" {
+		return nil, "", errors.New("R2 bucket configuration missing")
+	}
+
+	r2Client, err := factory.GetClient(constants.AppNameDailyStory)
+	if err != nil {
+		return nil, "", fmt.Errorf("R2 configuration not found for dailystory app: %w", err)
+	}
+
+	return r2Client, bucketName, nil
+}
 
 // ProfilePictureHandler handles HTTP requests for profile picture operations
 type ProfilePictureHandler struct {
@@ -65,17 +82,9 @@ func (h *ProfilePictureHandler) GetUploadURL(c *gin.Context) {
 	timestamp := time.Now().UTC().Unix()
 	fileKey := fmt.Sprintf("profile-pictures/%s_%d%s", filenameWithoutExt, timestamp, ext)
 
-	// Get bucket name from environment (using the users bucket)
-	bucketName := os.Getenv("R2_DS_USERS_BUCKET_NAME")
-	if bucketName == "" {
-		commonResponse.Error(c, http.StatusInternalServerError, nil, "R2 bucket configuration missing")
-		return
-	}
-
-	// Get R2 client dynamically from database config
-	r2Client, err := h.r2ClientFactory.GetClient(constants.AppNameDailyStory)
+	r2Client, bucketName, err := dailyStoryUsersR2Client(h.r2ClientFactory)
 	if err != nil {
-		commonResponse.Error(c, http.StatusInternalServerError, err, "R2 configuration not found for dailystory app")
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
@@ -110,17 +119,9 @@ func (h *ProfilePictureHandler) GetViewURL(c *gin.Context) {
 		return
 	}
 
-	// Get bucket name from environment (using the users bucket)
-	bucketName := os.Getenv("R2_DS_USERS_BUCKET_NAME")
-	if bucketName == "" {
-		commonResponse.Error(c, http.StatusInternalServerError, nil, "R2 bucket configuration missing")
-		return
-	}
-
-	// Get R2 client dynamically from database config
-	r2Client, err := h.r2ClientFactory.GetClient(constants.AppNameDailyStory)
+	r2Client, bucketName, err := dailyStoryUsersR2Client(h.r2ClientFactory)
 	if err != nil {
-		commonResponse.Error(c, http.StatusInternalServerError, err, "R2 configuration not found for dailystory app")
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
 		return
 	}
 
