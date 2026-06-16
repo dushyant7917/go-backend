@@ -1118,13 +1118,13 @@ Then generate an English image generation prompt for this news article.
 %s
 
 Image prompt guidelines:
-- Write an animated, illustrated scene in English for Flux Klein 4B; Klein renders exactly what you write so be specific and descriptive
-- Style: vibrant 2D animation style, bold outlines, flat or cel-shaded colors, stylized proportions — like a high-quality animated film or editorial illustration
-- Include geographic context: %s, India; add culturally relevant visual elements with stylized artistic flair
-- Lighting: use expressive, stylized lighting — dramatic color gradients, glowing skies, rim-lit figures, or stylized shadow shapes
-- Composition: describe the layout clearly — wide establishing shot, medium two-shot, or close-up — with a clean, graphic foreground and background separation
-- Characters: stylized animated figures with expressive faces and body language; avoid photorealistic skin or anatomy
-- Colors: rich, saturated palette with intentional color harmony; use warm/cool contrast to add depth
+- Write a cinematic, photorealistic scene in English for Flux Klein 4B; Klein renders exactly what you write so be specific and descriptive
+- Style: cinematic photorealism, like a still frame from a high-budget film — realistic textures, natural anatomy, filmic depth of field, subtle grain
+- Include geographic context: %s, India; add culturally relevant visual elements with authentic, grounded detail
+- Lighting: use cinematic lighting — golden hour or blue hour tones, volumetric light, dramatic shadows, lens flare, rim lighting on subjects
+- Composition: describe the layout clearly — wide establishing shot, medium two-shot, or close-up — with strong foreground/background depth separation and a clear focal point
+- Characters: realistic human figures with natural proportions, expressive but believable faces and body language; avoid cartoonish or illustrated rendering
+- Colors: cinematic color grading — rich contrast, filmic tones, warm/cool color separation to add depth
 - If text must appear in the scene, describe it explicitly: specify the exact words in quotes (in English), placement, font style, and surface it appears on (e.g. a sign reading "VOTE 2024", bold rounded sans-serif, center frame)
 - Purely visual scene; no typographic content anywhere in the frame unless text is explicitly requested above
 
