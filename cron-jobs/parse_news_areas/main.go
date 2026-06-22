@@ -735,13 +735,15 @@ func main() {
 				return
 			}
 
+			// Normalize keys to lowercase so the lookup is case-insensitive against
+			// whatever Serper echoes back in searchParameters.q.
 			queryToEntry := make(map[string]areaEntry, len(batch))
 			for _, e := range batch {
-				queryToEntry[e.areaName+", "+e.state.Name] = e
+				queryToEntry[strings.ToLower(e.areaName+", "+e.state.Name)] = e
 			}
 
 			for _, result := range results {
-				entry, ok := queryToEntry[result.SearchParameters.Q]
+				entry, ok := queryToEntry[strings.ToLower(result.SearchParameters.Q)]
 				if !ok {
 					log.Printf("[%s] ✗ No matching area for Serper result q=%q\n", timestamp, result.SearchParameters.Q)
 					continue

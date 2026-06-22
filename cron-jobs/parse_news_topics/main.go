@@ -39,8 +39,8 @@ import (
 // ==================== Topic Config ====================
 
 type topicInfo struct {
-	Name         string   // human-readable, used in Serper query and LLM prompt
 	Key          string   // DB category value
+	SearchQuery  string   // Serper query string
 	LangCode     string   // Serper hl param
 	Languages    []string // translation targets stored in news_translations (first = base)
 	ImageContext string   // scene/geographic context for the image generation prompt
@@ -48,15 +48,17 @@ type topicInfo struct {
 
 var topics = []topicInfo{
 	{
-		Name: "India", Key: "india", LangCode: "en",
+		Key: "india", SearchQuery: "india",
+		LangCode:     "en",
 		Languages:    []string{"en", "hi", "pa", "gu", "mr", "bn", "te", "ta", "ml", "kn"},
 		ImageContext: "India",
 	},
-	// {
-	// 	Name: "World", Key: "world", LangCode: "en",
-	// 	Languages:    []string{"en", "hi", "pa", "gu", "mr", "bn", "te", "ta", "ml", "kn"},
-	// 	ImageContext: "Global / international",
-	// },
+	{
+		Key: "world", SearchQuery: "world news",
+		LangCode:     "en",
+		Languages:    []string{"en", "hi", "pa", "gu", "mr", "bn", "te", "ta", "ml", "kn"},
+		ImageContext: "Global / international",
+	},
 }
 
 func getCategoryCapLimit() int {
@@ -480,11 +482,11 @@ func main() {
 		if err != nil {
 			log.Printf("[%s] ✗ Serper fetch error: %v\n", timestamp, err)
 		} else {
-			// Normalize keys to lowercase so the lookup is case-insensitive against
-			// whatever Serper echoes back in searchParameters.q.
+			// Key on SearchQuery (lowercased) so the lookup matches whatever
+			// Serper echoes back in searchParameters.q regardless of case.
 			queryToEntry := make(map[string]topicInfo, len(remaining))
 			for _, e := range remaining {
-				queryToEntry[strings.ToLower(e.Name)] = e
+				queryToEntry[strings.ToLower(e.SearchQuery)] = e
 			}
 
 		outer:
@@ -582,7 +584,7 @@ func fetchSerperBatch(ctx context.Context, entries []topicInfo, apiKey string, r
 	queries := make([]serperQuery, len(entries))
 	for i, e := range entries {
 		queries[i] = serperQuery{
-			Q:   e.Name,
+			Q:   e.SearchQuery,
 			Gl:  "in",
 			Hl:  e.LangCode,
 			Tbs: "qdr:d",
