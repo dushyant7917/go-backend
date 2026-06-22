@@ -81,27 +81,24 @@ Apps:
 
 Each cron job is a standalone Go binary in `cron-jobs/<job_name>/main.go`. They are triggered by GitHub Actions workflows (`.github/workflows/`). Jobs use `database.NewCronConnection()`. Active jobs:
 
-- `parse_news_rss` — fetch and translate news from RSS feeds
-- `parse_news_serper` — fetch area-based news via Serper with semantic dedup and Gemini translation
+- `parse_news_topics` — fetch topic-based news (india/world/sports) via Serper; English base + 9-language translations; caps per category; runs first in `.github/workflows/parse-news.yml`
+- `parse_news_areas` — fetch area-based news via Serper with semantic dedup and Gemini translation; runs second in `.github/workflows/parse-news.yml`
+- `generate_news_media` — generate images for approved news; runs third in `.github/workflows/parse-news.yml` (also available as standalone manual-dispatch workflow)
 - `send_dailystory_push_notification` — Expo push to new users without subscriptions
 - `send_subscription_activity_report` — email report of subscription activity
 - `charge_pending_payments` — charge payments in pending state
 - `retry_failed_billing_cycles` — retry billing cycles that previously failed
 - `process_new_billing_cycles` — process newly created billing cycles
 - `reconcile_payments` — reconcile payment records with Razorpay
-- `update_subscription_amount` — update subscription amounts for unauthenticated users
-- `update_cancelled_subscription_amount` — update subscription amounts for users with cancelled subscriptions
 - `cleanup_old_news` — delete old news records from DB
 - `cleanup_old_posters` — delete old poster records and files
-- `cleanup_old_templates` — delete old template records and files
-- `cleanup_rejected_templates` — delete rejected template records and files
 - `cleanup_triggered_meta_events` — delete already-triggered Meta pixel events
 - `cleanup_orphan_news_media` — remove orphaned news media files from R2
 - `cleanup_orphan_posters` — remove orphaned poster files from R2
 - `cleanup_orphan_profile_pictures` — remove orphaned profile picture files from R2
 - `cleanup_orphan_templates` — remove orphaned template files from R2
 
-Inactive (schedule commented out, manual dispatch only): `generate_news_media` (standalone), `cleanup_old_templates`, `cleanup_orphan_posters`, `cleanup_orphan_templates`, `cleanup_rejected_templates`, `update_subscription_amount`, `update_cancelled_subscription_amount`
+Inactive (schedule disabled, manual dispatch only): `parse_news_rss`, `cleanup_old_templates`, `cleanup_orphan_posters`, `cleanup_orphan_templates`, `cleanup_rejected_templates`, `update_subscription_amount`, `update_cancelled_subscription_amount`
 
 ### External Services
 

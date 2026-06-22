@@ -46,3 +46,5 @@ logs/
 # Temporary files
 tmp/
 temp/
+output/
+scripts/generate_reel_hooks/texts.json
