@@ -46,18 +46,32 @@ type topicInfo struct {
 	ImageContext string   // scene/geographic context for the image generation prompt
 }
 
+var allLanguages = []string{"en", "hi", "pa", "gu", "mr", "bn", "te", "ta", "ml", "kn"}
+
 var topics = []topicInfo{
 	{
 		Key: "india", SearchQuery: "india",
 		LangCode:     "en",
-		Languages:    []string{"en", "hi", "pa", "gu", "mr", "bn", "te", "ta", "ml", "kn"},
+		Languages:    allLanguages,
 		ImageContext: "India",
 	},
 	{
 		Key: "world", SearchQuery: "world news",
 		LangCode:     "en",
-		Languages:    []string{"en", "hi", "pa", "gu", "mr", "bn", "te", "ta", "ml", "kn"},
+		Languages:    allLanguages,
 		ImageContext: "Global / international",
+	},
+	{
+		Key: "sports", SearchQuery: "sports",
+		LangCode:     "hi",
+		Languages:    allLanguages,
+		ImageContext: "Sports / athletics",
+	},
+	{
+		Key: "entertainment", SearchQuery: "entertainment",
+		LangCode:     "hi",
+		Languages:    allLanguages,
+		ImageContext: "Entertainment",
 	},
 }
 
