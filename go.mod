@@ -15,6 +15,7 @@ require (
 	github.com/inngest/inngestgo v0.15.1
 	github.com/joho/godotenv v1.5.1
 	github.com/mmcdole/gofeed v1.3.0
+	github.com/openai/openai-go v1.12.0
 	github.com/pgvector/pgvector-go v0.3.0
 	github.com/razorpay/razorpay-go v1.3.2
 	golang.org/x/time v0.12.0
@@ -88,6 +89,10 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.57.1 // indirect
+	github.com/tidwall/gjson v1.14.4 // indirect
+	github.com/tidwall/match v1.1.1 // indirect
+	github.com/tidwall/pretty v1.2.1 // indirect
+	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
 	github.com/xhit/go-str2duration/v2 v2.1.0 // indirect
