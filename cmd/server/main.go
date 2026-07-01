@@ -259,13 +259,17 @@ func main() {
 
 	// Inngest function handler — server-to-server, no CORS needed
 	pushClient := notification.NewExpoPushClient()
+	waClient := notification.NewWhatsAppClient(
+		getEnv("WHATSAPP_ACCESS_TOKEN", ""),
+		getEnv("WHATSAPP_PHONE_NUMBER_ID", ""),
+	)
 	inngestClient, err := inngestgo.NewClient(inngestgo.ClientOpts{
 		AppID: getEnv("INNGEST_APP_ID", "go-backend"),
 	})
 	if err != nil {
 		log.Fatalf("Failed to create Inngest client: %v", err)
 	}
-	if regErr := dailystoryInngest.RegisterFunctions(inngestClient, pushClient); regErr != nil {
+	if regErr := dailystoryInngest.RegisterFunctions(inngestClient, pushClient, waClient); regErr != nil {
 		log.Fatalf("Failed to register Inngest functions: %v", regErr)
 	}
 	router.Any("/api/inngest", gin.WrapH(inngestClient.Serve()))
