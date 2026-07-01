@@ -45,7 +45,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Usage: go run scripts/send_scheduled_whatsapp/main.go <csv_path>")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "Required env vars:")
-		fmt.Fprintln(os.Stderr, "  WHATSAPP_IMAGE_URL    Public image URL for the template header")
+		fmt.Fprintln(os.Stderr, "  WHATSAPP_IMAGE_BASE_URL  Base URL for template images (e.g. https://cdn.example.com)")
 		fmt.Fprintln(os.Stderr, "  INNGEST_APP_ID        Inngest application ID (default: go-backend)")
 		fmt.Fprintln(os.Stderr, "  INNGEST_EVENT_KEY     Inngest event API key")
 		os.Exit(1)
@@ -61,7 +61,7 @@ func main() {
 		}
 	}
 
-	imageURL := mustEnv("WHATSAPP_IMAGE_URL")
+	imageBaseURL := mustEnv("WHATSAPP_IMAGE_BASE_URL")
 
 	allRows, records, langCodes, err := loadCSV(csvPath)
 	if err != nil {
@@ -99,7 +99,7 @@ func main() {
 			Name: inngest.WhatsAppMessageEventName,
 			Data: inngest.WhatsAppMessageEventData{
 				Phone:       countryCode + rec.phone,
-				Template:    buildAreaTemplate(langCodes[i], imageURL),
+				Template:    buildAreaTemplate(langCodes[i], imageBaseURL),
 				ScheduledAt: scheduledAt,
 			},
 		}
@@ -122,13 +122,15 @@ func main() {
 
 // buildAreaTemplate constructs the WhatsApp template based on the user's language code.
 // South Indian languages and English use the English template; all others use Hindi.
-func buildAreaTemplate(langCode, imageURL string) notification.WhatsAppTemplate {
+// The image URL is derived as imageBaseURL/area_poster_announcement_<waLangCode>.png.
+func buildAreaTemplate(langCode, imageBaseURL string) notification.WhatsAppTemplate {
 	templateName := "area_update_hi"
 	waLangCode := "hi"
 	if southIndianLangCodes[langCode] {
 		templateName = "area_update_en"
 		waLangCode = "en"
 	}
+	imageURL := imageBaseURL + "/area_poster_announcement_" + waLangCode + ".png"
 	return notification.WhatsAppTemplate{
 		Name:     templateName,
 		Language: notification.TemplateLanguage{Code: waLangCode},
