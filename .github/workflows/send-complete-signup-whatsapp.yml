@@ -1,0 +1,49 @@
+name: Send Complete Signup WhatsApp
+
+on:
+  workflow_dispatch:
+    inputs:
+      csv_path:
+        description: "Path to the CSV file (relative to repo root) with phone and message_sent columns"
+        required: true
+        default: "data/complete_signup.csv"
+
+jobs:
+  send-complete-signup-whatsapp:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-v2-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-v2-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run send complete signup WhatsApp job
+        env:
+          GO_ENV: ${{ secrets.GO_ENV }}
+          WHATSAPP_IMAGE_BASE_URL: ${{ secrets.WHATSAPP_IMAGE_BASE_URL }}
+          INNGEST_APP_ID: ${{ secrets.INNGEST_APP_ID }}
+          INNGEST_EVENT_KEY: ${{ secrets.INNGEST_EVENT_KEY }}
+        run: |
+          cd cron-jobs/send_complete_signup_whatsapp
+          go run main.go ../../${{ github.event.inputs.csv_path }}
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "Send complete signup WhatsApp job failed"
+          echo "Check the logs above for details"
