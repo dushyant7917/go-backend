@@ -257,7 +257,7 @@ func processVideo(
 func main() {
 	textsFile := flag.String("texts", "texts.json", "path to texts JSON file")
 	outputDir := flag.String("output", "output", "root output directory for thumbnails")
-	videoBaseDir := flag.String("video-dir", "/Users/dushyant7917/D7/DS_Ads/public/Hook/Videos", "root directory for output videos (language subdirs must exist)")
+	videoBaseDir := flag.String("video-dir", "", "root directory for output videos; defaults to VIDEO_OUTPUT_PATH env var")
 	skipVideo := flag.Bool("skip-video", false, "generate thumbnails only, skip video")
 	imageWorkers := flag.Int("image-workers", 10, "concurrent thumbnail workers")
 	videoWorkers := flag.Int("video-workers", 2, "concurrent video workers")
@@ -292,6 +292,13 @@ func main() {
 	}
 	if geminiKey == "" && !*skipVideo {
 		log.Fatal("GEMINI_API_KEY is not set (or pass -skip-video)")
+	}
+
+	if *videoBaseDir == "" {
+		*videoBaseDir = os.Getenv("VIDEO_OUTPUT_PATH")
+	}
+	if *videoBaseDir == "" && !*skipVideo {
+		log.Fatal("VIDEO_OUTPUT_PATH env var is not set (or pass -video-dir)")
 	}
 
 	raw, err := os.ReadFile(*textsFile)
