@@ -259,9 +259,9 @@ func main() {
 	outputDir := flag.String("output", "output", "root output directory for thumbnails")
 	videoBaseDir := flag.String("video-dir", "", "root directory for output videos; defaults to VIDEO_OUTPUT_PATH env var")
 	skipVideo := flag.Bool("skip-video", false, "generate thumbnails only, skip video")
-	imageWorkers := flag.Int("image-workers", 10, "concurrent thumbnail workers")
+	imageWorkers := flag.Int("image-workers", 20, "concurrent thumbnail workers")
 	videoWorkers := flag.Int("video-workers", 2, "concurrent video workers")
-	imageRPM := flag.Int("image-rpm", 20, "max OpenAI image requests per minute")
+	imageRPM := flag.Int("image-rpm", 45, "max OpenAI image requests per minute")
 	videoRPM := flag.Int("video-rpm", 4, "max Veo video requests per minute")
 	flag.Parse()
 

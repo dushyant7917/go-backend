@@ -53,7 +53,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to read CSV: %v", err)
 	}
-	log.Printf("found %d rows with Message_Sent=true", len(phones))
+	log.Printf("found %d rows with message_sent=true", len(phones))
 
 	inDB, err := countRegisteredUsers(db, phones)
 	if err != nil {
@@ -64,7 +64,7 @@ func main() {
 	fmt.Printf("\nResults for app_name=%s, country_code=%s\n", dailyStoryApp, countryCode)
 	fmt.Printf("  Registered in users table     : %d\n", inDB)
 	fmt.Printf("  Not registered in users table : %d\n", notInDB)
-	fmt.Printf("  Total with Message_Sent=true  : %d\n", len(phones))
+	fmt.Printf("  Total with message_sent=true  : %d\n", len(phones))
 }
 
 // loadSentPhones reads the CSV and returns phones where Message_Sent is "true".
@@ -93,7 +93,7 @@ func loadSentPhones(path string) ([]string, error) {
 	phoneCol, okP := colIdx["phone"]
 	sentCol, okS := colIdx["message_sent"]
 	if !okP || !okS {
-		return nil, fmt.Errorf("CSV must have 'Phone' and 'Message_Sent' columns (got: %v)", header)
+		return nil, fmt.Errorf("CSV must have 'phone' and 'message_sent' columns (got: %v)", header)
 	}
 
 	var phones []string

@@ -22,11 +22,9 @@ const (
 	userAgeDays     = 7
 	batchSize       = 10
 
-	// Notification delivery window: 9am–9pm IST = 3:30am–3:30pm UTC
-	windowStartHourUTC   = 3
-	windowStartMinuteUTC = 30
-	windowEndHourUTC     = 15
-	windowEndMinuteUTC   = 30
+	// Notification delivery window: now+1h – 9pm IST (3:30pm UTC)
+	windowEndHourUTC   = 15
+	windowEndMinuteUTC = 30
 )
 
 // userMessage pairs a push token with its localized notification message
@@ -67,11 +65,11 @@ func buildUserMessages(users []models.User, timestamp string) []userMessage {
 	return msgs
 }
 
-// scheduleBatchTimes returns M evenly-spaced times within the 10am–9pm IST window.
-// If M == 1 the single batch fires at windowStart (10am).
+// scheduleBatchTimes returns M evenly-spaced times within the now+1h – 9pm IST window.
+// If M == 1 the single batch fires at windowStart (now+1h).
 func scheduleBatchTimes(m int, today time.Time) []time.Time {
 	d := today.UTC()
-	windowStart := time.Date(d.Year(), d.Month(), d.Day(), windowStartHourUTC, windowStartMinuteUTC, 0, 0, time.UTC)
+	windowStart := today.UTC().Add(time.Hour).Truncate(time.Minute)
 	windowEnd := time.Date(d.Year(), d.Month(), d.Day(), windowEndHourUTC, windowEndMinuteUTC, 0, 0, time.UTC)
 
 	times := make([]time.Time, m)
