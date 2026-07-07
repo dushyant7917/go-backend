@@ -1,12 +1,9 @@
 name: Send Complete Signup WhatsApp
 
 on:
+  schedule:
+    - cron: "0 11 * * *"  # 4:30 PM IST (UTC+5:30) = 11:00 UTC
   workflow_dispatch:
-    inputs:
-      csv_path:
-        description: "Path to the CSV file (relative to repo root) with phone and message_sent columns"
-        required: true
-        default: "data/complete_signup.csv"
 
 jobs:
   send-complete-signup-whatsapp:
@@ -35,12 +32,18 @@ jobs:
       - name: Run send complete signup WhatsApp job
         env:
           GO_ENV: ${{ secrets.GO_ENV }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_SSL_MODE: ${{ secrets.DB_SSL_MODE }}
           WHATSAPP_IMAGE_BASE_URL: ${{ secrets.WHATSAPP_IMAGE_BASE_URL }}
           INNGEST_APP_ID: ${{ secrets.INNGEST_APP_ID }}
           INNGEST_EVENT_KEY: ${{ secrets.INNGEST_EVENT_KEY }}
         run: |
           cd cron-jobs/send_complete_signup_whatsapp
-          go run main.go ../../${{ github.event.inputs.csv_path }}
+          go run main.go
 
       - name: Notify on failure
         if: failure()
