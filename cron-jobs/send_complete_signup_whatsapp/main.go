@@ -59,7 +59,7 @@ func main() {
 	var phones []string
 	err = db.Raw(`
 		SELECT DISTINCT p.phone
-		FROM phone_otps p
+		FROM phone_otp p
 		WHERE p.created_at >= ?
 		  AND p.created_at <= ?
 		  AND p.country_code = ?
@@ -141,4 +141,3 @@ func mustEnv(key string) string {
 	}
 	return v
 }
-
