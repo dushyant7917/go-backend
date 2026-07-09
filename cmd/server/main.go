@@ -158,19 +158,28 @@ func main() {
 	crushH := crushHandler.NewCrushHandler(crushSvc)
 	userH := userHandler.NewUserHandler(userSvc)
 
-	// Initialize OTP dependencies
-	// Use AuthKey provider for production, no-op for local/dev
+	// Initialize OTP dependencies.
+	// In production, pick the provider based on which env vars are set:
+	//   TWO_FACTOR_API_KEY + TWO_FACTOR_TEMPLATE_NAME → 2factor.in
+	//   AUTHKEY_API_KEY   + AUTHKEY_TEMPLATE_ID        → AuthKey.io
+	// Non-prod falls back to a no-op provider that only logs the OTP.
 	var otpProvider otpService.OTPProvider
 	if env == "prod" {
+		twoFactorAPIKey := getEnv("TWO_FACTOR_API_KEY", "")
+		twoFactorTemplate := getEnv("TWO_FACTOR_TEMPLATE_NAME", "")
 		authKey := getEnv("AUTHKEY_API_KEY", "")
 		authKeyTemplateID := getEnv("AUTHKEY_TEMPLATE_ID", "")
 
-		if authKey == "" || authKeyTemplateID == "" {
-			log.Fatal("AUTHKEY_API_KEY and AUTHKEY_TEMPLATE_ID are required in production")
+		switch {
+		case twoFactorAPIKey != "" && twoFactorTemplate != "":
+			otpProvider = otpService.NewTwoFactorProvider(twoFactorAPIKey, twoFactorTemplate)
+			log.Println("Using 2Factor SMS provider (production mode)")
+		case authKey != "" && authKeyTemplateID != "":
+			otpProvider = otpService.NewAuthKeyProvider(authKey, authKeyTemplateID)
+			log.Println("Using AuthKey SMS provider (production mode)")
+		default:
+			log.Fatal("production requires either TWO_FACTOR_API_KEY+TWO_FACTOR_TEMPLATE_NAME or AUTHKEY_API_KEY+AUTHKEY_TEMPLATE_ID")
 		}
-
-		otpProvider = otpService.NewAuthKeyProvider(authKey, authKeyTemplateID)
-		log.Println("Using AuthKey SMS provider (production mode)")
 	} else {
 		otpProvider = otpService.NewNoOpProvider()
 		log.Println("Using No-Op provider - OTP will be logged only (local/dev mode)")

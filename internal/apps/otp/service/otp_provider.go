@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -62,5 +63,55 @@ func NewAuthKeyProvider(authKey, templateID string) OTPProvider {
 	return &authKeyProvider{
 		authKey:    authKey,
 		templateID: templateID,
+	}
+}
+
+// twoFactorProvider sends OTP via 2factor.in API
+type twoFactorProvider struct {
+	apiKey       string
+	templateName string
+}
+
+func (t *twoFactorProvider) SendOTP(countryCode, phone, _ /* appName */, otpValue string) error {
+	reqURL := fmt.Sprintf("https://2factor.in/API/V1/%s/SMS/%s/%s/%s",
+		url.PathEscape(t.apiKey),
+		url.PathEscape(phone),
+		url.PathEscape(otpValue),
+		url.PathEscape(t.templateName),
+	)
+
+	resp, err := http.Get(reqURL)
+	if err != nil {
+		return fmt.Errorf("failed to send OTP via 2Factor: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("2Factor API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// 2Factor returns HTTP 200 even on errors; check the Status field.
+	var result struct {
+		Status  string `json:"Status"`
+		Details string `json:"Details"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("2Factor API unexpected response: %s", string(body))
+	}
+	if result.Status != "Success" {
+		return fmt.Errorf("2Factor API error: %s", result.Details)
+	}
+
+	fmt.Printf("[OTP 2Factor] Sent OTP to %s%s\n", countryCode, phone)
+	return nil
+}
+
+// NewTwoFactorProvider creates a 2factor.in OTP provider.
+// templateName is the SMS template registered in your 2Factor account.
+func NewTwoFactorProvider(apiKey, templateName string) OTPProvider {
+	return &twoFactorProvider{
+		apiKey:       apiKey,
+		templateName: templateName,
 	}
 }
