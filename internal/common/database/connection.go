@@ -26,7 +26,7 @@ type PoolProfile struct {
 //     pinning idle backend slots on PostgreSQL
 var ServerPoolProfile = PoolProfile{
 	MaxOpenConns:    100,
-	MaxIdleConns:    70,
+	MaxIdleConns:    80,
 	ConnMaxLifetime: 30 * time.Minute,
 	ConnMaxIdleTime: 30 * time.Minute,
 }
