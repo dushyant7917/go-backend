@@ -237,6 +237,16 @@ var states = []stateInfo{
 		},
 	},
 	{
+		Name: "Andhra Pradesh", StateKey: "andhra_pradesh", LangCode: "te", Languages: []string{"te", "en"},
+		Areas: []string{
+			"Anakapalli", "Anantapur", "Annamayya", "Bapatla",
+			"Chittoor", "East Godavari", "Eluru", "Guntur", "Kakinada",
+			"Konaseema", "Kurnool", "Markapuram", "Nandyal", "Nellore",
+			"Palnadu", "Polavaram", "Prakasam", "Srikakulam", "Tirupati",
+			"Visakhapatnam", "Vizianagaram", "West Godavari",
+		},
+	},
+	{
 		Name: "Tamil Nadu", StateKey: "tamil_nadu", LangCode: "ta", Languages: []string{"ta", "en"},
 		Areas: []string{
 			"Ariyalur", "Chengalpattu", "Chennai", "Coimbatore", "Cuddalore",
