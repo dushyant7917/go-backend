@@ -1,0 +1,52 @@
+name: Pause Underperforming Adsets
+
+on:
+  schedule:
+    # Runs every 2 hours
+    - cron: "0 */2 * * *"
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  pause-underperforming-adsets:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-v2-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-v2-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Pause underperforming adsets
+        env:
+          META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+          META_AD_ACCOUNT_ID: ${{ secrets.META_AD_ACCOUNT_ID }}
+          META_CAMPAIGN_ID_HINDI: ${{ secrets.META_CAMPAIGN_ID_HINDI }}
+          META_CAMPAIGN_ID_TAMIL: ${{ secrets.META_CAMPAIGN_ID_TAMIL }}
+          META_CAMPAIGN_ID_MARATHI: ${{ secrets.META_CAMPAIGN_ID_MARATHI }}
+          META_CAMPAIGN_ID_GUJARATI: ${{ secrets.META_CAMPAIGN_ID_GUJARATI }}
+          META_CAMPAIGN_ID_BENGALI: ${{ secrets.META_CAMPAIGN_ID_BENGALI }}
+          META_CAMPAIGN_ID_TELUGU: ${{ secrets.META_CAMPAIGN_ID_TELUGU }}
+          META_CAMPAIGN_ID_KANNADA: ${{ secrets.META_CAMPAIGN_ID_KANNADA }}
+        run: |
+          cd cron-jobs/pause_underperforming_adsets
+          go run main.go -result-action-type=start_trial_total -apply
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "Pause underperforming adsets job failed"
+          echo "Check the logs above for details"

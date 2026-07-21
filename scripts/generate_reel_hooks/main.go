@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -27,14 +28,41 @@ import (
 // ==================== Config ====================
 
 const (
-	thumbnailPrompt = `Create a thumbnail of 9:16 aspect ratio which has a beautiful indian female news reporter holding a mike in one hand and thumbnail text is "%s"`
-	videoPrompt     = `The reporter in image speaks in %s "%s"`
-
 	veoModel = "veo-3.1-lite-generate-preview"
 
 	pollInterval = 10 * time.Second
 	maxRetries   = 5
 )
+
+var aspectRatioToSize = map[string]openai.ImageGenerateParamsSize{
+	"1:1":  openai.ImageGenerateParamsSize1024x1024,
+	"4:5":  openai.ImageGenerateParamsSize("1024x1280"),
+	"9:16": openai.ImageGenerateParamsSize1024x1536,
+}
+
+type promptVariant struct {
+	thumbnail string // format args: aspect-ratio, text
+	video     string // format args: language, text
+}
+
+var variants = map[string]promptVariant{
+	"reporter": {
+		thumbnail: `Create a thumbnail of %s aspect ratio which has a beautiful indian female news reporter holding a mike in one hand and thumbnail text is "%s"`,
+		video:     `The reporter in image speaks in %s "%s"`,
+	},
+	"male_kid_reporter": {
+		thumbnail: `Create a thumbnail of %s aspect ratio which has a 10 year old indian male kid dressed as news reporter holding a mike in one hand and thumbnail text is "%s"`,
+		video:     `The kid in image speaks in %s "%s"`,
+	},
+	"poster": {
+		thumbnail: `Create an aesthetic poster of %s aspect ratio with the text "%s"`,
+		video:     `Add a voice over in %s "%s"`,
+	},
+	"thumbnail": {
+		thumbnail: `Create a catchy thumbnail of %s aspect ratio with the text "%s"`,
+		video:     `Animate the image attached and add a voice over in %s for the text "%s"`,
+	},
+}
 
 // ==================== Types ====================
 
@@ -93,8 +121,8 @@ func withRetry(ctx context.Context, fn func() error) error {
 
 // ==================== Generators ====================
 
-func generateThumbnail(ctx context.Context, client openai.Client, text string, limiter *rate.Limiter) ([]byte, error) {
-	prompt := fmt.Sprintf(thumbnailPrompt, text)
+func generateThumbnail(ctx context.Context, client openai.Client, thumbnailTmpl, aspectRatio, text string, size openai.ImageGenerateParamsSize, limiter *rate.Limiter) ([]byte, error) {
+	prompt := fmt.Sprintf(thumbnailTmpl, aspectRatio, text)
 	var resp *openai.ImagesResponse
 	err := withRetry(ctx, func() error {
 		if e := limiter.Wait(ctx); e != nil {
@@ -104,7 +132,7 @@ func generateThumbnail(ctx context.Context, client openai.Client, text string, l
 		resp, e = client.Images.Generate(ctx, openai.ImageGenerateParams{
 			Prompt:  prompt,
 			Model:   "gpt-image-2",
-			Size:    openai.ImageGenerateParamsSize1024x1536,
+			Size:    size,
 			Quality: openai.ImageGenerateParamsQualityHigh,
 		})
 		return e
@@ -118,8 +146,8 @@ func generateThumbnail(ctx context.Context, client openai.Client, text string, l
 	return base64.StdEncoding.DecodeString(resp.Data[0].B64JSON)
 }
 
-func generateVideo(ctx context.Context, client *genai.Client, imageBytes []byte, language, text string, limiter *rate.Limiter) ([]byte, error) {
-	prompt := fmt.Sprintf(videoPrompt, language, text)
+func generateVideo(ctx context.Context, client *genai.Client, imageBytes []byte, videoTmpl, language, text, aspectRatio string, duration int, limiter *rate.Limiter) ([]byte, error) {
+	prompt := fmt.Sprintf(videoTmpl, language, text)
 
 	var op *genai.GenerateVideosOperation
 	err := withRetry(ctx, func() error {
@@ -131,9 +159,9 @@ func generateVideo(ctx context.Context, client *genai.Client, imageBytes []byte,
 			ImageBytes: imageBytes,
 			MIMEType:   "image/png",
 		}, &genai.GenerateVideosConfig{
-			AspectRatio:     "9:16",
+			AspectRatio:     aspectRatio,
 			NumberOfVideos:  1,
-			DurationSeconds: ptr(int32(4)),
+			DurationSeconds: ptr(int32(duration)),
 		})
 		return e
 	})
@@ -186,6 +214,9 @@ func processImage(
 	videoCh chan<- videoItem,
 	client openai.Client,
 	limiter *rate.Limiter,
+	thumbnailTmpl string,
+	aspectRatio string,
+	size openai.ImageGenerateParamsSize,
 	skipVideo bool,
 ) {
 	log.Printf("[%d/%d] [%s] %s", item.index, total, item.language, item.text)
@@ -206,7 +237,7 @@ func processImage(
 	} else {
 		log.Printf("  → generating thumbnail (gpt-image-2) [%s]", item.language)
 		var err error
-		imageBytes, err = generateThumbnail(ctx, client, item.text, limiter)
+		imageBytes, err = generateThumbnail(ctx, client, thumbnailTmpl, aspectRatio, item.text, size, limiter)
 		if err != nil {
 			log.Printf("  ✗ thumbnail: %v — skipping", err)
 			return
@@ -233,6 +264,9 @@ func processVideo(
 	item videoItem,
 	client *genai.Client,
 	limiter *rate.Limiter,
+	videoTmpl string,
+	aspectRatio string,
+	duration int,
 ) {
 	if _, statErr := os.Stat(item.videoPath); statErr == nil {
 		log.Printf("  ✓ video exists: %s", item.videoPath)
@@ -240,7 +274,7 @@ func processVideo(
 	}
 
 	log.Printf("  → generating video (Veo 3.1 Lite Preview) [%s] %s", item.language, item.text)
-	videoBytes, err := generateVideo(ctx, client, item.imageBytes, item.language, item.text, limiter)
+	videoBytes, err := generateVideo(ctx, client, item.imageBytes, videoTmpl, item.language, item.text, aspectRatio, duration, limiter)
 	if err != nil {
 		log.Printf("  ✗ video: %v [%s]", err, item.language)
 		return
@@ -258,12 +292,36 @@ func main() {
 	textsFile := flag.String("texts", "texts.json", "path to texts JSON file")
 	outputDir := flag.String("output", "output", "root output directory for thumbnails")
 	videoBaseDir := flag.String("video-dir", "", "root directory for output videos; defaults to VIDEO_OUTPUT_PATH env var")
+	variantName := flag.String("variant", "", "prompt variant to use: reporter, poster, thumbnail (required)")
+	aspectRatioFlag := flag.String("aspect-ratio", "", "output aspect ratio: 1:1, 4:5, 9:16 (required)")
+	videoDuration := flag.Int("duration", 0, "video duration in seconds: 4, 6, or 8 (required unless -skip-video)")
 	skipVideo := flag.Bool("skip-video", false, "generate thumbnails only, skip video")
 	imageWorkers := flag.Int("image-workers", 20, "concurrent thumbnail workers")
 	videoWorkers := flag.Int("video-workers", 2, "concurrent video workers")
 	imageRPM := flag.Int("image-rpm", 45, "max OpenAI image requests per minute")
 	videoRPM := flag.Int("video-rpm", 4, "max Veo video requests per minute")
 	flag.Parse()
+
+	variant, ok := variants[*variantName]
+	if !ok {
+		names := make([]string, 0, len(variants))
+		for k := range variants {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		log.Fatalf("-variant is required; choose one of: %s", strings.Join(names, ", "))
+	}
+
+	imgSize, ok := aspectRatioToSize[*aspectRatioFlag]
+	if !ok {
+		log.Fatalf("-aspect-ratio is required; choose one of: 1:1, 4:5, 9:16")
+	}
+
+	if !*skipVideo {
+		if *videoDuration != 4 && *videoDuration != 6 && *videoDuration != 8 {
+			log.Fatalf("-duration is required; choose one of: 4, 6, 8")
+		}
+	}
 
 	if *imageWorkers <= 0 {
 		log.Fatal("-image-workers must be a positive integer")
@@ -379,7 +437,7 @@ func main() {
 					if !ok {
 						return
 					}
-					processImage(ctx, item, total, videoCh, openaiClient, imageLimiter, *skipVideo)
+					processImage(ctx, item, total, videoCh, openaiClient, imageLimiter, variant.thumbnail, *aspectRatioFlag, imgSize, *skipVideo)
 				}
 			}
 		}()
@@ -405,7 +463,7 @@ func main() {
 						if !ok {
 							return
 						}
-						processVideo(ctx, item, geminiClient, videoLimiter)
+						processVideo(ctx, item, geminiClient, videoLimiter, variant.video, *aspectRatioFlag, *videoDuration)
 					}
 				}
 			}()

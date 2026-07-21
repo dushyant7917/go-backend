@@ -35,6 +35,7 @@ Jobs load `.env.<GO_ENV>` (falling back to `.env`) and use `database.NewCronConn
 | `cleanup_orphan_posters` | Remove poster files in R2 not referenced by any poster record |
 | `cleanup_orphan_profile_pictures` | Remove profile picture files in R2 not referenced by any user |
 | `cleanup_triggered_meta_events` | Delete already-triggered Meta pixel event records |
+| `pause_underperforming_adsets` | Pause Meta ad sets whose cost-per-result exceeds threshold bands; runs every 2 hours |
 
 ## Disabled Jobs (manual dispatch only)
 
