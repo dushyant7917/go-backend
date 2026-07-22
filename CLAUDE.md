@@ -97,7 +97,7 @@ Each cron job is a standalone Go binary in `cron-jobs/<job_name>/main.go`. They 
 - `cleanup_orphan_posters` — remove orphaned poster files from R2
 - `cleanup_orphan_profile_pictures` — remove orphaned profile picture files from R2
 - `cleanup_orphan_templates` — remove orphaned template files from R2
-- `pause_underperforming_adsets` — pause Meta ad sets whose cost-per-result exceeds threshold bands; runs every 2 hours
+- `pause_underperforming_adsets` — pause Meta ad sets whose cost-per-result exceeds threshold bands; runs every hour
 
 Inactive (schedule disabled, manual dispatch only): `parse_news_rss`, `cleanup_old_templates`, `cleanup_orphan_posters`, `cleanup_orphan_templates`, `cleanup_rejected_templates`, `update_subscription_amount`, `update_cancelled_subscription_amount`
 

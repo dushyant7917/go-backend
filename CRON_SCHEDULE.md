@@ -29,8 +29,8 @@ Workflows live in [.github/workflows/](.github/workflows/). All can also be run 
 
 ## Active Jobs (by workflow)
 
-### Pause Underperforming Adsets — Every 2 hours
-Cron expression (UTC): `0 */2 * * *`
+### Pause Underperforming Adsets — Every hour
+Cron expression (UTC): `0 * * * *`
 
 ### Charge Pending Payments — Daily
 Cron expressions (UTC):

@@ -74,7 +74,7 @@ func main() {
 	conversionEvent := flag.String("conversion-event", "START_TRIAL", "app event name e.g. START_TRIAL, PURCHASE, COMPLETE_REGISTRATION (required)")
 	linkURL := flag.String("link-url", "", "destination URL for CTA e.g. Play Store URL (optional, Meta uses app store URL from app config if omitted)")
 	dailyBudget := flag.Int("daily-budget", 50000, "daily budget in paise e.g. 50000 = ₹500")
-	startTime := flag.String("start-time", "", "ISO 8601 start time (default: 40 minutes from now, or 5:30am IST next day if run after 9pm IST)")
+	startTime := flag.String("start-time", "", "ISO 8601 start time (default: 40 minutes from now, or 6am IST if run between 9pm and 5am IST)")
 	textsFile := flag.String("texts-file", "", "path to texts JSON file (default: scripts/generate_reel_hooks/<lang-lowercase>.json)")
 	textsLang := flag.String("lang", "", "language for ad copy: Hindi, Tamil, Marathi, Gujarati, Bengali, Telugu, Kannada (optional; omit to auto-process every language with a META_CAMPAIGN_ID_<LANG> set)")
 	cta := flag.String("cta", "INSTALL_MOBILE_APP", "call-to-action button type")
@@ -542,14 +542,19 @@ func fetchNamedEntities(ctx context.Context, client *http.Client, token, endpoin
 }
 
 // defaultStartTime returns the default ad set start time given the time the script is
-// run: 40 minutes from now, unless run after 9pm IST, in which case it returns 5:30am
-// IST the next day (avoids starting ad sets overnight).
+// run: 40 minutes from now, unless run between 9pm and 5am IST, in which case it
+// returns 6am IST (same day if run before 5am, next day if run at/after 9pm) to
+// avoid starting ad sets overnight.
 func defaultStartTime(now time.Time) string {
 	ist := time.FixedZone("IST", 19800) // UTC+5:30
 	nowIST := now.In(ist)
-	if nowIST.Hour() >= 21 {
-		next := time.Date(nowIST.Year(), nowIST.Month(), nowIST.Day()+1, 5, 30, 0, 0, ist)
-		return next.Format(time.RFC3339)
+	hour := nowIST.Hour()
+	day := nowIST.Day()
+	if hour >= 21 || hour < 5 {
+		if hour >= 21 {
+			day++
+		}
+		return time.Date(nowIST.Year(), nowIST.Month(), day, 6, 0, 0, 0, ist).Format(time.RFC3339)
 	}
 	return now.Add(40 * time.Minute).Format(time.RFC3339)
 }
