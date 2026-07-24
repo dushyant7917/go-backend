@@ -4,7 +4,7 @@ Single source of truth for all scheduled GitHub Actions cron jobs.
 Workflows live in [.github/workflows/](.github/workflows/). All can also be run manually via `workflow_dispatch`.
 
 > Times shown in **IST** (UTC+5:30). GitHub Actions cron is in **UTC**.
-> Last updated: 2026-07-21 (preponed Reconcile Payments/Process New Billing Cycles/Retry Failed Billing Cycles by 1.5h, Charge Pending Payments by 3h)
+> Last updated: 2026-07-24 (disabled Send Complete Signup WhatsApp schedule)
 
 ## Daily Timeline (IST)
 
@@ -24,7 +24,6 @@ Workflows live in [.github/workflows/](.github/workflows/). All can also be run 
 | 9:00 AM | Parse News → Generate News Media | Daily | [parse-news.yml](.github/workflows/parse-news.yml) |
 | 2:30 PM | Parse News → Generate News Media | Daily | [parse-news.yml](.github/workflows/parse-news.yml) |
 | 4:00 PM | Send Subscription Activity Report | Daily | [send-subscription-activity-report.yml](.github/workflows/send-subscription-activity-report.yml) |
-| 4:30 PM | Send Complete Signup WhatsApp | Daily | [send-complete-signup-whatsapp.yml](.github/workflows/send-complete-signup-whatsapp.yml) |
 | 11:00 PM | Cleanup Old News | Daily | [cleanup-old-news.yml](.github/workflows/cleanup-old-news.yml) |
 
 ## Active Jobs (by workflow)
@@ -51,7 +50,6 @@ Cron expressions (UTC):
 | Cleanup Old News | `30 17 * * *` | 11:00 PM |
 | Send DailyStory Push Notification | `30 1 * * *` | 7:00 AM |
 | Send Subscription Activity Report | `30 10 * * *` | 4:00 PM |
-| Send Complete Signup WhatsApp | `0 11 * * *` | 4:30 PM |
 | Reconcile Payments | `0 18 * * *` | 11:30 PM (prev day) |
 | Process New Billing Cycles | `30 18 * * *` | 12:00 AM |
 | Retry Failed Billing Cycles | `0 19 * * *` | 12:30 AM |
@@ -76,6 +74,7 @@ Cron expressions (UTC):
 | Cleanup Rejected Templates | [cleanup-rejected-templates.yml](.github/workflows/cleanup-rejected-templates.yml) |
 | Update Cancelled Subscription Amount | [update-cancelled-subscription-amount.yml](.github/workflows/update-cancelled-subscription-amount.yml) |
 | Update Subscription Amount | [update-subscription-amount.yml](.github/workflows/update-subscription-amount.yml) |
+| Send Complete Signup WhatsApp | [send-complete-signup-whatsapp.yml](.github/workflows/send-complete-signup-whatsapp.yml) |
 
 ---
 **Maintenance note:** When you change a cron in any `.github/workflows/*.yml`, update this file in the same commit.
