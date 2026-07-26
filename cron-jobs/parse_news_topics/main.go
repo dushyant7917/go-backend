@@ -19,12 +19,8 @@ import (
 	"time"
 
 	dsmodels "go-backend/internal/apps/dailystory/models"
-	posthogModels "go-backend/internal/apps/posthog/config/models"
-	posthogRepository "go-backend/internal/apps/posthog/config/repository"
-	"go-backend/internal/common/constants"
 	"go-backend/internal/common/database"
 	"go-backend/internal/cron/newsutils"
-	"go-backend/pkg/analytics"
 	"go-backend/pkg/utils"
 
 	"github.com/google/uuid"
@@ -138,9 +134,6 @@ const (
 	embeddingDimensions         = 768
 	llmRateLimitPerMinute       = 8000
 	embeddingRateLimitPerMinute = 2000
-
-	PostHogEventNewsParsingFailed    = "NEWS_PARSING_FAILED"
-	PostHogEventNewsParsingSucceeded = "NEWS_PARSING_SUCCEEDED"
 
 	categoryCapWindow  = 12 * time.Hour
 	embeddingBatchSize = 20
@@ -261,10 +254,6 @@ func main() {
 		log.Fatalf("[%s] ✗ Failed to connect to database: %v\n", timestamp, err)
 	}
 	log.Printf("[%s] ✓ Database connected\n", timestamp)
-
-	posthogConfigRepo := posthogRepository.NewPostHogConfigRepository(db)
-	posthogClient := analytics.NewPostHogClient()
-	posthogConfig := getPostHogConfig(posthogConfigRepo, timestamp)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -585,11 +574,6 @@ func main() {
 		log.Printf("[%s] ✓ Completed in %dm %02ds: %d processed, %d skipped, %d failed\n",
 			timestamp, int(elapsed.Minutes()), int(elapsed.Seconds())%60, totalProcessed, totalSkipped, totalFailed)
 	}
-
-	if ctx.Err() == nil {
-		sendPostHogEvent(posthogClient, posthogConfig, PostHogEventNewsParsingSucceeded, int(totalProcessed))
-	}
-	sendPostHogEvent(posthogClient, posthogConfig, PostHogEventNewsParsingFailed, int(totalFailed))
 }
 
 // ==================== Serper batch fetch ====================
@@ -1152,41 +1136,5 @@ func recordSimilarNews(db *gorm.DB, canonicalID uuid.UUID, link, contentHash, to
 	}
 	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&rec).Error; err != nil {
 		log.Printf("Failed to record similar_news for %s: %v", link, err)
-	}
-}
-
-// ==================== PostHog ====================
-
-type newsParsingEventProps struct{ Count int }
-
-func (p newsParsingEventProps) ToProperties() map[string]any {
-	return map[string]any{"count": p.Count}
-}
-
-func getPostHogConfig(repo posthogRepository.PostHogConfigRepository, timestamp string) *posthogModels.PostHogConfig {
-	env := utils.GetEnv("GO_ENV", "local")
-	config, err := repo.FindByAppNameAndEnv(constants.AppNameDailyStory, env)
-	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			log.Printf("[%s] [PostHog] No config found for %s/%s\n", timestamp, constants.AppNameDailyStory, env)
-		} else {
-			log.Printf("[%s] [PostHog] Error: %v\n", timestamp, err)
-		}
-		return nil
-	}
-	if !config.IsActive {
-		log.Printf("[%s] [PostHog] Config inactive for %s\n", timestamp, constants.AppNameDailyStory)
-		return nil
-	}
-	return config
-}
-
-func sendPostHogEvent(client *analytics.PostHogClient, config *posthogModels.PostHogConfig, eventName string, count int) {
-	if config == nil {
-		return
-	}
-	props := newsParsingEventProps{Count: count}
-	if err := client.SendEvent(config.Host, config.APIKey, eventName, constants.AppNameDailyStory, props.ToProperties()); err != nil {
-		log.Printf("[PostHog ERROR] Failed to send %s: %v\n", eventName, err)
 	}
 }

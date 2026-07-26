@@ -21,13 +21,10 @@ import (
 	"time"
 
 	dsmodels "go-backend/internal/apps/dailystory/models"
-	posthogModels "go-backend/internal/apps/posthog/config/models"
-	posthogRepository "go-backend/internal/apps/posthog/config/repository"
 	"go-backend/internal/apps/r2/config/repository"
 	"go-backend/internal/apps/r2/config/service"
 	"go-backend/internal/common/constants"
 	"go-backend/internal/common/database"
-	"go-backend/pkg/analytics"
 	"go-backend/pkg/storage"
 	"go-backend/pkg/utils"
 
@@ -214,10 +211,6 @@ const (
 	// outputs < 3072).
 	embeddingModel      = "gemini-embedding-001"
 	embeddingDimensions = 768
-
-	// PostHog event names for news parsing
-	PostHogEventNewsParsingFailed    = "NEWS_PARSING_FAILED"
-	PostHogEventNewsParsingSucceeded = "NEWS_PARSING_SUCCEEDED"
 )
 
 // Semantic deduplication config, populated from env in main().
@@ -356,14 +349,6 @@ func main() {
 	r2Client, err := r2ClientFactory.GetClient(constants.AppNameDailyStory)
 	if err != nil {
 		log.Fatalf("[%s] ✗ Failed to get R2 client: %v\n", timestamp, err)
-	}
-
-	// Initialize PostHog client and fetch config once
-	posthogConfigRepo := posthogRepository.NewPostHogConfigRepository(db)
-	posthogClient := analytics.NewPostHogClient()
-	posthogConfig := getPostHogConfig(posthogConfigRepo)
-	if posthogConfig != nil {
-		log.Printf("[%s] ✓ PostHog config loaded for app: %s\n", timestamp, constants.AppNameDailyStory)
 	}
 
 	// Get R2 bucket name from environment
@@ -589,10 +574,6 @@ func main() {
 	elapsed := time.Since(startTime)
 	log.Printf("[%s] ✓ RSS news feed parsing completed in %dm %02ds: %d processed, %d skipped, %d failed\n",
 		timestamp, int(elapsed.Minutes()), int(elapsed.Seconds())%60, totalProcessed, totalSkipped, totalFailed)
-
-	// Emit PostHog events with final counts (safe to read directly: all goroutines have finished).
-	sendPostHogNewsParsingEvent(posthogClient, posthogConfig, PostHogEventNewsParsingSucceeded, int(totalProcessed))
-	sendPostHogNewsParsingEvent(posthogClient, posthogConfig, PostHogEventNewsParsingFailed, int(totalFailed))
 
 	os.Exit(0)
 }
@@ -1226,64 +1207,4 @@ func uploadMediaToR2(r2Client *storage.R2Client, bucketName, mediaURL string, ht
 	}
 
 	return fileKey, nil
-}
-
-// ==================== PostHog Analytics Events ====================
-
-// NewsParsingEventProperties contains properties for news parsing events
-type NewsParsingEventProperties struct {
-	Count int
-}
-
-// ToProperties converts NewsParsingEventProperties to a map
-func (p NewsParsingEventProperties) ToProperties() map[string]any {
-	return map[string]any{
-		"count": p.Count,
-	}
-}
-
-// getPostHogConfig fetches PostHog config once at startup
-func getPostHogConfig(configRepo posthogRepository.PostHogConfigRepository) *posthogModels.PostHogConfig {
-	env := utils.GetEnv("GO_ENV", "local")
-	config, err := configRepo.FindByAppNameAndEnv(constants.AppNameDailyStory, env)
-	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			log.Printf("[PostHog] No config found for app: %s, environment: %s. Events will be skipped.\n", constants.AppNameDailyStory, env)
-		} else {
-			log.Printf("[PostHog ERROR] Failed to get config: %v. Events will be skipped.\n", err)
-		}
-		return nil
-	}
-
-	if !config.IsActive {
-		log.Printf("[PostHog] Config is inactive for app: %s. Events will be skipped.\n", constants.AppNameDailyStory)
-		return nil
-	}
-
-	return config
-}
-
-// sendPostHogNewsParsingEvent sends NEWS_PARSING_FAILED or NEWS_PARSING_SUCCEEDED event to PostHog
-func sendPostHogNewsParsingEvent(
-	client *analytics.PostHogClient,
-	config *posthogModels.PostHogConfig,
-	eventName string,
-	count int,
-) {
-	if config == nil {
-		return
-	}
-
-	props := NewsParsingEventProperties{
-		Count: count,
-	}
-
-	// Use the app name as distinct_id for cron job events
-	distinctID := constants.AppNameDailyStory
-
-	log.Printf("[PostHog] Processing %s event with count: %d\n", eventName, count)
-
-	if sendErr := client.SendEvent(config.Host, config.APIKey, eventName, distinctID, props.ToProperties()); sendErr != nil {
-		log.Printf("[PostHog ERROR] Failed to send %s event: %v\n", eventName, sendErr)
-	}
 }
