@@ -82,7 +82,7 @@ func main() {
 	adAccountID := flag.String("ad-account-id", os.Getenv("META_AD_ACCOUNT_ID"), "ad account ID without act_ prefix (required)")
 	resultActionType := flag.String("result-action-type", "", `Meta insights action_type to count as 'Results' (e.g. "start_trial_total" for a START_TRIAL-optimized adset — confirmed via -metric-field=conversions discovery mode). Omit to run in discovery mode, which prints the candidate conversions sums per adset instead of making pause decisions.`)
 	metricField := flag.String("metric-field", "conversions", `insights field to sum -result-action-type from: "conversions" (Meta's curated per-objective conversion count — confirmed to match Ads Manager's "Results" column) or "actions" (raw event count, does not match "Results")`)
-	apply := flag.Bool("apply", false, "actually pause flagged ad sets (requires -result-action-type). Without this flag the script only logs what it would do.")
+	apply := flag.Bool("apply", false, "actually pause/activate flagged ad sets (requires -result-action-type). Without this flag the script only logs what it would do.")
 	flag.Parse()
 
 	if *adAccountID == "" {
@@ -116,13 +116,14 @@ func main() {
 		campaignLabel string
 		adsetID       string
 		name          string
+		currentStatus string
 		spend         float64
 		results       int
 		cpr           float64
-		pause         bool
+		action        string // "pause", "activate", or "" (no change)
 		reason        string
-		paused        bool
-		pauseErr      error
+		applied       bool
+		applyErr      error
 	}
 	var outcomes []outcome
 
@@ -130,12 +131,12 @@ func main() {
 
 	for _, c := range campaigns {
 		log.Printf("=== campaign %s (%s) ===", c.Label, c.ID)
-		adsets, err := fetchActiveAdsets(ctx, httpClient, token, c.ID)
+		adsets, err := fetchAdsets(ctx, httpClient, token, c.ID)
 		if err != nil {
 			log.Printf("[%s] ERROR fetching adsets: %v", c.Label, err)
 			continue
 		}
-		log.Printf("[%s] %d active adset(s)", c.Label, len(adsets))
+		log.Printf("[%s] %d active/paused adset(s)", c.Label, len(adsets))
 
 		for _, as := range adsets {
 			since, sinceErr := parseStartDate(as.StartTime)
@@ -170,64 +171,96 @@ func main() {
 			if results > 0 {
 				cpr = spend / float64(results)
 			}
-			pause, reason := evaluate(results, spend, cpr)
+			flaggedBad, badReason := evaluate(results, spend, cpr)
 			log.Printf("[%s] %s: spend=%.2f results=%d", c.Label, as.Name, spend, results)
+
+			// A currently ACTIVE adset that trips the thresholds gets paused; a currently
+			// PAUSED adset that's within thresholds (i.e. would NOT be flagged if it were
+			// active) gets reactivated. Anything else is left alone.
+			var action, reason string
+			switch {
+			case flaggedBad && as.EffectiveStatus == "ACTIVE":
+				action, reason = "pause", badReason
+			case !flaggedBad && as.EffectiveStatus == "PAUSED":
+				action, reason = "activate", fmt.Sprintf("results=%d cpr=%.2f spend=%.2f within thresholds", results, cpr, spend)
+			}
 
 			outcomes = append(outcomes, outcome{
 				campaignLabel: c.Label,
 				adsetID:       as.ID,
 				name:          as.Name,
+				currentStatus: as.EffectiveStatus,
 				spend:         spend,
 				results:       results,
 				cpr:           cpr,
-				pause:         pause,
+				action:        action,
 				reason:        reason,
 			})
 		}
 	}
 
 	if discovery {
-		fmt.Println("\n=== Discovery mode: no pause decisions made. Compare the sums above against Ads Manager's Results column, then re-run with -result-action-type set. ===")
+		fmt.Println("\n=== Discovery mode: no pause/activate decisions made. Compare the sums above against Ads Manager's Results column, then re-run with -result-action-type set. ===")
 		return
 	}
 
 	if *apply {
 		for i, o := range outcomes {
-			if !o.pause {
+			if o.action == "" {
 				continue
 			}
-			err := pauseAdset(ctx, httpClient, token, o.adsetID)
-			outcomes[i].paused = err == nil
-			outcomes[i].pauseErr = err
+			gerund, past := actionVerbs(o.action)
+			err := setAdsetStatus(ctx, httpClient, token, o.adsetID, statusForAction(o.action))
+			outcomes[i].applied = err == nil
+			outcomes[i].applyErr = err
 			if err != nil {
-				log.Printf("[%s] adset %s: ERROR pausing: %v", o.campaignLabel, o.adsetID, err)
+				log.Printf("[%s] adset %s: ERROR %s: %v", o.campaignLabel, o.adsetID, gerund, err)
 			} else {
-				log.Printf("[%s] adset %s: paused", o.campaignLabel, o.adsetID)
+				log.Printf("[%s] adset %s: %s", o.campaignLabel, o.adsetID, past)
 			}
 		}
 	}
 
 	fmt.Printf("\n=== Summary ===\n")
 	for _, o := range outcomes {
+		cprStr := "NA"
+		if o.results > 0 {
+			cprStr = fmt.Sprintf("%.2f", o.cpr)
+		}
 		switch {
-		case !o.pause:
-			cprStr := "NA"
-			if o.results > 0 {
-				cprStr = fmt.Sprintf("%.2f", o.cpr)
-			}
-			fmt.Printf("OK    [%s] %-30s  results=%d cpr=%s spend=%.2f\n", o.campaignLabel, o.name, o.results, cprStr, o.spend)
-		case o.pause && !*apply:
-			fmt.Printf("DRY   [%s] %-30s  would pause: %s\n", o.campaignLabel, o.name, o.reason)
-		case o.pauseErr != nil:
-			fmt.Printf("FAIL  [%s] %-30s  pause error: %v\n", o.campaignLabel, o.name, o.pauseErr)
+		case o.action == "":
+			fmt.Printf("OK       [%s] %-30s  status=%-7s results=%d cpr=%s spend=%.2f\n", o.campaignLabel, o.name, o.currentStatus, o.results, cprStr, o.spend)
+		case !*apply:
+			fmt.Printf("DRY-%-8s [%s] %-30s  would %s: %s\n", strings.ToUpper(o.action), o.campaignLabel, o.name, o.action, o.reason)
+		case o.applyErr != nil:
+			fmt.Printf("FAIL-%-7s [%s] %-30s  %s error: %v\n", strings.ToUpper(o.action), o.campaignLabel, o.name, o.action, o.applyErr)
 		default:
-			fmt.Printf("PAUSE [%s] %-30s  %s\n", o.campaignLabel, o.name, o.reason)
+			fmt.Printf("%-13s [%s] %-30s  %s\n", strings.ToUpper(o.action), o.campaignLabel, o.name, o.reason)
 		}
 	}
 }
 
-// evaluate applies the CPR kill-switch thresholds. Bands are checked from the highest
-// results lower-bound down, so a matching band's threshold is the only one considered.
+// actionVerbs returns the present-participle and past-tense forms of an action, for logging.
+func actionVerbs(action string) (gerund, past string) {
+	if action == "activate" {
+		return "activating", "activated"
+	}
+	return "pausing", "paused"
+}
+
+// statusForAction returns the Graph API adset status to set for a given action.
+func statusForAction(action string) string {
+	if action == "activate" {
+		return "ACTIVE"
+	}
+	return "PAUSED"
+}
+
+// evaluate applies the CPR kill-switch thresholds, returning whether the adset's current
+// lifetime performance is bad enough to flag. The same result is also used in reverse: a
+// PAUSED adset that is NOT flagged (i.e. within thresholds) is treated as fit to reactivate.
+// Bands are checked from the highest results lower-bound down, so a matching band's
+// threshold is the only one considered.
 func evaluate(results int, spend, cpr float64) (pause bool, reason string) {
 	switch {
 	case results >= 20:
@@ -287,8 +320,9 @@ func parseStartDate(s string) (string, error) {
 	return t.Format(dateLayout), nil
 }
 
-// fetchActiveAdsets returns every adset in campaignID whose effective_status is ACTIVE.
-func fetchActiveAdsets(ctx context.Context, client *http.Client, token, campaignID string) ([]adsetInfo, error) {
+// fetchAdsets returns every adset in campaignID whose effective_status is ACTIVE or PAUSED
+// (ACTIVE ones are candidates to be paused, PAUSED ones are candidates to be reactivated).
+func fetchAdsets(ctx context.Context, client *http.Client, token, campaignID string) ([]adsetInfo, error) {
 	var out []adsetInfo
 	endpoint := fmt.Sprintf("%s/%s/adsets?fields=id,name,effective_status,start_time,promoted_object&limit=500", graphBase, campaignID)
 	for endpoint != "" {
@@ -312,7 +346,7 @@ func fetchActiveAdsets(ctx context.Context, client *http.Client, token, campaign
 			return nil, fmt.Errorf("parse adsets response: %w — body: %s", err, body)
 		}
 		for _, as := range r.Data {
-			if as.EffectiveStatus == "ACTIVE" {
+			if as.EffectiveStatus == "ACTIVE" || as.EffectiveStatus == "PAUSED" {
 				out = append(out, as)
 			}
 		}
@@ -348,10 +382,10 @@ func fetchInsights(ctx context.Context, client *http.Client, token, adsetID, sin
 	return r.Data[0], nil
 }
 
-// pauseAdset sets an adset's status to PAUSED.
-func pauseAdset(ctx context.Context, client *http.Client, token, adsetID string) error {
+// setAdsetStatus sets an adset's status (e.g. "PAUSED" or "ACTIVE").
+func setAdsetStatus(ctx context.Context, client *http.Client, token, adsetID, status string) error {
 	fields := url.Values{}
-	fields.Set("status", "PAUSED")
+	fields.Set("status", status)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		fmt.Sprintf("%s/%s", graphBase, adsetID), strings.NewReader(fields.Encode()))
