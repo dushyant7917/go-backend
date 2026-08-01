@@ -19,8 +19,8 @@ import (
 
 const (
 	targetAppName = "DailyStoryApp"
-	userAgeDays     = 7
-	batchSize       = 10
+	userAgeDays   = 20
+	batchSize     = 10
 
 	// Notification delivery window: now+1h – 9pm IST (3:30pm UTC)
 	windowEndHourUTC   = 15

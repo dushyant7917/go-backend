@@ -829,7 +829,7 @@ func createAdset(
 		geo = geoLoc{Regions: regions}
 	}
 	tgt := targetingSpec{
-		PublisherPlatforms: []string{"facebook", "instagram"},
+		PublisherPlatforms: []string{"facebook", "instagram", "messenger"},
 		DevicePlatforms:    []string{"mobile"},
 		UserOS:             []string{userOS},
 		UserDevice:         []string{"Android_Smartphone"},

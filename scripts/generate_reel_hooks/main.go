@@ -62,6 +62,14 @@ var variants = map[string]promptVariant{
 		thumbnail: `Create a catchy thumbnail of %s aspect ratio with the text "%s"`,
 		video:     `Animate the image attached and add a voice over in %s for the text "%s"`,
 	},
+	"arnab_goswami": {
+		thumbnail: `Create a catchy thumbnail of %s aspect ratio which has famous indian news reporter Arnab Goswami holding a mike in one hand and thumbnail text is "%s"`,
+		video:     `The reporter in image speaks in %s "%s"`,
+	},
+	"rajat_sharma": {
+		thumbnail: `Create a catchy thumbnail of %s aspect ratio which has famous indian news reporter Rajat Sharma holding a mike in one hand and thumbnail text is "%s"`,
+		video:     `The reporter in image speaks in %s "%s"`,
+	},
 }
 
 // ==================== Types ====================
@@ -289,7 +297,9 @@ func processVideo(
 // ==================== Main ====================
 
 func main() {
-	textsFile := flag.String("texts", "texts.json", "path to texts JSON file")
+	textsFile := flag.String("texts", "", "path to texts JSON file (defaults to scripts/generate_reel_hooks/<language>.json)")
+	language := flag.String("lang", "", "language name, e.g. hindi, tamil; used to derive -texts if not set")
+	slugsFlag := flag.String("slugs", "", "comma-separated list of slugs to process (default: all slugs in the texts file)")
 	outputDir := flag.String("output", "output", "root output directory for thumbnails")
 	videoBaseDir := flag.String("video-dir", "", "root directory for output videos; defaults to VIDEO_OUTPUT_PATH env var")
 	variantName := flag.String("variant", "", "prompt variant to use: reporter, poster, thumbnail (required)")
@@ -301,6 +311,13 @@ func main() {
 	imageRPM := flag.Int("image-rpm", 45, "max OpenAI image requests per minute")
 	videoRPM := flag.Int("video-rpm", 4, "max Veo video requests per minute")
 	flag.Parse()
+
+	if *textsFile == "" {
+		if *language == "" {
+			log.Fatal("either -texts or -lang is required")
+		}
+		*textsFile = filepath.Join("scripts", "generate_reel_hooks", strings.ToLower(*language)+".json")
+	}
 
 	variant, ok := variants[*variantName]
 	if !ok {
@@ -366,6 +383,20 @@ func main() {
 	var texts TextsMap
 	if err := json.Unmarshal(raw, &texts); err != nil {
 		log.Fatalf("parse texts file: %v", err)
+	}
+
+	if *slugsFlag != "" {
+		wanted := strings.Split(*slugsFlag, ",")
+		filtered := make(TextsMap, len(wanted))
+		for _, slug := range wanted {
+			slug = strings.TrimSpace(slug)
+			langMap, ok := texts[slug]
+			if !ok {
+				log.Fatalf("slug %q not found in %s", slug, *textsFile)
+			}
+			filtered[slug] = langMap
+		}
+		texts = filtered
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

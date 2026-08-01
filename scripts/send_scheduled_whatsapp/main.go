@@ -26,15 +26,6 @@ const (
 	fanOutWindow = 12 * time.Hour
 )
 
-// southIndianLangCodes is the set of language codes that map to the English template.
-var southIndianLangCodes = map[string]bool{
-	"en": true,
-	"te": true,
-	"ta": true,
-	"ml": true,
-	"kn": true,
-}
-
 type record struct {
 	phone    string
 	rowIndex int // 1-based index into allRows (skipping header)
@@ -63,7 +54,7 @@ func main() {
 
 	imageBaseURL := mustEnv("WHATSAPP_IMAGE_BASE_URL")
 
-	allRows, records, langCodes, err := loadCSV(csvPath)
+	allRows, records, err := loadCSV(csvPath)
 	if err != nil {
 		log.Fatalf("failed to read CSV: %v", err)
 	}
@@ -77,7 +68,6 @@ func main() {
 	if len(records) > maxTotal {
 		log.Printf("capping at %d (total pending: %d)", maxTotal, len(records))
 		records = records[:maxTotal]
-		langCodes = langCodes[:maxTotal]
 	}
 
 	inngestClient, err := inngestgo.NewClient(inngestgo.ClientOpts{
@@ -99,13 +89,13 @@ func main() {
 			Name: inngest.WhatsAppMessageEventName,
 			Data: inngest.WhatsAppMessageEventData{
 				Phone:       countryCode + rec.phone,
-				Template:    buildAreaTemplate(langCodes[i], imageBaseURL),
+				Template:    buildAppPromoTemplate(imageBaseURL),
 				ScheduledAt: scheduledAt,
 			},
 		}
 
-		log.Printf("scheduled +%s%s (lang=%s) at %s UTC",
-			countryCode, rec.phone, langCodes[i], scheduledAt.Format("15:04:05"))
+		log.Printf("scheduled +%s%s at %s UTC",
+			countryCode, rec.phone, scheduledAt.Format("15:04:05"))
 	}
 
 	ids, err := inngestClient.SendMany(context.Background(), events)
@@ -120,20 +110,12 @@ func main() {
 	log.Printf("CSV updated — marked %d rows as message_sent=true", len(records))
 }
 
-// buildAreaTemplate constructs the WhatsApp template based on the user's language code.
-// South Indian languages and English use the English template; all others use Hindi.
-// The image URL is derived as imageBaseURL/area_poster_announcement_<waLangCode>.png.
-func buildAreaTemplate(langCode, imageBaseURL string) notification.WhatsAppTemplate {
-	templateName := "area_update_hi"
-	waLangCode := "hi"
-	if southIndianLangCodes[langCode] {
-		templateName = "area_update_en"
-		waLangCode = "en"
-	}
-	imageURL := imageBaseURL + "/area_poster_announcement_" + waLangCode + ".png"
+// buildAppPromoTemplate constructs the WhatsApp app-promo template sent to every recipient.
+func buildAppPromoTemplate(imageBaseURL string) notification.WhatsAppTemplate {
+	imageURL := imageBaseURL + "/breaking_news_app_promo.png"
 	return notification.WhatsAppTemplate{
-		Name:     templateName,
-		Language: notification.TemplateLanguage{Code: waLangCode},
+		Name:     "app_promo_hi",
+		Language: notification.TemplateLanguage{Code: "hi"},
 		Components: []notification.TemplateComponent{
 			{
 				Type: "header",
@@ -145,22 +127,21 @@ func buildAreaTemplate(langCode, imageBaseURL string) notification.WhatsAppTempl
 	}
 }
 
-// loadCSV reads the CSV and returns all raw rows, the pending records (message_sent != "true"),
-// and the parallel slice of language codes for those records.
-func loadCSV(path string) (allRows [][]string, records []record, langCodes []string, err error) {
+// loadCSV reads the CSV and returns all raw rows and the pending records (message_sent != "true").
+func loadCSV(path string) (allRows [][]string, records []record, err error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	defer f.Close()
 
 	r := csv.NewReader(f)
 	allRows, err = r.ReadAll()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	if len(allRows) < 2 {
-		return allRows, nil, nil, nil
+		return allRows, nil, nil
 	}
 
 	header := allRows[0]
@@ -169,11 +150,10 @@ func loadCSV(path string) (allRows [][]string, records []record, langCodes []str
 		colIdx[strings.ToLower(strings.TrimSpace(h))] = i
 	}
 
-	phoneCol, okP := colIdx["user_phone"]
+	phoneCol, okP := colIdx["phone"]
 	sentCol, okS := colIdx["message_sent"]
-	langCol, okL := colIdx["language_code"]
-	if !okP || !okS || !okL {
-		return nil, nil, nil, fmt.Errorf("CSV must have 'user_phone', 'message_sent', 'language_code' columns (got: %v)", header)
+	if !okP || !okS {
+		return nil, nil, fmt.Errorf("CSV must have 'Phone', 'Message_Sent' columns (got: %v)", header)
 	}
 
 	for i, row := range allRows[1:] {
@@ -192,16 +172,10 @@ func loadCSV(path string) (allRows [][]string, records []record, langCodes []str
 			continue
 		}
 
-		lang := strings.TrimSpace(strings.ToLower(row[langCol]))
-		if lang == "" {
-			lang = "hi"
-		}
-
 		records = append(records, record{phone: phone, rowIndex: i + 1})
-		langCodes = append(langCodes, lang)
 	}
 
-	return allRows, records, langCodes, nil
+	return allRows, records, nil
 }
 
 // writeCSV overwrites path with all original rows, patching message_sent=true
