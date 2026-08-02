@@ -138,12 +138,18 @@ func main() {
 		log.Printf("[%s] %d active adset(s)", c.Label, len(adsets))
 
 		for _, as := range adsets {
-			since, sinceErr := parseStartDate(as.StartTime)
-			if sinceErr != nil {
-				log.Printf("[%s] adset %s (%s): ERROR parsing start_time %q: %v", c.Label, as.ID, as.Name, as.StartTime, sinceErr)
+			startTime, startErr := parseStartTime(as.StartTime)
+			if startErr != nil {
+				log.Printf("[%s] adset %s (%s): ERROR parsing start_time %q: %v", c.Label, as.ID, as.Name, as.StartTime, startErr)
 				continue
 			}
-			until := time.Now().Format(dateLayout)
+			now := time.Now()
+			if startTime.After(now) {
+				log.Printf("[%s] adset %s (%s): scheduled to start %s, skipping (not yet delivering)", c.Label, as.ID, as.Name, startTime.Format(time.RFC3339))
+				continue
+			}
+			since := startTime.Format(dateLayout)
+			until := now.Format(dateLayout)
 
 			row, insErr := fetchInsights(ctx, httpClient, token, as.ID, since, until)
 			if insErr != nil {
@@ -274,17 +280,16 @@ func sumAction(actions []actionValue, actionType string) int {
 	return int(math.Round(total))
 }
 
-// parseStartDate parses a Graph API start_time timestamp and returns just the date portion,
-// suitable for use as the "since" bound of an insights time_range.
-func parseStartDate(s string) (string, error) {
+// parseStartTime parses a Graph API start_time timestamp.
+func parseStartTime(s string) (time.Time, error) {
 	t, err := time.Parse(startTimeLayout, s)
 	if err != nil {
 		t, err = time.Parse(time.RFC3339, s)
 		if err != nil {
-			return "", err
+			return time.Time{}, err
 		}
 	}
-	return t.Format(dateLayout), nil
+	return t, nil
 }
 
 // fetchActiveAdsets returns every adset in campaignID whose effective_status is ACTIVE.
@@ -298,7 +303,7 @@ func fetchActiveAdsets(ctx context.Context, client *http.Client, token, campaign
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 
-		body, err := doRequest(client, req)
+		body, err := doRequest(ctx, client, req)
 		if err != nil {
 			return nil, err
 		}
@@ -332,7 +337,7 @@ func fetchInsights(ctx context.Context, client *http.Client, token, adsetID, sin
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	body, err := doRequest(client, req)
+	body, err := doRequest(ctx, client, req)
 	if err != nil {
 		return insightsRow{}, err
 	}
@@ -361,24 +366,70 @@ func pauseAdset(ctx context.Context, client *http.Client, token, adsetID string)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	_, err = doRequest(client, req)
+	_, err = doRequest(ctx, client, req)
 	return err
 }
 
-func doRequest(client *http.Client, req *http.Request) ([]byte, error) {
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
+// doRequest executes req, retrying with backoff when the Graph API responds with a
+// transient rate-limit error (codes 4/17/32/613 — app, account, page, or custom
+// throttling). req.Body must be re-derivable via req.GetBody (true for nil, GET, or
+// bodies created from a []byte/*bytes.Buffer/*strings.Reader, which covers every
+// caller in this file).
+func doRequest(ctx context.Context, client *http.Client, req *http.Request) ([]byte, error) {
+	const maxAttempts = 3
+	for attempt := 1; ; attempt++ {
+		if attempt > 1 && req.GetBody != nil {
+			b, err := req.GetBody()
+			if err != nil {
+				return nil, fmt.Errorf("rebuild request body for retry: %w", err)
+			}
+			req.Body = b
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			return body, nil
+		}
+		if !isRateLimitError(body) || attempt >= maxAttempts {
+			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, body)
+		}
+
+		wait := time.Duration(attempt) * 30 * time.Second
+		log.Printf("rate limited (attempt %d/%d): %s — waiting %s before retry", attempt, maxAttempts, body, wait)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
 	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
+}
+
+// isRateLimitError reports whether a Graph API error response body indicates a
+// transient app/account/page throttling condition worth retrying (as opposed to a
+// permanent error like bad params or auth failure).
+func isRateLimitError(body []byte) bool {
+	var r struct {
+		Error struct {
+			Code int `json:"code"`
+		} `json:"error"`
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, body)
+	if err := json.Unmarshal(body, &r); err != nil {
+		return false
 	}
-	return body, nil
+	switch r.Error.Code {
+	case 4, 17, 32, 613:
+		return true
+	default:
+		return false
+	}
 }
 
 func mustEnv(key string) string {
