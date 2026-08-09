@@ -15,10 +15,10 @@ import (
 	agoraChatService "go-backend/internal/apps/agora/chat/service"
 	chemistryHandler "go-backend/internal/apps/chemistry/handler"
 	crushHandler "go-backend/internal/apps/crush/handler"
-	dailystoryInngest "go-backend/internal/apps/dailystory/inngest"
 	crushRepository "go-backend/internal/apps/crush/repository"
 	crushService "go-backend/internal/apps/crush/service"
 	dailystoryHandler "go-backend/internal/apps/dailystory/handler"
+	dailystoryInngest "go-backend/internal/apps/dailystory/inngest"
 	dailystoryRepository "go-backend/internal/apps/dailystory/repository"
 	dailystoryService "go-backend/internal/apps/dailystory/service"
 	metaEventHandler "go-backend/internal/apps/meta_event/handler"
@@ -43,6 +43,9 @@ import (
 	razorpayHandler "go-backend/internal/apps/razorpay/subscription/handler"
 	razorpayRepository "go-backend/internal/apps/razorpay/subscription/repository"
 	razorpayService "go-backend/internal/apps/razorpay/subscription/service"
+	referralHandler "go-backend/internal/apps/referral/handler"
+	referralRepository "go-backend/internal/apps/referral/repository"
+	referralService "go-backend/internal/apps/referral/service"
 	streamChatHandler "go-backend/internal/apps/stream/chat/handler"
 	streamChatService "go-backend/internal/apps/stream/chat/service"
 	userHandler "go-backend/internal/apps/user/handler"
@@ -145,6 +148,11 @@ func main() {
 
 	recurringPaymentSvc := recurringPaymentService.NewRecurringPaymentService(recurringPaymentRepo, configRepo, userRepo, metaDatasetRepo, posthogConfigRepo, metaEventSvc)
 	recurringPaymentH := recurringPaymentHandler.NewRecurringPaymentHandler(recurringPaymentSvc)
+
+	// Initialize Referral dependencies
+	referralRepo := referralRepository.NewReferralRepository(db)
+	referralSvc := referralService.NewReferralService(referralRepo)
+	referralH := referralHandler.NewReferralHandler(referralSvc)
 
 	// Initialize PostHog Config dependencies
 	posthogConfigSvc := posthogConfigService.NewPostHogConfigService(posthogConfigRepo)
@@ -303,6 +311,9 @@ func main() {
 
 		// Register Recurring Payment routes
 		recurringPaymentHandler.RegisterRecurringPaymentRoutes(v1, recurringPaymentH)
+
+		// Register Referral routes
+		referralHandler.RegisterReferralRoutes(v1, referralH)
 
 		// Register User management routes
 		userHandler.RegisterUserRoutes(v1, userH)
