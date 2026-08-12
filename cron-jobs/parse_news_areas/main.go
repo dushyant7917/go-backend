@@ -1015,15 +1015,17 @@ Then generate an English image generation prompt for this news article.
 %s
 
 Image prompt guidelines:
-- Write a cinematic, photorealistic scene in English for Flux Klein 4B; Klein renders exactly what you write so be specific and descriptive
-- Style: cinematic photorealism, like a still frame from a high-budget film — realistic textures, natural anatomy, filmic depth of field, subtle grain
+- Write a photorealistic editorial/documentary-style scene in English for Flux Klein 4B; Klein renders exactly what you write so be specific and descriptive
+- Style: photojournalistic realism — like an unposed news wire photo, not a movie still; natural textures, natural anatomy, realistic (not glossy/airbrushed) skin, subtle film grain
 - Include geographic context: %s, India; add culturally relevant visual elements with authentic, grounded detail
-- Lighting: use cinematic lighting — golden hour or blue hour tones, volumetric light, dramatic shadows, lens flare, rim lighting on subjects
-- Composition: describe the layout clearly — wide establishing shot, medium two-shot, or close-up — with strong foreground/background depth separation and a clear focal point
-- Characters: realistic human figures with natural proportions, expressive but believable faces and body language; avoid cartoonish or illustrated rendering
-- Colors: cinematic color grading — rich contrast, filmic tones, warm/cool color separation to add depth
+- Lighting: natural, unremarkable light appropriate to the scene — overcast daylight, harsh midday sun, indoor fluorescent, or streetlight — avoid dramatic/cinematic lighting, lens flare, or artificial rim lighting
+- Composition: describe the layout clearly — wide establishing shot, medium shot, or close-up — with natural, slightly imperfect or off-center framing rather than a perfectly centered/staged look; clear focal point
+- Characters: realistic human figures with natural proportions and imperfections, candid/unposed expressions and body language; avoid cartoonish, illustrated, or overly symmetric/idealized rendering
+- Colors: natural, true-to-life color rendering — avoid heavy stylized color grading
+- Camera realism: describe as if shot on a DSLR or phone, e.g. 35–50mm lens, natural depth of field, slight grain — avoid artificial bokeh or flare
 - If text must appear in the scene, describe it explicitly: specify the exact words in quotes (in English), placement, font style, and surface it appears on (e.g. a sign reading "VOTE 2024", bold rounded sans-serif, center frame)
 - Purely visual scene; no typographic content anywhere in the frame unless text is explicitly requested above
+- Keep subjects generic/composite (a type of person, not a specific named real individual) unless illustrating a clearly non-identifiable general scene
 
 Respond ONLY with a JSON object in this exact format:
 {
