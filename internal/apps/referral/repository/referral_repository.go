@@ -27,14 +27,14 @@ type referralBonusResult struct {
 // GetPendingReferralBonus finds, for each distinct user referred by referralCode, one qualifying
 // paid billing cycle created in the current calendar month: either cycle_number = 1, or
 // cycle_number = 0 (authorization) with an amount of at least 9900. Each qualifying user
-// contributes a flat bonus of 100 if that cycle's amount is exactly 69900, else 20.
+// contributes a flat bonus of 100 if that cycle's amount is at least 69900, else 20.
 // Each user counts at most once even if duplicate qualifying billing cycles exist.
 func (r *referralRepository) GetPendingReferralBonus(appName, referralCode string) (int64, int, error) {
 	var result referralBonusResult
 
 	err := r.db.Raw(`
 		SELECT COUNT(*) AS referral_count,
-		       COALESCE(SUM(CASE WHEN amount = 69900 THEN 100 ELSE 20 END), 0) AS total_amount
+		       COALESCE(SUM(CASE WHEN amount >= 69900 THEN 100 ELSE 20 END), 0) AS total_amount
 		FROM (
 			SELECT DISTINCT ON (u.id) u.id AS user_id, bc.amount
 			FROM billing_cycles bc
