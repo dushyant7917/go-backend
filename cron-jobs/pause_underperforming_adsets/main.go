@@ -25,26 +25,16 @@ const (
 	dateLayout      = "2006-01-02"
 )
 
-// langCampaignIDs mirrors the same env vars scripts/create_meta_ad uses to create these
-// campaigns in the first place, so this script can default to checking all of them.
-func langCampaignIDs() []struct{ Lang, ID string } {
-	order := []string{"Hindi", "Tamil", "Marathi", "Gujarati", "Bengali", "Telugu", "Kannada"}
-	envKey := map[string]string{
-		"Hindi":    "META_CAMPAIGN_ID_HINDI",
-		"Tamil":    "META_CAMPAIGN_ID_TAMIL",
-		"Marathi":  "META_CAMPAIGN_ID_MARATHI",
-		"Gujarati": "META_CAMPAIGN_ID_GUJARATI",
-		"Bengali":  "META_CAMPAIGN_ID_BENGALI",
-		"Telugu":   "META_CAMPAIGN_ID_TELUGU",
-		"Kannada":  "META_CAMPAIGN_ID_KANNADA",
-	}
-	var out []struct{ Lang, ID string }
-	for _, lang := range order {
-		if id := os.Getenv(envKey[lang]); id != "" {
-			out = append(out, struct{ Lang, ID string }{lang, id})
+// campaignIDsFromEnv parses the comma-separated META_CAMPAIGN_IDS env var.
+func campaignIDsFromEnv() []string {
+	raw := os.Getenv("META_CAMPAIGN_IDS")
+	var ids []string
+	for _, id := range strings.Split(raw, ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			ids = append(ids, id)
 		}
 	}
-	return out
+	return ids
 }
 
 type promotedObject struct {
@@ -78,7 +68,7 @@ func main() {
 	_ = godotenv.Load(".env." + goEnv)
 	_ = godotenv.Load()
 
-	campaignID := flag.String("campaign-id", "", "check only this campaign ID (default: loop over all configured META_CAMPAIGN_ID_<LANG> env vars)")
+	campaignIDs := flag.String("campaign-ids", "", "comma-separated campaign IDs to check (default: META_CAMPAIGN_IDS env var)")
 	adAccountID := flag.String("ad-account-id", os.Getenv("META_AD_ACCOUNT_ID"), "ad account ID without act_ prefix (required)")
 	resultActionType := flag.String("result-action-type", "", `Meta insights action_type to count as 'Results' (e.g. "start_trial_total" for a START_TRIAL-optimized adset — confirmed via -metric-field=conversions discovery mode). Omit to run in discovery mode, which prints the candidate conversions sums per adset instead of making pause decisions.`)
 	metricField := flag.String("metric-field", "conversions", `insights field to sum -result-action-type from: "conversions" (Meta's curated per-objective conversion count — confirmed to match Ads Manager's "Results" column) or "actions" (raw event count, does not match "Results")`)
@@ -99,53 +89,54 @@ func main() {
 	httpClient := &http.Client{Timeout: 2 * time.Minute}
 	ctx := context.Background()
 
-	type campaign struct{ Label, ID string }
-	var campaigns []campaign
-	if *campaignID != "" {
-		campaigns = append(campaigns, campaign{Label: *campaignID, ID: *campaignID})
+	var campaigns []string
+	if *campaignIDs != "" {
+		for _, id := range strings.Split(*campaignIDs, ",") {
+			if id = strings.TrimSpace(id); id != "" {
+				campaigns = append(campaigns, id)
+			}
+		}
 	} else {
-		for _, lc := range langCampaignIDs() {
-			campaigns = append(campaigns, campaign{Label: lc.Lang, ID: lc.ID})
-		}
-		if len(campaigns) == 0 {
-			log.Fatalf("no -campaign-id given and no META_CAMPAIGN_ID_<LANG> env vars are set")
-		}
+		campaigns = campaignIDsFromEnv()
+	}
+	if len(campaigns) == 0 {
+		log.Fatalf("no -campaign-ids given and META_CAMPAIGN_IDS env var is not set")
 	}
 
 	type outcome struct {
-		campaignLabel string
-		adsetID       string
-		name          string
-		spend         float64
-		results       int
-		cpr           float64
-		pause         bool
-		reason        string
-		paused        bool
-		pauseErr      error
+		campaignID string
+		adsetID    string
+		name       string
+		spend      float64
+		results    int
+		cpr        float64
+		pause      bool
+		reason     string
+		paused     bool
+		pauseErr   error
 	}
 	var outcomes []outcome
 
 	discovery := *resultActionType == ""
 
-	for _, c := range campaigns {
-		log.Printf("=== campaign %s (%s) ===", c.Label, c.ID)
-		adsets, err := fetchActiveAdsets(ctx, httpClient, token, c.ID)
+	for _, campaignID := range campaigns {
+		log.Printf("=== campaign %s ===", campaignID)
+		adsets, err := fetchActiveAdsets(ctx, httpClient, token, campaignID)
 		if err != nil {
-			log.Printf("[%s] ERROR fetching adsets: %v", c.Label, err)
+			log.Printf("[%s] ERROR fetching adsets: %v", campaignID, err)
 			continue
 		}
-		log.Printf("[%s] %d active adset(s)", c.Label, len(adsets))
+		log.Printf("[%s] %d active adset(s)", campaignID, len(adsets))
 
 		for _, as := range adsets {
 			startTime, startErr := parseStartTime(as.StartTime)
 			if startErr != nil {
-				log.Printf("[%s] adset %s (%s): ERROR parsing start_time %q: %v", c.Label, as.ID, as.Name, as.StartTime, startErr)
+				log.Printf("[%s] adset %s (%s): ERROR parsing start_time %q: %v", campaignID, as.ID, as.Name, as.StartTime, startErr)
 				continue
 			}
 			now := time.Now()
 			if startTime.After(now) {
-				log.Printf("[%s] adset %s (%s): scheduled to start %s, skipping (not yet delivering)", c.Label, as.ID, as.Name, startTime.Format(time.RFC3339))
+				log.Printf("[%s] adset %s (%s): scheduled to start %s, skipping (not yet delivering)", campaignID, as.ID, as.Name, startTime.Format(time.RFC3339))
 				continue
 			}
 			since := startTime.Format(dateLayout)
@@ -153,7 +144,7 @@ func main() {
 
 			row, insErr := fetchInsights(ctx, httpClient, token, as.ID, since, until)
 			if insErr != nil {
-				log.Printf("[%s] adset %s (%s): ERROR fetching insights: %v", c.Label, as.ID, as.Name, insErr)
+				log.Printf("[%s] adset %s (%s): ERROR fetching insights: %v", campaignID, as.ID, as.Name, insErr)
 				continue
 			}
 			spend, _ := strconv.ParseFloat(row.Spend, 64)
@@ -163,7 +154,7 @@ func main() {
 			if discovery {
 				totalType := event + "_total"
 				results := sumAction(row.Conversions, totalType)
-				log.Printf("[%s] %s: spend=%.2f results=%d", c.Label, as.Name, spend, results)
+				log.Printf("[%s] %s: spend=%.2f results=%d", campaignID, as.Name, spend, results)
 				continue
 			}
 
@@ -177,17 +168,17 @@ func main() {
 				cpr = spend / float64(results)
 			}
 			pause, reason := evaluate(results, spend, cpr)
-			log.Printf("[%s] %s: spend=%.2f results=%d", c.Label, as.Name, spend, results)
+			log.Printf("[%s] %s: spend=%.2f results=%d", campaignID, as.Name, spend, results)
 
 			outcomes = append(outcomes, outcome{
-				campaignLabel: c.Label,
-				adsetID:       as.ID,
-				name:          as.Name,
-				spend:         spend,
-				results:       results,
-				cpr:           cpr,
-				pause:         pause,
-				reason:        reason,
+				campaignID: campaignID,
+				adsetID:    as.ID,
+				name:       as.Name,
+				spend:      spend,
+				results:    results,
+				cpr:        cpr,
+				pause:      pause,
+				reason:     reason,
 			})
 		}
 	}
@@ -206,9 +197,9 @@ func main() {
 			outcomes[i].paused = err == nil
 			outcomes[i].pauseErr = err
 			if err != nil {
-				log.Printf("[%s] adset %s: ERROR pausing: %v", o.campaignLabel, o.adsetID, err)
+				log.Printf("[%s] adset %s: ERROR pausing: %v", o.campaignID, o.adsetID, err)
 			} else {
-				log.Printf("[%s] adset %s: paused", o.campaignLabel, o.adsetID)
+				log.Printf("[%s] adset %s: paused", o.campaignID, o.adsetID)
 			}
 		}
 	}
@@ -221,13 +212,13 @@ func main() {
 			if o.results > 0 {
 				cprStr = fmt.Sprintf("%.2f", o.cpr)
 			}
-			fmt.Printf("OK    [%s] %-30s  results=%d cpr=%s spend=%.2f\n", o.campaignLabel, o.name, o.results, cprStr, o.spend)
+			fmt.Printf("OK    [%s] %-30s  results=%d cpr=%s spend=%.2f\n", o.campaignID, o.name, o.results, cprStr, o.spend)
 		case o.pause && !*apply:
-			fmt.Printf("DRY   [%s] %-30s  would pause: %s\n", o.campaignLabel, o.name, o.reason)
+			fmt.Printf("DRY   [%s] %-30s  would pause: %s\n", o.campaignID, o.name, o.reason)
 		case o.pauseErr != nil:
-			fmt.Printf("FAIL  [%s] %-30s  pause error: %v\n", o.campaignLabel, o.name, o.pauseErr)
+			fmt.Printf("FAIL  [%s] %-30s  pause error: %v\n", o.campaignID, o.name, o.pauseErr)
 		default:
-			fmt.Printf("PAUSE [%s] %-30s  %s\n", o.campaignLabel, o.name, o.reason)
+			fmt.Printf("PAUSE [%s] %-30s  %s\n", o.campaignID, o.name, o.reason)
 		}
 	}
 }
@@ -237,16 +228,16 @@ func main() {
 func evaluate(results int, spend, cpr float64) (pause bool, reason string) {
 	switch {
 	case results >= 20:
-		if cpr > 100 {
-			return true, fmt.Sprintf("results=%d (>=20) cpr=%.2f > 100", results, cpr)
+		if cpr > 110 {
+			return true, fmt.Sprintf("results=%d (>=20) cpr=%.2f > 110", results, cpr)
 		}
 	case results >= 10:
-		if cpr > 110 {
-			return true, fmt.Sprintf("results=%d (10-19) cpr=%.2f > 110", results, cpr)
+		if cpr > 120 {
+			return true, fmt.Sprintf("results=%d (10-19) cpr=%.2f > 120", results, cpr)
 		}
 	case results >= 5:
-		if cpr > 120 {
-			return true, fmt.Sprintf("results=%d (5-9) cpr=%.2f > 120", results, cpr)
+		if cpr > 130 {
+			return true, fmt.Sprintf("results=%d (5-9) cpr=%.2f > 130", results, cpr)
 		}
 	case results >= 2:
 		if cpr > 150 {
