@@ -1,10 +1,7 @@
 name: Pause Underperforming Ads
 
 on:
-  schedule:
-    # Runs every hour
-    - cron: "0 * * * *"
-  workflow_dispatch: # Allows manual triggering
+  workflow_dispatch: # Schedule disabled; manual trigger only (superseded by pause-underperforming-adsets.yml)
 
 jobs:
   pause-underperforming-ads:

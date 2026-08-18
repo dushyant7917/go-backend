@@ -1,7 +1,10 @@
 name: Pause Underperforming Adsets
 
 on:
-  workflow_dispatch: # Schedule disabled; manual trigger only (superseded by pause-underperforming-ads.yml)
+  schedule:
+    # Runs every hour
+    - cron: "0 * * * *"
+  workflow_dispatch: # Allows manual triggering
 
 jobs:
   pause-underperforming-adsets:
@@ -31,13 +34,7 @@ jobs:
         env:
           META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
           META_AD_ACCOUNT_ID: ${{ secrets.META_AD_ACCOUNT_ID }}
-          META_CAMPAIGN_ID_HINDI: ${{ secrets.META_CAMPAIGN_ID_HINDI }}
-          META_CAMPAIGN_ID_TAMIL: ${{ secrets.META_CAMPAIGN_ID_TAMIL }}
-          META_CAMPAIGN_ID_MARATHI: ${{ secrets.META_CAMPAIGN_ID_MARATHI }}
-          META_CAMPAIGN_ID_GUJARATI: ${{ secrets.META_CAMPAIGN_ID_GUJARATI }}
-          META_CAMPAIGN_ID_BENGALI: ${{ secrets.META_CAMPAIGN_ID_BENGALI }}
-          META_CAMPAIGN_ID_TELUGU: ${{ secrets.META_CAMPAIGN_ID_TELUGU }}
-          META_CAMPAIGN_ID_KANNADA: ${{ secrets.META_CAMPAIGN_ID_KANNADA }}
+          META_CAMPAIGN_IDS: ${{ secrets.META_CAMPAIGN_IDS }}
         run: |
           cd cron-jobs/pause_underperforming_adsets
           go run main.go -result-action-type=start_trial_total -apply
