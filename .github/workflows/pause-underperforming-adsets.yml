@@ -1,7 +1,9 @@
 name: Pause Underperforming Adsets
 
 on:
-  # Schedule disabled; manual dispatch only
+  schedule:
+    # Runs every 2 hours
+    - cron: "0 */2 * * *"
   workflow_dispatch: # Allows manual triggering
 
 jobs:

@@ -235,21 +235,21 @@ func evaluate(results int, spend, cpr float64) (pause bool, reason string) {
 		if cpr > 120 {
 			return true, fmt.Sprintf("results=%d (10-19) cpr=%.2f > 120", results, cpr)
 		}
-	case results >= 5:
-		if cpr > 130 {
-			return true, fmt.Sprintf("results=%d (5-9) cpr=%.2f > 130", results, cpr)
+	case 6 <= results && results <= 9:
+		if cpr > 200 {
+			return true, fmt.Sprintf("results=%d (6-9) cpr=%.2f > 200", results, cpr)
 		}
-	case results >= 2:
-		if cpr > 150 {
-			return true, fmt.Sprintf("results=%d (2-4) cpr=%.2f > 150", results, cpr)
+	case 3 <= results && results <= 5:
+		if cpr > 225 {
+			return true, fmt.Sprintf("results=%d (3-5) cpr=%.2f > 225", results, cpr)
 		}
-	case results == 1:
-		if cpr > 170 {
-			return true, fmt.Sprintf("results=1 cpr=%.2f > 170", cpr)
+	case 1 <= results && results <= 2:
+		if cpr > 250 {
+			return true, fmt.Sprintf("results=%d (1-2) cpr=%.2f > 250", results, cpr)
 		}
 	case results == 0:
-		if spend > 125 {
-			return true, fmt.Sprintf("results=0 spend=%.2f > 125", spend)
+		if spend > 150 {
+			return true, fmt.Sprintf("results=0 spend=%.2f > 150", spend)
 		}
 	}
 	return false, ""
