@@ -4,7 +4,7 @@ Single source of truth for all scheduled GitHub Actions cron jobs.
 Workflows live in [.github/workflows/](.github/workflows/). All can also be run manually via `workflow_dispatch`.
 
 > Times shown in **IST** (UTC+5:30). GitHub Actions cron is in **UTC**.
-> Last updated: 2026-08-18 (replaced Pause Underperforming Ads with Pause Underperforming Adsets)
+> Last updated: 2026-08-20 (disabled Pause Underperforming Adsets schedule)
 
 ## Daily Timeline (IST)
 
@@ -27,9 +27,6 @@ Workflows live in [.github/workflows/](.github/workflows/). All can also be run 
 | 11:00 PM | Cleanup Old News | Daily | [cleanup-old-news.yml](.github/workflows/cleanup-old-news.yml) |
 
 ## Active Jobs (by workflow)
-
-### Pause Underperforming Adsets — Every hour
-Cron expression (UTC): `0 * * * *`
 
 ### Charge Pending Payments — Daily
 Cron expressions (UTC):
@@ -76,6 +73,7 @@ Cron expressions (UTC):
 | Update Subscription Amount | [update-subscription-amount.yml](.github/workflows/update-subscription-amount.yml) |
 | Send Complete Signup WhatsApp | [send-complete-signup-whatsapp.yml](.github/workflows/send-complete-signup-whatsapp.yml) |
 | Pause Underperforming Ads (superseded by Pause Underperforming Adsets) | [pause-underperforming-ads.yml](.github/workflows/pause-underperforming-ads.yml) |
+| Pause Underperforming Adsets | [pause-underperforming-adsets.yml](.github/workflows/pause-underperforming-adsets.yml) |
 
 ---
 **Maintenance note:** When you change a cron in any `.github/workflows/*.yml`, update this file in the same commit.
