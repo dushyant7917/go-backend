@@ -1,10 +1,13 @@
 name: Retry Failed Billing Cycles
 
 on:
-  schedule:
-    # Runs at 12:30 AM IST (7:00 PM UTC) every day
-    - cron: "0 19 * * *"
-  workflow_dispatch: # Allows manual triggering
+  # Triggered externally on schedule via cron-job.org — GitHub's native `schedule:`
+  # trigger was delayed by 1-10h and has been removed. See CRON_SCHEDULE.md.
+  # Previous cron: "0 19 * * *" (12:30 AM IST daily)
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
 
 jobs:
   retry-failed-billing-cycles:

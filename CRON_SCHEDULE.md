@@ -3,8 +3,16 @@
 Single source of truth for all scheduled GitHub Actions cron jobs.
 Workflows live in [.github/workflows/](.github/workflows/). All can also be run manually via `workflow_dispatch`.
 
+> **Schedules below are driven externally by cron-job.org**, which calls each workflow's
+> `workflow_dispatch` REST API endpoint at the times listed. GitHub's native `schedule:`
+> trigger was removed from these workflows because its scheduled-event queue was
+> deprioritizing runs under platform load, causing 1–10 hour delays vs. the configured
+> times — `workflow_dispatch` calls aren't subject to that same queue. The GitHub PAT
+> used by cron-job.org to call the dispatch API lives only in cron-job.org — never commit
+> it anywhere in this repo.
+
 > Times shown in **IST** (UTC+5:30). GitHub Actions cron is in **UTC**.
-> Last updated: 2026-08-20 (re-enabled Pause Underperforming Adsets, now every 2 hours)
+> Last updated: 2026-08-29 (Charge Pending Payments moved from 1:40 AM/2:00 AM to 2:15 AM/2:30 AM IST)
 
 ## Daily Timeline (IST)
 
@@ -13,8 +21,8 @@ Workflows live in [.github/workflows/](.github/workflows/). All can also be run 
 | 11:30 PM (prev day) | Reconcile Payments | Daily | [reconcile-payments.yml](.github/workflows/reconcile-payments.yml) |
 | 12:00 AM | Process New Billing Cycles | Daily | [process-new-billing-cycles.yml](.github/workflows/process-new-billing-cycles.yml) |
 | 12:30 AM | Retry Failed Billing Cycles | Daily | [retry-failed-billing-cycles.yml](.github/workflows/retry-failed-billing-cycles.yml) |
-| 1:40 AM | Charge Pending Payments | Daily | [charge-pending-payments.yml](.github/workflows/charge-pending-payments.yml) |
-| 2:00 AM | Charge Pending Payments | Daily | [charge-pending-payments.yml](.github/workflows/charge-pending-payments.yml) |
+| 2:15 AM | Charge Pending Payments | Daily | [charge-pending-payments.yml](.github/workflows/charge-pending-payments.yml) |
+| 2:30 AM | Charge Pending Payments | Daily | [charge-pending-payments.yml](.github/workflows/charge-pending-payments.yml) |
 | 6:00 AM | Parse News → Generate News Media | Daily | [parse-news.yml](.github/workflows/parse-news.yml) |
 | 7:00 AM | Send DailyStory Push Notification | Daily | [send-dailystory-push-notification.yml](.github/workflows/send-dailystory-push-notification.yml) |
 | 8:00 AM | Cleanup Orphan News Media | Weekly (Sun) | [cleanup-orphan-news-media.yml](.github/workflows/cleanup-orphan-news-media.yml) |
@@ -33,8 +41,8 @@ Cron expression (UTC): `0 */2 * * *`
 
 ### Charge Pending Payments — Daily
 Cron expressions (UTC):
-- `10 20 * * *` → 1:40 AM IST
-- `30 20 * * *` → 2:00 AM IST
+- `45 20 * * *` → 2:15 AM IST
+- `0 21 * * *` → 2:30 AM IST
 
 ### Parse News — Daily
 Runs `parse-news-topics` job, then chains into `parse-news-areas`, then `generate-news-media` on success.
@@ -78,4 +86,4 @@ Cron expressions (UTC):
 | Pause Underperforming Ads (superseded by Pause Underperforming Adsets) | [pause-underperforming-ads.yml](.github/workflows/pause-underperforming-ads.yml) |
 
 ---
-**Maintenance note:** When you change a cron in any `.github/workflows/*.yml`, update this file in the same commit.
+**Maintenance note:** When you change a cron time here, update the corresponding cron-job.org job's schedule to match (the `.github/workflows/*.yml` files no longer carry a `schedule:` trigger — see the note at the top of this file). If you add a new scheduled workflow or change an existing schedule, update this file, the workflow's comment noting its "previous cron", and the cron-job.org job, all in the same change.

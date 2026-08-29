@@ -1,10 +1,13 @@
 name: Cleanup Triggered Meta Events
 
 on:
-  schedule:
-    # Runs at 8:00 AM IST (2:30 AM UTC) every Wednesday
-    - cron: "30 2 * * 3"
-  workflow_dispatch: # Allows manual triggering
+  # Triggered externally on schedule via cron-job.org — GitHub's native `schedule:`
+  # trigger was delayed by 1-10h and has been removed. See CRON_SCHEDULE.md.
+  # Previous cron: "30 2 * * 3" (8:00 AM IST every Wednesday)
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
 
 jobs:
   cleanup-triggered-meta-events:

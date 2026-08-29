@@ -1,10 +1,13 @@
 name: Pause Underperforming Adsets
 
 on:
-  schedule:
-    # Runs every 2 hours
-    - cron: "0 */2 * * *"
-  workflow_dispatch: # Allows manual triggering
+  # Triggered externally on schedule via cron-job.org — GitHub's native `schedule:`
+  # trigger was delayed by 1-10h and has been removed. See CRON_SCHEDULE.md.
+  # Previous cron: "0 */2 * * *" (every 2 hours)
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
 
 jobs:
   pause-underperforming-adsets:

@@ -1,10 +1,13 @@
 name: Cleanup Old News
 
 on:
-  schedule:
-    # Runs at 11:00 PM IST (5:30 PM UTC) every day
-    - cron: "30 17 * * *"
-  workflow_dispatch: # Allows manual triggering
+  # Triggered externally on schedule via cron-job.org — GitHub's native `schedule:`
+  # trigger was delayed by 1-10h and has been removed. See CRON_SCHEDULE.md.
+  # Previous cron: "30 17 * * *" (11:00 PM IST daily)
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
 
 jobs:
   cleanup-old:

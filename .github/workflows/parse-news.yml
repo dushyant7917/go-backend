@@ -1,11 +1,14 @@
 name: Parse News
 
 on:
-  schedule:
-    - cron: "30 0 * * *" # 6:00 AM IST
-    - cron: "30 3 * * *" # 9:00 AM IST
-    - cron: "0 9 * * *" # 2:30 PM IST
+  # Triggered externally on schedule via cron-job.org — GitHub's native `schedule:`
+  # trigger was delayed by 1-10h and has been removed. See CRON_SCHEDULE.md.
+  # Previous cron(s): "30 0 * * *" (6:00 AM IST), "30 3 * * *" (9:00 AM IST),
+  # "0 9 * * *" (2:30 PM IST). Each fires this same workflow (all 3 jobs run each time).
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
 
 jobs:
   parse-news-topics:
