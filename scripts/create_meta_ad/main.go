@@ -56,7 +56,7 @@ func main() {
 	langStates := map[string][]string{
 		"Hindi": {
 			"Himachal Pradesh", "Uttarakhand", "Haryana", "Delhi", "Uttar Pradesh",
-			"Bihar", "Jharkhand", "Rajasthan", "Madhya Pradesh", "Chhattisgarh",
+			"Bihar", "Jharkhand", "Rajasthan", "Madhya Pradesh", "Chhattisgarh", "Maharashtra", "Gujarat", "West Bengal",
 		},
 		"Tamil":    {"Tamil Nadu"},
 		"Marathi":  {"Maharashtra"},
@@ -217,8 +217,8 @@ func main() {
 		} else {
 			selectedSlugs = selectSlugs(lang, orderedSlugs, activeCount, existingAdsets, videosPath, *videoGrouping)
 			if len(selectedSlugs) == 0 {
-				if activeCount >= 3 {
-					log.Printf("[%s] campaign has %d active adset(s) (>=3), no action needed", lang, activeCount)
+				if activeCount >= 10 {
+					log.Printf("[%s] campaign has %d active adset(s) (>=10), no action needed", lang, activeCount)
 				} else {
 					log.Printf("[%s] no not-yet-started slugs available to fill quota (active=%d)", lang, activeCount)
 				}
@@ -689,18 +689,14 @@ func slugNotStarted(slug string, existingAdsets map[string]string, videosPath, v
 }
 
 // selectSlugs walks orderedSlugs (in file order) and returns up to a quota-limited
-// number of not-yet-started slugs, based on how many adsets are currently active in
-// the campaign: 0 active -> up to 2 slugs, 1-2 active -> up to 1 slug, >=3 -> none.
-// Slugs with no matching video files are logged and skipped over so the quota can
-// still be filled from later slugs.
+// number of not-yet-started slugs, sized to bring the campaign's active adset count
+// up to a target of 10 (e.g. 0 active -> up to 10 slugs, 3 active -> up to 7 slugs,
+// >=10 -> none). Slugs with no matching video files are logged and skipped over so
+// the quota can still be filled from later slugs.
 func selectSlugs(lang string, orderedSlugs []string, activeCount int, existingAdsets map[string]string, videosPath, videoGrouping string) []string {
-	var quota int
-	switch {
-	case activeCount == 0:
-		quota = 2
-	case activeCount < 3:
-		quota = 1
-	default:
+	const targetActive = 10
+	quota := targetActive - activeCount
+	if quota < 0 {
 		quota = 0
 	}
 	if quota == 0 {
@@ -813,12 +809,18 @@ func createAdset(
 		Countries []string     `json:"countries,omitempty"`
 		Regions   []regionSpec `json:"regions,omitempty"`
 	}
+	type targetingAutomation struct {
+		AdvantageAudience int `json:"advantage_audience"`
+	}
 	type targetingSpec struct {
-		PublisherPlatforms []string `json:"publisher_platforms"`
-		DevicePlatforms    []string `json:"device_platforms"`
-		UserOS             []string `json:"user_os"`
-		UserDevice         []string `json:"user_device"`
-		GeoLocations       geoLoc   `json:"geo_locations"`
+		PublisherPlatforms  []string            `json:"publisher_platforms"`
+		DevicePlatforms     []string            `json:"device_platforms"`
+		UserOS              []string            `json:"user_os"`
+		UserDevice          []string            `json:"user_device"`
+		GeoLocations        geoLoc              `json:"geo_locations"`
+		Genders             []int               `json:"genders"`
+		AgeMin              int                 `json:"age_min"`
+		TargetingAutomation targetingAutomation `json:"targeting_automation"`
 	}
 	geo := geoLoc{Countries: countryList}
 	if len(regionKeys) > 0 {
@@ -834,6 +836,11 @@ func createAdset(
 		UserOS:             []string{userOS},
 		UserDevice:         []string{"Android_Smartphone"},
 		GeoLocations:       geo,
+		Genders:            []int{1},
+		AgeMin:             25,
+		TargetingAutomation: targetingAutomation{
+			AdvantageAudience: 0,
+		},
 	}
 	tgtJSON, err := json.Marshal(tgt)
 	if err != nil {
