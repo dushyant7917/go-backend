@@ -48,3 +48,10 @@ tmp/
 temp/
 output/
 scripts/generate_reel_hooks/texts.json
+scripts/generate_reel_hooks/bengali.json
+scripts/generate_reel_hooks/gujarati.json
+scripts/generate_reel_hooks/hindi.json
+scripts/generate_reel_hooks/kannada.json
+scripts/generate_reel_hooks/marathi.json
+scripts/generate_reel_hooks/tamil.json
+scripts/generate_reel_hooks/telugu.json
