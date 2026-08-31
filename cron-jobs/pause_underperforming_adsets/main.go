@@ -228,12 +228,12 @@ func main() {
 func evaluate(results int, spend, cpr float64) (pause bool, reason string) {
 	switch {
 	case results >= 20:
-		if cpr > 110 {
-			return true, fmt.Sprintf("results=%d (>=20) cpr=%.2f > 110", results, cpr)
+		if cpr > 120 {
+			return true, fmt.Sprintf("results=%d (>=20) cpr=%.2f > 120", results, cpr)
 		}
 	case results >= 10:
-		if cpr > 120 {
-			return true, fmt.Sprintf("results=%d (10-19) cpr=%.2f > 120", results, cpr)
+		if cpr > 130 {
+			return true, fmt.Sprintf("results=%d (10-19) cpr=%.2f > 130", results, cpr)
 		}
 	case 6 <= results && results <= 9:
 		if cpr > 200 {
