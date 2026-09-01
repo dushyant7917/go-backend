@@ -3,7 +3,7 @@ name: Retry Failed Billing Cycles
 on:
   # Triggered externally on schedule via cron-job.org — GitHub's native `schedule:`
   # trigger was delayed by 1-10h and has been removed. See CRON_SCHEDULE.md.
-  # Previous cron: "0 19 * * *" (12:30 AM IST daily)
+  # Cron-job.org schedule: "50 19,20,21 * * *" (1:20/2:20/3:20 AM IST daily)
   workflow_dispatch:
 
 concurrency:

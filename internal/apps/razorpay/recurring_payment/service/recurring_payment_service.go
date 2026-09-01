@@ -275,11 +275,21 @@ func callWithRetry(logPrefix string, fn func() (map[string]interface{}, error)) 
 	return nil, lastErr
 }
 
+const (
+	// maxChargeAttempts is the number of charge attempts (including the first) allowed on a
+	// billing cycle before it's marked failed and the recurring payment is expired.
+	maxChargeAttempts = 13
+	// retryIntervalDays is the gap, in days, between consecutive retry attempts (T+2, T+4, T+6...).
+	// Chosen to stay within the safety margin of the Cron A/B 25-50h notification window under
+	// the current cron cadence — don't lower this without re-checking that margin.
+	retryIntervalDays = 2
+)
+
 // scheduleRetry calculates and sets the next retry time for a billing cycle
-// Retry pattern: T+3, T+6, T+9... days from start
+// Retry pattern: T+2, T+4, T+6... days from start
 func scheduleRetry(billingCycle *models.BillingCycle) {
 	attemptNum := billingCycle.ChargeAttempts
-	retryDays := attemptNum * 3
+	retryDays := attemptNum * retryIntervalDays
 	nextRetry := billingCycle.StartAt.AddDate(0, 0, retryDays)
 	billingCycle.NextAttemptAt = &nextRetry
 }
@@ -366,8 +376,8 @@ func (s *recurringPaymentService) handlePaymentFailed(
 		return
 	}
 
-	// Mark expired if max attempts reached (9)
-	if billingCycle.ChargeAttempts >= 9 {
+	// Mark expired if max attempts reached
+	if billingCycle.ChargeAttempts >= maxChargeAttempts {
 		billingCycle.Status = models.BillingCycleStatusFailed
 		recurringPayment.Status = models.RecurringPaymentStatusExpired
 		return
@@ -1712,7 +1722,7 @@ func (s *recurringPaymentService) processPendingBillingCycleRetry(rp models.Recu
 		return fmt.Errorf("latest billing cycle is not pending")
 	}
 
-	if bc.ChargeAttempts >= 9 {
+	if bc.ChargeAttempts >= maxChargeAttempts {
 		return s.markBillingCycleAsFailed(bc, &rp)
 	}
 
@@ -1769,7 +1779,7 @@ func (s *recurringPaymentService) markBillingCycleAsFailed(bc *models.BillingCyc
 	if err := s.repo.CommitTransaction(tx); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
-	return fmt.Errorf("max charge attempts (8) reached for billing cycle")
+	return fmt.Errorf("max charge attempts (%d) reached for billing cycle", maxChargeAttempts)
 }
 
 // createRetryOrder creates a Razorpay order for retry
@@ -2254,7 +2264,7 @@ func (s *recurringPaymentService) handleRecurringPaymentError(
 		needsRPUpdate = true
 	} else if billingCycle.CycleNumber > 0 {
 		// Generic error on a billing cycle: schedule retry or mark expired
-		if billingCycle.ChargeAttempts >= 9 {
+		if billingCycle.ChargeAttempts >= maxChargeAttempts {
 			billingCycle.Status = models.BillingCycleStatusFailed
 			recurringPayment.Status = models.RecurringPaymentStatusExpired
 			needsRPUpdate = true
