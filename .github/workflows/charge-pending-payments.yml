@@ -3,8 +3,8 @@ name: Charge Pending Payments
 on:
   # Triggered externally on schedule via cron-job.org — GitHub's native `schedule:`
   # trigger was delayed by 1-10h and has been removed. See CRON_SCHEDULE.md.
-  # Cron-job.org schedule: "0 20 * * *" (1:30 AM IST), "15 20 * * *" (1:45 AM IST),
-  # "0 21 * * *" (2:30 AM IST), "15 21 * * *" (2:45 AM IST)
+  # Cron-job.org schedule: "45 20 * * *" (2:15 AM IST), "0 21 * * *" (2:30 AM IST),
+  # "0 22 * * *" (3:30 AM IST), "15 22 * * *" (3:45 AM IST)
   workflow_dispatch:
 
 concurrency:

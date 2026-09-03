@@ -12,25 +12,25 @@ Workflows live in [.github/workflows/](.github/workflows/). All can also be run 
 > it anywhere in this repo.
 
 > Times shown in **IST** (UTC+5:30). GitHub Actions cron is in **UTC**.
-> Last updated: 2026-09-01 (Reconcile/Process/Retry moved to 3x/day at :00/:10/:20 past 1/2/3 AM IST; Charge Pending Payments moved to 1:30/1:45/2:30/2:45 AM IST)
+> Last updated: 2026-09-03 (Reconcile/Process/Retry moved to 3x/day at 1:30/2:45/4:00, 1:45/3:00/4:15, 2:00/3:15/4:30 AM IST respectively; Charge Pending Payments moved to 2:15/2:30/3:30/3:45 AM IST)
 
 ## Daily Timeline (IST)
 
 | IST Time | Job | Frequency | Workflow |
 |---|---|---|---|
-| 1:00 AM | Reconcile Payments | 3x Daily | [reconcile-payments.yml](.github/workflows/reconcile-payments.yml) |
-| 1:10 AM | Process New Billing Cycles | 3x Daily | [process-new-billing-cycles.yml](.github/workflows/process-new-billing-cycles.yml) |
-| 1:20 AM | Retry Failed Billing Cycles | 3x Daily | [retry-failed-billing-cycles.yml](.github/workflows/retry-failed-billing-cycles.yml) |
-| 1:30 AM | Charge Pending Payments | 4x Daily | [charge-pending-payments.yml](.github/workflows/charge-pending-payments.yml) |
-| 1:45 AM | Charge Pending Payments | 4x Daily | [charge-pending-payments.yml](.github/workflows/charge-pending-payments.yml) |
-| 2:00 AM | Reconcile Payments | 3x Daily | [reconcile-payments.yml](.github/workflows/reconcile-payments.yml) |
-| 2:10 AM | Process New Billing Cycles | 3x Daily | [process-new-billing-cycles.yml](.github/workflows/process-new-billing-cycles.yml) |
-| 2:20 AM | Retry Failed Billing Cycles | 3x Daily | [retry-failed-billing-cycles.yml](.github/workflows/retry-failed-billing-cycles.yml) |
+| 1:30 AM | Reconcile Payments | 3x Daily | [reconcile-payments.yml](.github/workflows/reconcile-payments.yml) |
+| 1:45 AM | Process New Billing Cycles | 3x Daily | [process-new-billing-cycles.yml](.github/workflows/process-new-billing-cycles.yml) |
+| 2:00 AM | Retry Failed Billing Cycles | 3x Daily | [retry-failed-billing-cycles.yml](.github/workflows/retry-failed-billing-cycles.yml) |
+| 2:15 AM | Charge Pending Payments | 4x Daily | [charge-pending-payments.yml](.github/workflows/charge-pending-payments.yml) |
 | 2:30 AM | Charge Pending Payments | 4x Daily | [charge-pending-payments.yml](.github/workflows/charge-pending-payments.yml) |
-| 2:45 AM | Charge Pending Payments | 4x Daily | [charge-pending-payments.yml](.github/workflows/charge-pending-payments.yml) |
-| 3:00 AM | Reconcile Payments | 3x Daily | [reconcile-payments.yml](.github/workflows/reconcile-payments.yml) |
-| 3:10 AM | Process New Billing Cycles | 3x Daily | [process-new-billing-cycles.yml](.github/workflows/process-new-billing-cycles.yml) |
-| 3:20 AM | Retry Failed Billing Cycles | 3x Daily | [retry-failed-billing-cycles.yml](.github/workflows/retry-failed-billing-cycles.yml) |
+| 2:45 AM | Reconcile Payments | 3x Daily | [reconcile-payments.yml](.github/workflows/reconcile-payments.yml) |
+| 3:00 AM | Process New Billing Cycles | 3x Daily | [process-new-billing-cycles.yml](.github/workflows/process-new-billing-cycles.yml) |
+| 3:15 AM | Retry Failed Billing Cycles | 3x Daily | [retry-failed-billing-cycles.yml](.github/workflows/retry-failed-billing-cycles.yml) |
+| 3:30 AM | Charge Pending Payments | 4x Daily | [charge-pending-payments.yml](.github/workflows/charge-pending-payments.yml) |
+| 3:45 AM | Charge Pending Payments | 4x Daily | [charge-pending-payments.yml](.github/workflows/charge-pending-payments.yml) |
+| 4:00 AM | Reconcile Payments | 3x Daily | [reconcile-payments.yml](.github/workflows/reconcile-payments.yml) |
+| 4:15 AM | Process New Billing Cycles | 3x Daily | [process-new-billing-cycles.yml](.github/workflows/process-new-billing-cycles.yml) |
+| 4:30 AM | Retry Failed Billing Cycles | 3x Daily | [retry-failed-billing-cycles.yml](.github/workflows/retry-failed-billing-cycles.yml) |
 | 6:00 AM | Parse News → Generate News Media | Daily | [parse-news.yml](.github/workflows/parse-news.yml) |
 | 7:00 AM | Send DailyStory Push Notification | Daily | [send-dailystory-push-notification.yml](.github/workflows/send-dailystory-push-notification.yml) |
 | 8:00 AM | Cleanup Orphan News Media | Weekly (Sun) | [cleanup-orphan-news-media.yml](.github/workflows/cleanup-orphan-news-media.yml) |
@@ -49,28 +49,28 @@ Cron expression (UTC): `0 */2 * * *`
 
 ### Charge Pending Payments — 4x Daily
 Cron expressions (UTC):
-- `0 20 * * *` → 1:30 AM IST
-- `15 20 * * *` → 1:45 AM IST
+- `45 20 * * *` → 2:15 AM IST
 - `0 21 * * *` → 2:30 AM IST
-- `15 21 * * *` → 2:45 AM IST
+- `0 22 * * *` → 3:30 AM IST
+- `15 22 * * *` → 3:45 AM IST
 
 ### Reconcile Payments — 3x Daily
 Cron expressions (UTC):
-- `30 19 * * *` → 1:00 AM IST
-- `30 20 * * *` → 2:00 AM IST
-- `30 21 * * *` → 3:00 AM IST
+- `0 20 * * *` → 1:30 AM IST
+- `15 21 * * *` → 2:45 AM IST
+- `30 22 * * *` → 4:00 AM IST
 
 ### Process New Billing Cycles — 3x Daily
 Cron expressions (UTC):
-- `40 19 * * *` → 1:10 AM IST
-- `40 20 * * *` → 2:10 AM IST
-- `40 21 * * *` → 3:10 AM IST
+- `15 20 * * *` → 1:45 AM IST
+- `30 21 * * *` → 3:00 AM IST
+- `45 22 * * *` → 4:15 AM IST
 
 ### Retry Failed Billing Cycles — 3x Daily
 Cron expressions (UTC):
-- `50 19 * * *` → 1:20 AM IST
-- `50 20 * * *` → 2:20 AM IST
-- `50 21 * * *` → 3:20 AM IST
+- `30 20 * * *` → 2:00 AM IST
+- `45 21 * * *` → 3:15 AM IST
+- `0 23 * * *` → 4:30 AM IST
 
 ### Parse News — Daily
 Runs `parse-news-topics` job, then chains into `parse-news-areas`, then `generate-news-media` on success.

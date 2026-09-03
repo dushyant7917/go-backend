@@ -49,7 +49,7 @@ jobs:
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
         run: |
           cd cron-jobs/cleanup_old_news
-          go run main.go 3
+          go run main.go 2
 
       - name: Notify on failure
         if: failure()
