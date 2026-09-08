@@ -278,15 +278,13 @@ func callWithRetry(logPrefix string, fn func() (map[string]interface{}, error)) 
 const (
 	// maxChargeAttempts is the number of charge attempts (including the first) allowed on a
 	// billing cycle before it's marked failed and the recurring payment is expired.
-	maxChargeAttempts = 13
-	// retryIntervalDays is the gap, in days, between consecutive retry attempts (T+2, T+4, T+6...).
-	// Chosen to stay within the safety margin of the Cron A/B 25-50h notification window under
-	// the current cron cadence — don't lower this without re-checking that margin.
-	retryIntervalDays = 2
+	maxChargeAttempts = 9
+	// retryIntervalDays is the gap, in days, between consecutive retry attempts (T+3, T+6, T+9...).
+	retryIntervalDays = 3
 )
 
 // scheduleRetry calculates and sets the next retry time for a billing cycle
-// Retry pattern: T+2, T+4, T+6... days from start
+// Retry pattern: T+3, T+6, T+9... days from start
 func scheduleRetry(billingCycle *models.BillingCycle) {
 	attemptNum := billingCycle.ChargeAttempts
 	retryDays := attemptNum * retryIntervalDays
