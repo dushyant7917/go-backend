@@ -5,7 +5,6 @@ import (
 	"os"
 	"strings"
 
-	crushRepository "go-backend/internal/apps/crush/repository"
 	r2ConfigService "go-backend/internal/apps/r2/config/service"
 	"go-backend/internal/apps/user/models"
 	"go-backend/internal/apps/user/repository"
@@ -30,15 +29,13 @@ type UserService interface {
 // userService implements UserService
 type userService struct {
 	repo            repository.UserRepository
-	crushRepo       crushRepository.CrushRepository
 	r2ClientFactory *r2ConfigService.R2ClientFactory
 }
 
 // NewUserService creates a new instance of UserService
-func NewUserService(repo repository.UserRepository, crushRepo crushRepository.CrushRepository, r2ClientFactory *r2ConfigService.R2ClientFactory) UserService {
+func NewUserService(repo repository.UserRepository, r2ClientFactory *r2ConfigService.R2ClientFactory) UserService {
 	return &userService{
 		repo:            repo,
-		crushRepo:       crushRepo,
 		r2ClientFactory: r2ClientFactory,
 	}
 }
@@ -221,9 +218,6 @@ func (s *userService) getBucketNameForApp(appName string) string {
 	case "dailystory", "dailystoryapp":
 		// Return the existing users bucket for DailyStory app
 		return os.Getenv("R2_DS_USERS_BUCKET_NAME")
-	case "crushconnect", "crushconnectapp":
-		// Return the bucket name for CrushConnect app if needed
-		return os.Getenv("R2_CC_USERS_BUCKET_NAME")
 	default:
 		// Return empty string for unknown apps (no deletion will occur)
 		return ""
@@ -237,10 +231,6 @@ func (s *userService) getR2AppName(appName string) string {
 	switch normalizedAppName {
 	case "dailystory", "dailystoryapp":
 		return constants.AppNameDailyStory
-	case "crushconnect", "crushconnectapp":
-		return constants.AppNameCrushConnect
-	case "chemistry":
-		return constants.AppNameChemistry
 	default:
 		return appName
 	}
@@ -298,27 +288,18 @@ func (s *userService) ListAllUsersPaginated(appName string, page, pageSize int) 
 		return nil, err
 	}
 
-	// Build response with crushes count
 	responses := make([]models.UserWithCountResponse, len(users))
 	for i, user := range users {
-		// Get crushes count for this user
-		crushesCount, err := s.crushRepo.CountByUserID(user.ID)
-		if err != nil {
-			// If error counting crushes, set count to 0
-			crushesCount = 0
-		}
-
 		responses[i] = models.UserWithCountResponse{
-			ID:           user.ID,
-			Name:         user.Name,
-			CountryCode:  user.CountryCode,
-			Phone:        user.Phone,
-			Email:        user.Email,
-			AppName:      user.AppName,
-			Metadata:     user.Metadata,
-			CrushesCount: crushesCount,
-			CreatedAt:    user.CreatedAt,
-			UpdatedAt:    user.UpdatedAt,
+			ID:          user.ID,
+			Name:        user.Name,
+			CountryCode: user.CountryCode,
+			Phone:       user.Phone,
+			Email:       user.Email,
+			AppName:     user.AppName,
+			Metadata:    user.Metadata,
+			CreatedAt:   user.CreatedAt,
+			UpdatedAt:   user.UpdatedAt,
 		}
 	}
 

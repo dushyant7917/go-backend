@@ -4,11 +4,9 @@ package constants
 // These must match the app_name values in database configuration tables
 const (
 	AppNameAIBestie         = "AI-Bestie"
-	AppNameChemistry        = "Chemistry"
 	AppNameDailyStory       = "DailyStoryApp"
 	AppNameDailyStoryAlt    = "DailyStory"
 	AppNameWomenPOV         = "WomenPOV"
-	AppNameCrushConnect     = "CrushConnect"
 	AppNameTemplateDesigner = "TemplateDesigner"
 	AppNameJobsFeed         = "JobsFeed"
 )

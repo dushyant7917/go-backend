@@ -90,21 +90,20 @@ type PaginatedUsersResponse struct {
 	PrevPage   *int           `json:"prev_page"`
 }
 
-// UserWithCountResponse represents user response with crushes count
+// UserWithCountResponse represents a user in a paginated list response
 type UserWithCountResponse struct {
-	ID           uuid.UUID      `json:"id"`
-	Name         *string        `json:"name,omitempty"`
-	CountryCode  *string        `json:"country_code,omitempty"`
-	Phone        *string        `json:"phone,omitempty"`
-	Email        *string        `json:"email,omitempty"`
-	AppName      string         `json:"app_name"`
-	Metadata     utils.Metadata `json:"metadata"`
-	CrushesCount int64          `json:"crushes_count"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
+	ID          uuid.UUID      `json:"id"`
+	Name        *string        `json:"name,omitempty"`
+	CountryCode *string        `json:"country_code,omitempty"`
+	Phone       *string        `json:"phone,omitempty"`
+	Email       *string        `json:"email,omitempty"`
+	AppName     string         `json:"app_name"`
+	Metadata    utils.Metadata `json:"metadata"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
 }
 
-// PaginatedUsersWithCountResponse represents paginated users response with crushes count
+// PaginatedUsersWithCountResponse represents a paginated users list response
 type PaginatedUsersWithCountResponse struct {
 	Data       []UserWithCountResponse `json:"data"`
 	Page       int                     `json:"page"`

@@ -11,12 +11,6 @@ import (
 	"github.com/getsentry/sentry-go"
 	sentrygin "github.com/getsentry/sentry-go/gin"
 
-	agoraChatHandler "go-backend/internal/apps/agora/chat/handler"
-	agoraChatService "go-backend/internal/apps/agora/chat/service"
-	chemistryHandler "go-backend/internal/apps/chemistry/handler"
-	crushHandler "go-backend/internal/apps/crush/handler"
-	crushRepository "go-backend/internal/apps/crush/repository"
-	crushService "go-backend/internal/apps/crush/service"
 	dailystoryHandler "go-backend/internal/apps/dailystory/handler"
 	dailystoryInngest "go-backend/internal/apps/dailystory/inngest"
 	dailystoryRepository "go-backend/internal/apps/dailystory/repository"
@@ -46,14 +40,9 @@ import (
 	referralHandler "go-backend/internal/apps/referral/handler"
 	referralRepository "go-backend/internal/apps/referral/repository"
 	referralService "go-backend/internal/apps/referral/service"
-	streamChatHandler "go-backend/internal/apps/stream/chat/handler"
-	streamChatService "go-backend/internal/apps/stream/chat/service"
 	userHandler "go-backend/internal/apps/user/handler"
 	userRepository "go-backend/internal/apps/user/repository"
 	userService "go-backend/internal/apps/user/service"
-	wingwomanHandler "go-backend/internal/apps/wingwoman/handler"
-	wingwomanRepository "go-backend/internal/apps/wingwoman/repository"
-	wingwomanService "go-backend/internal/apps/wingwoman/service"
 	"go-backend/internal/common/database"
 	"go-backend/internal/common/middleware"
 	"go-backend/pkg/notification"
@@ -136,7 +125,6 @@ func main() {
 
 	// Initialize repositories
 	userRepo := userRepository.NewUserRepository(db)
-	crushRepo := crushRepository.NewCrushRepository(db)
 
 	// Initialize Recurring Payment dependencies
 	recurringPaymentRepo := recurringPaymentRepository.NewRecurringPaymentRepository(db)
@@ -159,11 +147,9 @@ func main() {
 	posthogConfigH := posthogConfigHandler.NewPostHogConfigHandler(posthogConfigSvc)
 
 	// Initialize services
-	crushSvc := crushService.NewCrushService(crushRepo, userRepo)
-	userSvc := userService.NewUserService(userRepo, crushRepo, r2ClientFactory)
+	userSvc := userService.NewUserService(userRepo, r2ClientFactory)
 
 	// Initialize handlers
-	crushH := crushHandler.NewCrushHandler(crushSvc)
 	userH := userHandler.NewUserHandler(userSvc)
 
 	// Initialize OTP dependencies.
@@ -208,18 +194,10 @@ func main() {
 	// Initialize DailyStory Profile Picture handler
 	profilePictureH := dailystoryHandler.NewProfilePictureHandler(r2ClientFactory)
 
-	// Initialize Chemistry Profile Picture handler
-	chemistryProfilePictureH := chemistryHandler.NewProfilePictureHandler(r2ClientFactory)
-
 	// Initialize DailyStory Image Poster dependencies
 	imagePosterRepo := dailystoryRepository.NewImagePosterRepository(db)
 	imagePosterSvc := dailystoryService.NewImagePosterService(imagePosterRepo, imageTemplateRepo, userRepo)
 	imagePosterH := dailystoryHandler.NewImagePosterHandler(imagePosterSvc, r2ClientFactory)
-
-	// Initialize WingWoman dependencies
-	helperRepo := wingwomanRepository.NewHelperRepository(db)
-	helperSvc := wingwomanService.NewHelperService(helperRepo)
-	helperH := wingwomanHandler.NewHelperHandler(helperSvc)
 
 	// Initialize News dependencies (within DailyStory)
 	newsRepo := dailystoryRepository.NewNewsRepository(db)
@@ -233,14 +211,6 @@ func main() {
 
 	// Initialize Combined Subscription Status handler (dailystory)
 	dailystoryH := dailystoryHandler.NewDailystoryHandler(subscriptionRepo, recurringPaymentRepo, metaEventSvc)
-
-	// Initialize Agora Chat dependencies
-	chatSvc := agoraChatService.NewChatService()
-	chatH := agoraChatHandler.NewChatHandler(chatSvc)
-
-	// Initialize Stream Chat dependencies
-	streamChatSvc := streamChatService.NewChatService()
-	streamChatH := streamChatHandler.NewChatHandler(streamChatSvc)
 
 	// Setup Gin router
 	ginMode := getEnv("GIN_MODE", "release")
@@ -321,19 +291,10 @@ func main() {
 		// Register OTP routes
 		otpHandler.RegisterOTPRoutes(v1, phoneOTPH, emailOTPH)
 
-		// Register Crush Connect routes
-		crushHandler.RegisterCrushRoutes(v1, crushH)
-
 		// Register DailyStory routes
 		dailystoryHandler.RegisterImageTemplateRoutes(v1, imageTemplateH)
 		dailystoryHandler.RegisterProfilePictureRoutes(v1, profilePictureH)
 		dailystoryHandler.RegisterImagePosterRoutes(v1, imagePosterH)
-
-		// Register Chemistry routes
-		chemistryHandler.RegisterProfilePictureRoutes(v1, chemistryProfilePictureH)
-
-		// Register WingWoman routes
-		wingwomanHandler.RegisterWingWomanRoutes(v1, helperH)
 
 		// Register News routes (within DailyStory)
 		dailystoryHandler.RegisterNewsRoutes(v1, newsH, newsPosterH)
@@ -343,12 +304,6 @@ func main() {
 
 		// Register Meta Event routes
 		metaEventHandler.RegisterMetaEventRoutes(v1, metaEventH)
-
-		// Register Agora routes
-		agoraChatHandler.RegisterChatRoutes(v1, chatH)
-
-		// Register Stream routes
-		streamChatHandler.RegisterChatRoutes(v1, streamChatH)
 
 		// Future apps can register their routes here
 		// Example: handler.RegisterUserRoutes(v1, userHandler)
