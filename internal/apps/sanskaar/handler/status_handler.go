@@ -34,7 +34,8 @@ func (h *StatusHandler) CreateStatus(c *gin.Context) {
 		return
 	}
 
-	if !validateStatusCategory(c, req.Category) {
+	if err := validateStatusCategory(req.Category); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -82,8 +83,11 @@ func (h *StatusHandler) UpdateStatus(c *gin.Context) {
 		return
 	}
 
-	if req.Category != nil && !validateStatusCategory(c, *req.Category) {
-		return
+	if req.Category != nil {
+		if err := validateStatusCategory(*req.Category); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
 	resp, err := h.service.Update(id, req)

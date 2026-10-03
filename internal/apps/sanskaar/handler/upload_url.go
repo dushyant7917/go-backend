@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -22,30 +23,28 @@ import (
 // only validation, and the value is stored/keyed in R2 exactly as the client sends it.
 var statusCategoryPattern = regexp.MustCompile(`^[a-zA-Z]+(-[a-zA-Z]+)*$`)
 
-// validateStatusCategory checks category against statusCategoryPattern. On validation failure
-// it writes the 400 response itself and returns false; callers should return immediately.
-func validateStatusCategory(c *gin.Context, category string) bool {
+// validateStatusCategory checks category against statusCategoryPattern, returning an error
+// describing the validation failure if it doesn't match.
+func validateStatusCategory(category string) error {
 	if !statusCategoryPattern.MatchString(category) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "category must contain only letters and hyphens"})
-		return false
+		return errors.New("category must contain only letters and hyphens")
 	}
-	return true
+	return nil
 }
 
 // sanskaarBucketEnvVar is the single R2 bucket shared by every Sanskaar resource
 // (devotional music, tones, wallpapers). Resources are separated by key prefix, not by
 // bucket, since none of them differ in access control, lifecycle, or ownership — see
-// devotionalMusicUploadURL / audioThumbnailUploadURL / wallpaperUploadURL for the prefixes.
+// BuildDevotionalMusicFileKey / BuildAudioThumbnailFileKey / BuildWallpaperFileKey for the
+// prefixes.
 const sanskaarBucketEnvVar = "R2_SANSKAAR_BUCKET_NAME"
 
 // validateAudioThumbnailFile validates filename against the declared purpose ("audio" or
 // "thumbnail"), returning the extension, filename without extension, and resolved content
-// type. On validation failure it writes the 400 response itself and returns ok=false;
-// callers should return immediately in that case.
-func validateAudioThumbnailFile(c *gin.Context, filename, purpose string) (ext, filenameWithoutExt, contentType string, ok bool) {
+// type, or an error describing the validation failure.
+func validateAudioThumbnailFile(filename, purpose string) (ext, filenameWithoutExt, contentType string, err error) {
 	if strings.TrimSpace(filename) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "filename cannot be empty"})
-		return "", "", "", false
+		return "", "", "", errors.New("filename cannot be empty")
 	}
 
 	ext = filepath.Ext(filename)
@@ -60,15 +59,35 @@ func validateAudioThumbnailFile(c *gin.Context, filename, purpose string) (ext, 
 	contentType = utils.GetContentTypeFromExtension(ext)
 
 	if purpose == "audio" && !strings.HasPrefix(contentType, "audio/") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "only audio files are supported for purpose 'audio'"})
-		return "", "", "", false
+		return "", "", "", errors.New("only audio files are supported for purpose 'audio'")
 	}
 	if purpose == "thumbnail" && !strings.HasPrefix(contentType, "image/") {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "only image files are supported for purpose 'thumbnail'"})
-		return "", "", "", false
+		return "", "", "", errors.New("only image files are supported for purpose 'thumbnail'")
 	}
 
-	return ext, filenameWithoutExt, contentType, true
+	return ext, filenameWithoutExt, contentType, nil
+}
+
+// BuildAudioThumbnailFileKey computes the R2 object key and content type for a tone's audio or
+// thumbnail file. Tone has "audio" and "thumbnail" file purposes but (unlike DevotionalMusic) no
+// category to organize files by, so files are simply keyed under <resourcePrefix>/audio/ or
+// <resourcePrefix>/thumbnails/ (resourcePrefix is "tones"). Exported so both the
+// POST /api/v1/sanskaar/tones/upload-url handler and local upload scripts (which write directly
+// to R2 instead of going through that endpoint) use the exact same key-construction rules.
+func BuildAudioThumbnailFileKey(filename, purpose, resourcePrefix string) (fileKey, contentType string, err error) {
+	ext, filenameWithoutExt, contentType, err := validateAudioThumbnailFile(filename, purpose)
+	if err != nil {
+		return "", "", err
+	}
+
+	folder := "audio"
+	if purpose == "thumbnail" {
+		folder = "thumbnails"
+	}
+
+	timestamp := time.Now().UTC().Unix()
+	fileKey = fmt.Sprintf("%s/%s/%s_%d%s", resourcePrefix, folder, filenameWithoutExt, timestamp, ext)
+	return fileKey, contentType, nil
 }
 
 // audioThumbnailUploadURL handles POST /api/v1/sanskaar/tones/upload-url. Tone has "audio" and
@@ -85,18 +104,11 @@ func audioThumbnailUploadURL(c *gin.Context, r2ClientFactory *r2ConfigService.R2
 		return
 	}
 
-	ext, filenameWithoutExt, contentType, ok := validateAudioThumbnailFile(c, req.Filename, req.Purpose)
-	if !ok {
+	fileKey, contentType, err := BuildAudioThumbnailFileKey(req.Filename, req.Purpose, resourcePrefix)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	folder := "audio"
-	if req.Purpose == "thumbnail" {
-		folder = "thumbnails"
-	}
-
-	timestamp := time.Now().UTC().Unix()
-	fileKey := fmt.Sprintf("%s/%s/%s_%d%s", resourcePrefix, folder, filenameWithoutExt, timestamp, ext)
 
 	uploadurl.Respond(c, r2ClientFactory, uploadurl.Request{
 		AppName:           constants.AppNameSanskaar,
@@ -119,6 +131,31 @@ var devotionalMusicCategoryFolders = map[string]string{
 	"chalisa": "chalisas",
 }
 
+// BuildDevotionalMusicFileKey computes the R2 object key and content type for a devotional
+// music track's audio or thumbnail file. DevotionalMusic organizes files by category (mantras,
+// bhajans, aartis, chalisas) and, within each category, by purpose:
+// devotional-music/<category>/audio/<filename> for the audio file and
+// devotional-music/<category>/thumbnails/<filename> for its thumbnail. Exported so both the
+// POST /api/v1/sanskaar/devotional-music/upload-url handler and local upload scripts (which
+// write directly to R2 instead of going through that endpoint) use the exact same
+// key-construction rules.
+func BuildDevotionalMusicFileKey(filename, purpose, category string) (fileKey, contentType string, err error) {
+	ext, filenameWithoutExt, contentType, err := validateAudioThumbnailFile(filename, purpose)
+	if err != nil {
+		return "", "", err
+	}
+
+	folder := "audio"
+	if purpose == "thumbnail" {
+		folder = "thumbnails"
+	}
+	categoryFolder := devotionalMusicCategoryFolders[category]
+
+	timestamp := time.Now().UTC().Unix()
+	fileKey = fmt.Sprintf("devotional-music/%s/%s/%s_%d%s", categoryFolder, folder, filenameWithoutExt, timestamp, ext)
+	return fileKey, contentType, nil
+}
+
 // devotionalMusicUploadURL handles POST /api/v1/sanskaar/devotional-music/upload-url.
 // DevotionalMusic organizes files by category (mantras, bhajans, aartis, chalisas) and, within
 // each category, by purpose: devotional-music/<category>/audio/<filename> for the audio file and
@@ -135,19 +172,11 @@ func devotionalMusicUploadURL(c *gin.Context, r2ClientFactory *r2ConfigService.R
 		return
 	}
 
-	ext, filenameWithoutExt, contentType, ok := validateAudioThumbnailFile(c, req.Filename, req.Purpose)
-	if !ok {
+	fileKey, contentType, err := BuildDevotionalMusicFileKey(req.Filename, req.Purpose, req.Category)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	folder := "audio"
-	if req.Purpose == "thumbnail" {
-		folder = "thumbnails"
-	}
-	categoryFolder := devotionalMusicCategoryFolders[req.Category]
-
-	timestamp := time.Now().UTC().Unix()
-	fileKey := fmt.Sprintf("devotional-music/%s/%s/%s_%d%s", categoryFolder, folder, filenameWithoutExt, timestamp, ext)
 
 	uploadurl.Respond(c, r2ClientFactory, uploadurl.Request{
 		AppName:           constants.AppNameSanskaar,
@@ -157,6 +186,62 @@ func devotionalMusicUploadURL(c *gin.Context, r2ClientFactory *r2ConfigService.R
 		ContentType:       contentType,
 		ExpirationMinutes: 5,
 	})
+}
+
+// mediaFileKeyParts resolves the folder, filename-without-extension, extension, and content type
+// shared by wallpapers' and statuses' media/thumbnail files: both key thumbnails (always images)
+// under a "thumbnails" folder, and otherwise key images under imageFolder and videos under
+// videoFolder. purpose defaults to "media" (anything other than "thumbnail") when empty, so
+// existing clients that predate the thumbnail field keep working.
+func mediaFileKeyParts(filename, typ, purpose, imageFolder, videoFolder string) (folder, filenameWithoutExt, ext, contentType string, err error) {
+	if strings.TrimSpace(filename) == "" {
+		return "", "", "", "", errors.New("filename cannot be empty")
+	}
+
+	var defaultExt, wantPrefix string
+	if purpose == "thumbnail" {
+		folder, defaultExt, wantPrefix = "thumbnails", ".png", "image/"
+	} else {
+		folder, defaultExt, wantPrefix = imageFolder, ".jpg", "image/"
+		if typ == "video" {
+			folder, defaultExt, wantPrefix = videoFolder, ".mp4", "video/"
+		}
+	}
+
+	ext = filepath.Ext(filename)
+	if ext == "" {
+		ext = defaultExt
+	}
+	filenameWithoutExt = strings.TrimSuffix(filename, ext)
+	contentType = utils.GetContentTypeFromExtension(ext)
+
+	if !strings.HasPrefix(contentType, wantPrefix) {
+		errLabel := typ
+		if purpose == "thumbnail" {
+			errLabel = "thumbnail"
+		}
+		return "", "", "", "", fmt.Errorf("only %s files are supported for '%s'", strings.TrimSuffix(wantPrefix, "/"), errLabel)
+	}
+
+	return folder, filenameWithoutExt, ext, contentType, nil
+}
+
+// BuildWallpaperFileKey computes the R2 object key and content type for a wallpaper's media or
+// thumbnail file. Wallpapers organize files by purpose, then (for purpose "media") by type:
+// video wallpapers ("live") under wallpapers/live/, image wallpapers ("static") under
+// wallpapers/static/, thumbnails (always images, only applicable to video wallpapers) under
+// wallpapers/thumbnails/. Exported so both the POST /api/v1/sanskaar/wallpapers/upload-url
+// handler and local upload scripts (which write directly to R2 instead of going through that
+// endpoint) use the exact same key-construction rules.
+func BuildWallpaperFileKey(filename, typ, purpose string) (fileKey, contentType string, err error) {
+	folder, filenameWithoutExt, ext, contentType, err := mediaFileKeyParts(filename, typ, purpose, "static", "live")
+	if err != nil {
+		return "", "", err
+	}
+
+	timestamp := time.Now().UTC().Unix()
+	fileKey = fmt.Sprintf("wallpapers/%s/%s_%d%s", folder, filenameWithoutExt, timestamp, ext)
+	return fileKey, contentType, nil
 }
 
 // wallpaperUploadURL handles POST /api/v1/sanskaar/wallpapers/upload-url. Wallpapers organize
@@ -176,39 +261,11 @@ func wallpaperUploadURL(c *gin.Context, r2ClientFactory *r2ConfigService.R2Clien
 		return
 	}
 
-	if strings.TrimSpace(req.Filename) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "filename cannot be empty"})
+	fileKey, contentType, err := BuildWallpaperFileKey(req.Filename, req.Type, req.Purpose)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	var folder, defaultExt, wantPrefix string
-	if req.Purpose == "thumbnail" {
-		folder, defaultExt, wantPrefix = "thumbnails", ".png", "image/"
-	} else {
-		folder, defaultExt, wantPrefix = "static", ".jpg", "image/"
-		if req.Type == "video" {
-			folder, defaultExt, wantPrefix = "live", ".mp4", "video/"
-		}
-	}
-
-	ext := filepath.Ext(req.Filename)
-	if ext == "" {
-		ext = defaultExt
-	}
-	filenameWithoutExt := strings.TrimSuffix(req.Filename, ext)
-	contentType := utils.GetContentTypeFromExtension(ext)
-
-	if !strings.HasPrefix(contentType, wantPrefix) {
-		errLabel := req.Type
-		if req.Purpose == "thumbnail" {
-			errLabel = "thumbnail"
-		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("only %s files are supported for '%s'", strings.TrimSuffix(wantPrefix, "/"), errLabel)})
-		return
-	}
-
-	timestamp := time.Now().UTC().Unix()
-	fileKey := fmt.Sprintf("wallpapers/%s/%s_%d%s", folder, filenameWithoutExt, timestamp, ext)
 
 	uploadurl.Respond(c, r2ClientFactory, uploadurl.Request{
 		AppName:           constants.AppNameSanskaar,
@@ -218,6 +275,35 @@ func wallpaperUploadURL(c *gin.Context, r2ClientFactory *r2ConfigService.R2Clien
 		ContentType:       contentType,
 		ExpirationMinutes: 5,
 	})
+}
+
+// BuildStatusFileKey computes the R2 object key and content type for a status's media or
+// thumbnail file. Statuses organize files by category, then purpose: statuses/<category>/images/
+// for image statuses, statuses/<category>/videos/ for video statuses,
+// statuses/<category>/thumbnails/ for thumbnails (always images, only applicable to video
+// statuses). category is stored in the key exactly as given (validated against
+// statusCategoryPattern, no folder-name mapping like DevotionalMusic's fixed categories).
+// Exported so both the POST /api/v1/sanskaar/statuses/upload-url handler and local upload
+// scripts (which write directly to R2 instead of going through that endpoint) use the exact same
+// key-construction rules.
+func BuildStatusFileKey(filename, typ, category, purpose string) (fileKey, contentType string, err error) {
+	// Checked here (ahead of mediaFileKeyParts' own filename check) to preserve the original
+	// validation order: filename, then category, then folder/content-type.
+	if strings.TrimSpace(filename) == "" {
+		return "", "", errors.New("filename cannot be empty")
+	}
+	if err := validateStatusCategory(category); err != nil {
+		return "", "", err
+	}
+
+	folder, filenameWithoutExt, ext, contentType, err := mediaFileKeyParts(filename, typ, purpose, "images", "videos")
+	if err != nil {
+		return "", "", err
+	}
+
+	timestamp := time.Now().UTC().Unix()
+	fileKey = fmt.Sprintf("statuses/%s/%s/%s_%d%s", category, folder, filenameWithoutExt, timestamp, ext)
+	return fileKey, contentType, nil
 }
 
 // statusUploadURL handles POST /api/v1/sanskaar/statuses/upload-url. Statuses organize files by
@@ -240,43 +326,11 @@ func statusUploadURL(c *gin.Context, r2ClientFactory *r2ConfigService.R2ClientFa
 		return
 	}
 
-	if strings.TrimSpace(req.Filename) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "filename cannot be empty"})
+	fileKey, contentType, err := BuildStatusFileKey(req.Filename, req.Type, req.Category, req.Purpose)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	if !validateStatusCategory(c, req.Category) {
-		return
-	}
-
-	var folder, defaultExt, wantPrefix string
-	if req.Purpose == "thumbnail" {
-		folder, defaultExt, wantPrefix = "thumbnails", ".png", "image/"
-	} else {
-		folder, defaultExt, wantPrefix = "images", ".jpg", "image/"
-		if req.Type == "video" {
-			folder, defaultExt, wantPrefix = "videos", ".mp4", "video/"
-		}
-	}
-
-	ext := filepath.Ext(req.Filename)
-	if ext == "" {
-		ext = defaultExt
-	}
-	filenameWithoutExt := strings.TrimSuffix(req.Filename, ext)
-	contentType := utils.GetContentTypeFromExtension(ext)
-
-	if !strings.HasPrefix(contentType, wantPrefix) {
-		errLabel := req.Type
-		if req.Purpose == "thumbnail" {
-			errLabel = "thumbnail"
-		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("only %s files are supported for '%s'", strings.TrimSuffix(wantPrefix, "/"), errLabel)})
-		return
-	}
-
-	timestamp := time.Now().UTC().Unix()
-	fileKey := fmt.Sprintf("statuses/%s/%s/%s_%d%s", req.Category, folder, filenameWithoutExt, timestamp, ext)
 
 	uploadurl.Respond(c, r2ClientFactory, uploadurl.Request{
 		AppName:           constants.AppNameSanskaar,
