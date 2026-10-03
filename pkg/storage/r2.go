@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
 // r2Timeout is the default timeout for R2 API operations
@@ -211,6 +213,47 @@ func (r *R2Client) DeleteFile(bucketName, fileKey string) error {
 	}
 
 	return nil
+}
+
+// FileExists checks whether an object exists in an R2 bucket via a HEAD request.
+//
+// Parameters:
+//   - bucketName: Name of the R2 bucket
+//   - fileKey: Object key (path) in the bucket to check
+//
+// Returns:
+//   - true if the object exists, false if it does not
+//   - Error if the existence check itself fails (network, auth, etc.) — a missing object is
+//     reported as (false, nil), not an error
+func (r *R2Client) FileExists(bucketName, fileKey string) (bool, error) {
+	if bucketName == "" || fileKey == "" {
+		return false, fmt.Errorf("bucket name and file key are required")
+	}
+
+	headObjectInput := &s3.HeadObjectInput{
+		Bucket: aws.String(bucketName),
+		Key:    aws.String(fileKey),
+	}
+
+	ctx, cancel := r2Context()
+	defer cancel()
+	_, err := r.client.HeadObject(ctx, headObjectInput)
+	if err == nil {
+		return true, nil
+	}
+
+	var notFound *types.NotFound
+	if errors.As(err, &notFound) {
+		return false, nil
+	}
+	// HeadObject on a missing key doesn't always unmarshal to the modeled NotFound type
+	// (varies by S3-compatible provider), so also fall back to the raw HTTP status code.
+	var respErr *smithyhttp.ResponseError
+	if errors.As(err, &respErr) && respErr.HTTPStatusCode() == http.StatusNotFound {
+		return false, nil
+	}
+
+	return false, fmt.Errorf("failed to check file existence: %w", err)
 }
 
 // DeleteFiles deletes multiple files from an R2 bucket in a single request

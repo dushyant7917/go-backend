@@ -40,6 +40,9 @@ import (
 	referralHandler "go-backend/internal/apps/referral/handler"
 	referralRepository "go-backend/internal/apps/referral/repository"
 	referralService "go-backend/internal/apps/referral/service"
+	sanskaarHandler "go-backend/internal/apps/sanskaar/handler"
+	sanskaarRepository "go-backend/internal/apps/sanskaar/repository"
+	sanskaarService "go-backend/internal/apps/sanskaar/service"
 	userHandler "go-backend/internal/apps/user/handler"
 	userRepository "go-backend/internal/apps/user/repository"
 	userService "go-backend/internal/apps/user/service"
@@ -212,6 +215,32 @@ func main() {
 	// Initialize Combined Subscription Status handler (dailystory)
 	dailystoryH := dailystoryHandler.NewDailystoryHandler(subscriptionRepo, recurringPaymentRepo, metaEventSvc)
 
+	// Initialize Sanskaar dependencies
+	// All Sanskaar resources share a single public R2 bucket (separated by key prefix, not by
+	// bucket — see internal/apps/sanskaar/handler/upload_url.go), so they share one public URL
+	// base and bucket name; services also use the bucket + r2ClientFactory to delete old
+	// audio/thumbnail/media files from R2 when an update replaces them.
+	sanskaarPublicURLBase := getEnv("R2_SANSKAAR_PUBLIC_URL", "")
+	sanskaarBucketName := getEnv("R2_SANSKAAR_BUCKET_NAME", "")
+
+	devotionalMusicRepo := sanskaarRepository.NewDevotionalMusicRepository(db)
+	devotionalMusicSvc := sanskaarService.NewDevotionalMusicService(devotionalMusicRepo, sanskaarPublicURLBase, sanskaarBucketName, r2ClientFactory)
+	devotionalMusicH := sanskaarHandler.NewDevotionalMusicHandler(devotionalMusicSvc, r2ClientFactory)
+
+	toneRepo := sanskaarRepository.NewToneRepository(db)
+	toneSvc := sanskaarService.NewToneService(toneRepo, sanskaarPublicURLBase, sanskaarBucketName, r2ClientFactory)
+	toneH := sanskaarHandler.NewToneHandler(toneSvc, r2ClientFactory)
+
+	wallpaperRepo := sanskaarRepository.NewWallpaperRepository(db)
+	wallpaperSvc := sanskaarService.NewWallpaperService(wallpaperRepo, sanskaarPublicURLBase, sanskaarBucketName, r2ClientFactory)
+	wallpaperH := sanskaarHandler.NewWallpaperHandler(wallpaperSvc, r2ClientFactory)
+
+	statusRepo := sanskaarRepository.NewStatusRepository(db)
+	statusSvc := sanskaarService.NewStatusService(statusRepo, sanskaarPublicURLBase, sanskaarBucketName, r2ClientFactory)
+	statusH := sanskaarHandler.NewStatusHandler(statusSvc, r2ClientFactory)
+
+	statusPictureH := sanskaarHandler.NewStatusPictureHandler(r2ClientFactory, sanskaarPublicURLBase)
+
 	// Setup Gin router
 	ginMode := getEnv("GIN_MODE", "release")
 	gin.SetMode(ginMode)
@@ -304,6 +333,9 @@ func main() {
 
 		// Register Meta Event routes
 		metaEventHandler.RegisterMetaEventRoutes(v1, metaEventH)
+
+		// Register Sanskaar routes
+		sanskaarHandler.RegisterSanskaarRoutes(v1, devotionalMusicH, toneH, wallpaperH, statusH, statusPictureH)
 
 		// Future apps can register their routes here
 		// Example: handler.RegisterUserRoutes(v1, userHandler)

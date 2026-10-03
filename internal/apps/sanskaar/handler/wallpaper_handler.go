@@ -1,0 +1,116 @@
+package handler
+
+import (
+	"net/http"
+
+	r2ConfigService "go-backend/internal/apps/r2/config/service"
+	"go-backend/internal/apps/sanskaar/models"
+	"go-backend/internal/apps/sanskaar/service"
+	commonResponse "go-backend/internal/common/response"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+)
+
+// WallpaperHandler handles HTTP requests for wallpaper operations
+type WallpaperHandler struct {
+	service         service.WallpaperService
+	r2ClientFactory *r2ConfigService.R2ClientFactory
+}
+
+// NewWallpaperHandler creates a new instance of WallpaperHandler
+func NewWallpaperHandler(service service.WallpaperService, r2ClientFactory *r2ConfigService.R2ClientFactory) *WallpaperHandler {
+	return &WallpaperHandler{
+		service:         service,
+		r2ClientFactory: r2ClientFactory,
+	}
+}
+
+// CreateWallpaper handles POST /api/v1/sanskaar/wallpapers
+func (h *WallpaperHandler) CreateWallpaper(c *gin.Context) {
+	var req models.CreateWallpaperRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	resp, err := h.service.Create(req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{"data": resp})
+}
+
+// GetWallpaper handles GET /api/v1/sanskaar/wallpapers/:id
+func (h *WallpaperHandler) GetWallpaper(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid wallpaper id"})
+		return
+	}
+
+	resp, err := h.service.GetByID(id)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if err.Error() == "wallpaper not found" {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": resp})
+}
+
+// UpdateWallpaper handles PUT /api/v1/sanskaar/wallpapers/:id
+func (h *WallpaperHandler) UpdateWallpaper(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid wallpaper id"})
+		return
+	}
+
+	var req models.UpdateWallpaperRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	resp, err := h.service.Update(id, req)
+	if err != nil {
+		status := http.StatusBadRequest
+		if err.Error() == "wallpaper not found" {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"data": resp})
+}
+
+// GetWallpaperList handles GET /api/v1/sanskaar/wallpapers
+func (h *WallpaperHandler) GetWallpaperList(c *gin.Context) {
+	page, pageSize := parsePageParams(c)
+	deity := c.Query("deity")
+
+	userCreatedAt, firstDayUnlockCount, dailyUnlockBatchSize, ok := parseEligibilityParams(c)
+	if !ok {
+		return
+	}
+
+	resp, err := h.service.List(deity, userCreatedAt, firstDayUnlockCount, dailyUnlockBatchSize, page, pageSize)
+	if err != nil {
+		commonResponse.Error(c, http.StatusInternalServerError, err, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
+// GetUploadURL handles POST /api/v1/sanskaar/wallpapers/upload-url
+func (h *WallpaperHandler) GetUploadURL(c *gin.Context) {
+	wallpaperUploadURL(c, h.r2ClientFactory)
+}

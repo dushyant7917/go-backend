@@ -9,4 +9,5 @@ const (
 	AppNameWomenPOV         = "WomenPOV"
 	AppNameTemplateDesigner = "TemplateDesigner"
 	AppNameJobsFeed         = "JobsFeed"
+	AppNameSanskaar         = "Sanskaar"
 )

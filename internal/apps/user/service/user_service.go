@@ -124,23 +124,26 @@ func (s *userService) UpdateUser(id uuid.UUID, req models.UpdateUserRequest) (*m
 		return nil, err
 	}
 
-	// Check if we need to delete old profile picture
-	var oldProfilePictureKey string
-	var needsFileDeletion bool
-	if req.Metadata != nil {
+	// Check if we need to delete any old pictures (DailyStory's top-level profile_picture_key,
+	// Sanskaar's nested status_data.picture_key) that a metadata update is about to replace.
+	var oldPictureKeysToDelete []string
+	if req.Metadata != nil && user.Metadata != nil {
 		if newKey, exists := req.Metadata["profile_picture_key"]; exists {
-			// Extract old profile picture key from current metadata
-			if user.Metadata != nil {
-				if oldKey, ok := user.Metadata["profile_picture_key"].(string); ok && oldKey != "" {
-					// Only delete if keys are different
-					if newKey != oldKey {
-						oldProfilePictureKey = oldKey
-						needsFileDeletion = true
+			if oldKey, ok := user.Metadata["profile_picture_key"].(string); ok && oldKey != "" && newKey != oldKey {
+				oldPictureKeysToDelete = append(oldPictureKeysToDelete, oldKey)
+			}
+		}
+		if newStatusData, ok := req.Metadata["status_data"].(map[string]interface{}); ok {
+			if newKey, exists := newStatusData["picture_key"]; exists {
+				if existingStatusData, ok := user.Metadata["status_data"].(map[string]interface{}); ok {
+					if oldKey, ok := existingStatusData["picture_key"].(string); ok && oldKey != "" && newKey != oldKey {
+						oldPictureKeysToDelete = append(oldPictureKeysToDelete, oldKey)
 					}
 				}
 			}
 		}
 	}
+	needsFileDeletion := len(oldPictureKeysToDelete) > 0
 
 	// If profile picture deletion is needed, use atomic transaction
 	if needsFileDeletion {
@@ -174,10 +177,12 @@ func (s *userService) UpdateUser(id uuid.UUID, req models.UpdateUserRequest) (*m
 				return err // DB update failed, transaction will auto-rollback
 			}
 
-			// Step 2: DB update succeeded, now delete old file from R2
-			if err := r2Client.DeleteFile(bucketName, oldProfilePictureKey); err != nil {
-				// R2 deletion failed, return error to trigger transaction rollback
-				return errors.New("failed to delete old profile picture: " + err.Error())
+			// Step 2: DB update succeeded, now delete old file(s) from R2
+			for _, oldKey := range oldPictureKeysToDelete {
+				if err := r2Client.DeleteFile(bucketName, oldKey); err != nil {
+					// R2 deletion failed, return error to trigger transaction rollback
+					return errors.New("failed to delete old picture: " + err.Error())
+				}
 			}
 
 			// Both operations succeeded, commit transaction
@@ -218,6 +223,8 @@ func (s *userService) getBucketNameForApp(appName string) string {
 	case "dailystory", "dailystoryapp":
 		// Return the existing users bucket for DailyStory app
 		return os.Getenv("R2_DS_USERS_BUCKET_NAME")
+	case "sanskaar":
+		return os.Getenv("R2_SANSKAAR_BUCKET_NAME")
 	default:
 		// Return empty string for unknown apps (no deletion will occur)
 		return ""
@@ -231,6 +238,8 @@ func (s *userService) getR2AppName(appName string) string {
 	switch normalizedAppName {
 	case "dailystory", "dailystoryapp":
 		return constants.AppNameDailyStory
+	case "sanskaar":
+		return constants.AppNameSanskaar
 	default:
 		return appName
 	}
@@ -259,15 +268,30 @@ func applyUserUpdates(user *models.User, req models.UpdateUserRequest) error {
 		user.AppName = trimmed
 	}
 	// Merge metadata if provided (partial update)
-	if req.Metadata != nil && len(req.Metadata) > 0 {
+	if len(req.Metadata) > 0 {
 		if user.Metadata == nil {
 			user.Metadata = make(utils.Metadata)
 		}
-		for key, value := range req.Metadata {
-			user.Metadata[key] = value
-		}
+		mergeMetadataValue(user.Metadata, req.Metadata)
 	}
 	return nil
+}
+
+// mergeMetadataValue merges src into dst in place. When both the existing and incoming value for
+// a key are JSON objects, they're merged key-by-key (recursively) instead of one replacing the
+// other outright; any other value type is simply overwritten, same as before. This matters for
+// nested metadata namespaces like status_data (see Sanskaar's status_data.picture_key) where a
+// partial update should only touch the one nested key it sends, not wipe its siblings.
+func mergeMetadataValue(dst, src map[string]interface{}) {
+	for key, srcVal := range src {
+		if srcMap, ok := srcVal.(map[string]interface{}); ok {
+			if dstMap, ok := dst[key].(map[string]interface{}); ok {
+				mergeMetadataValue(dstMap, srcMap)
+				continue
+			}
+		}
+		dst[key] = srcVal
+	}
 }
 
 // ListAllUsersPaginated retrieves all users with pagination and optional app_name filter

@@ -55,3 +55,9 @@ scripts/generate_reel_hooks/kannada.json
 scripts/generate_reel_hooks/marathi.json
 scripts/generate_reel_hooks/tamil.json
 scripts/generate_reel_hooks/telugu.json
+# Temporary scripts
+scripts/upload_sanskaar_audio/
+scripts/upload_sanskaar_statuses/
+scripts/upload_sanskaar_wallpapers/
+scripts/generate_thumbnails/
+scripts/generate_deity_posters/

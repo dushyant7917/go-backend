@@ -14,6 +14,7 @@ import (
 	r2ConfigService "go-backend/internal/apps/r2/config/service"
 	"go-backend/internal/common/constants"
 	commonResponse "go-backend/internal/common/response"
+	"go-backend/internal/common/uploadurl"
 	"go-backend/pkg/utils"
 
 	"github.com/gin-gonic/gin"
@@ -191,34 +192,13 @@ func (h *ImageTemplateHandler) GetUploadURL(c *gin.Context) {
 	timestamp := time.Now().UTC().Unix()
 	fileKey := fmt.Sprintf("images/%s_%d%s", filenameWithoutExt, timestamp, ext)
 
-	// Get bucket name from environment
-	bucketName := os.Getenv("R2_DS_TEMPLATES_BUCKET_NAME")
-	if bucketName == "" {
-		commonResponse.Error(c, http.StatusInternalServerError, nil, "R2 bucket configuration missing")
-		return
-	}
-
-	// Get R2 client dynamically from database config
-	r2Client, err := h.r2ClientFactory.GetClient(constants.AppNameDailyStory)
-	if err != nil {
-		commonResponse.Error(c, http.StatusInternalServerError, err, "R2 configuration not found for dailystory app")
-		return
-	}
-
-	// Generate presigned upload URL (valid for 5 minutes)
-	presignedURL, err := r2Client.GetPresignedUploadURL(bucketName, fileKey, contentType, 5)
-	if err != nil {
-		commonResponse.Error(c, http.StatusInternalServerError, err, "Failed to generate upload URL")
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"presigned_url": presignedURL,
-		"file_key":      fileKey,
-		"upload_headers": gin.H{
-			"Content-Type": contentType,
-		},
-		"instructions": fmt.Sprintf("MUST send Content-Type: %s header when uploading. The presigned URL signature requires this exact header.", contentType),
+	uploadurl.Respond(c, h.r2ClientFactory, uploadurl.Request{
+		AppName:           constants.AppNameDailyStory,
+		AppLabel:          "dailystory",
+		BucketEnvVar:      "R2_DS_TEMPLATES_BUCKET_NAME",
+		FileKey:           fileKey,
+		ContentType:       contentType,
+		ExpirationMinutes: 5,
 	})
 }
 

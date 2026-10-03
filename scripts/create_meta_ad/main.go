@@ -26,7 +26,28 @@ const (
 
 	groupingShared = "shared"
 	groupingUnique = "unique"
+
+	// targetActiveAds is the max number of adsets/ads a campaign should have live or
+	// headed live at once (see isCountedAdsetStatus below).
+	targetActiveAds = 5
 )
+
+// stoppedAdsetStatuses are effective_status values that mean an adset's ad is not
+// running and never will without manual intervention (paused, deleted, archived, or
+// rejected) — everything else (ACTIVE, SCHEDULED, PENDING_REVIEW, IN_PROCESS, etc.)
+// counts toward the active-ad quota since it's either delivering or on track to.
+var stoppedAdsetStatuses = map[string]bool{
+	"PAUSED":          true,
+	"DELETED":         true,
+	"ARCHIVED":        true,
+	"DISAPPROVED":     true,
+	"CAMPAIGN_PAUSED": true,
+	"ADSET_PAUSED":    true,
+}
+
+func isCountedAdsetStatus(status string) bool {
+	return !stoppedAdsetStatuses[status]
+}
 
 type videoAsset struct {
 	videoID   string
@@ -197,11 +218,11 @@ func main() {
 		activeCount := 0
 		for _, a := range adsets {
 			existingAdsets[strings.ToLower(a.Name)] = a.ID
-			if a.EffectiveStatus == "ACTIVE" {
+			if isCountedAdsetStatus(a.EffectiveStatus) {
 				activeCount++
 			}
 		}
-		log.Printf("[%s] found %d existing adset(s) in campaign %s, %d active", lang, len(adsets), campID, activeCount)
+		log.Printf("[%s] found %d existing adset(s) in campaign %s, %d active/scheduled/processing", lang, len(adsets), campID, activeCount)
 
 		var selectedSlugs []string
 		if *slugsFlag != "" {
@@ -217,8 +238,8 @@ func main() {
 		} else {
 			selectedSlugs = selectSlugs(lang, orderedSlugs, activeCount, existingAdsets, videosPath, *videoGrouping)
 			if len(selectedSlugs) == 0 {
-				if activeCount >= 10 {
-					log.Printf("[%s] campaign has %d active adset(s) (>=10), no action needed", lang, activeCount)
+				if activeCount >= targetActiveAds {
+					log.Printf("[%s] campaign has %d active/scheduled/processing adset(s) (>=%d), no action needed", lang, activeCount, targetActiveAds)
 				} else {
 					log.Printf("[%s] no not-yet-started slugs available to fill quota (active=%d)", lang, activeCount)
 				}
@@ -690,12 +711,12 @@ func slugNotStarted(slug string, existingAdsets map[string]string, videosPath, v
 
 // selectSlugs walks orderedSlugs (in file order) and returns up to a quota-limited
 // number of not-yet-started slugs, sized to bring the campaign's active adset count
-// up to a target of 10 (e.g. 0 active -> up to 10 slugs, 3 active -> up to 7 slugs,
-// >=10 -> none). Slugs with no matching video files are logged and skipped over so
-// the quota can still be filled from later slugs.
+// up to a target of targetActiveAds (e.g. 0 active -> up to targetActiveAds slugs, 3
+// active -> up to targetActiveAds-3 slugs, >=targetActiveAds -> none). Slugs with no
+// matching video files are logged and skipped over so the quota can still be filled
+// from later slugs.
 func selectSlugs(lang string, orderedSlugs []string, activeCount int, existingAdsets map[string]string, videosPath, videoGrouping string) []string {
-	const targetActive = 10
-	quota := targetActive - activeCount
+	quota := targetActiveAds - activeCount
 	if quota < 0 {
 		quota = 0
 	}
