@@ -29,7 +29,7 @@ const (
 
 	// targetActiveAds is the max number of adsets/ads a campaign should have live or
 	// headed live at once (see isCountedAdsetStatus below).
-	targetActiveAds = 5
+	targetActiveAds = 6
 )
 
 // stoppedAdsetStatuses are effective_status values that mean an adset's ad is not
