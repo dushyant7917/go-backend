@@ -142,9 +142,12 @@ jobs:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_SSL_MODE: ${{ secrets.DB_SSL_MODE }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
-          MODAL_ENQUEUE_URL: ${{ secrets.MODAL_ENQUEUE_URL }}
-          MODAL_PROXY_AUTH_TOKEN_ID: ${{ secrets.MODAL_PROXY_AUTH_TOKEN_ID }}
-          MODAL_PROXY_AUTH_TOKEN_SECRET: ${{ secrets.MODAL_PROXY_AUTH_TOKEN_SECRET }}
+          MODAL_ENQUEUE_URL_1: ${{ secrets.MODAL_ENQUEUE_URL_1 }}
+          MODAL_PROXY_AUTH_TOKEN_ID_1: ${{ secrets.MODAL_PROXY_AUTH_TOKEN_ID_1 }}
+          MODAL_PROXY_AUTH_TOKEN_SECRET_1: ${{ secrets.MODAL_PROXY_AUTH_TOKEN_SECRET_1 }}
+          MODAL_ENQUEUE_URL_2: ${{ secrets.MODAL_ENQUEUE_URL_2 }}
+          MODAL_PROXY_AUTH_TOKEN_ID_2: ${{ secrets.MODAL_PROXY_AUTH_TOKEN_ID_2 }}
+          MODAL_PROXY_AUTH_TOKEN_SECRET_2: ${{ secrets.MODAL_PROXY_AUTH_TOKEN_SECRET_2 }}
         run: |
           cd cron-jobs/generate_news_media
           go run main.go

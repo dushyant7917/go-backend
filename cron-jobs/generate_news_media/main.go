@@ -23,6 +23,10 @@ const (
 	enqueueChunkSize = 64
 	maxRetries       = 3
 	retryBaseDelay   = 2 * time.Second
+
+	// Runs before this hour (IST) use the *_1 Modal credentials, later runs use *_2.
+	modalSwitchHourIST = 12
+	istOffsetSeconds   = 5*3600 + 30*60
 )
 
 type newsItem struct {
@@ -39,14 +43,21 @@ func main() {
 		}
 	}
 
-	enqueueURL := utils.GetEnv("MODAL_ENQUEUE_URL", "")
+	suffix := modalEnvSuffix(time.Now())
+	log.Printf("using Modal env set %s", suffix)
+
+	enqueueURLVar := "MODAL_ENQUEUE_URL" + suffix
+	modalKeyVar := "MODAL_PROXY_AUTH_TOKEN_ID" + suffix
+	modalSecretVar := "MODAL_PROXY_AUTH_TOKEN_SECRET" + suffix
+
+	enqueueURL := utils.GetEnv(enqueueURLVar, "")
 	if enqueueURL == "" {
-		log.Fatal("MODAL_ENQUEUE_URL is required")
+		log.Fatalf("%s is required", enqueueURLVar)
 	}
-	modalKey := utils.GetEnv("MODAL_PROXY_AUTH_TOKEN_ID", "")
-	modalSecret := utils.GetEnv("MODAL_PROXY_AUTH_TOKEN_SECRET", "")
+	modalKey := utils.GetEnv(modalKeyVar, "")
+	modalSecret := utils.GetEnv(modalSecretVar, "")
 	if modalKey == "" || modalSecret == "" {
-		log.Fatal("MODAL_PROXY_AUTH_TOKEN_ID and MODAL_PROXY_AUTH_TOKEN_SECRET are required")
+		log.Fatalf("%s and %s are required", modalKeyVar, modalSecretVar)
 	}
 
 	dbConfig := database.Config{
@@ -98,6 +109,15 @@ func main() {
 
 	wg.Wait()
 	log.Printf("done: submitted=%d failed=%d", len(items)-failed, failed)
+}
+
+// modalEnvSuffix returns "_1" for runs before modalSwitchHourIST and "_2" for runs at or after it.
+func modalEnvSuffix(now time.Time) string {
+	ist := time.FixedZone("IST", istOffsetSeconds)
+	if now.In(ist).Hour() < modalSwitchHourIST {
+		return "_1"
+	}
+	return "_2"
 }
 
 func fetchNewsWithoutMedia(db *gorm.DB) ([]newsItem, error) {
