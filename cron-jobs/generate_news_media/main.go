@@ -24,10 +24,25 @@ const (
 	maxRetries       = 3
 	retryBaseDelay   = 2 * time.Second
 
-	// Runs before this hour (IST) use the *_1 Modal credentials, later runs use *_2.
-	modalSwitchHourIST = 12
-	istOffsetSeconds   = 5*3600 + 30*60
+	istOffsetSeconds = 5*3600 + 30*60
 )
+
+var istZone = time.FixedZone("IST", istOffsetSeconds)
+
+// modalWindow maps an IST hour range [startHour, endHour) to a Modal env var suffix.
+type modalWindow struct {
+	startHour int
+	endHour   int
+	suffix    string
+}
+
+// Runs outside all of these windows fail rather than fall back to a credential set.
+var modalWindows = []modalWindow{
+	{6, 9, "_1"},
+	{9, 12, "_2"},
+	{12, 14, "_3"},
+	{14, 17, "_4"},
+}
 
 type newsItem struct {
 	ID          string `json:"id"`
@@ -43,7 +58,13 @@ func main() {
 		}
 	}
 
-	suffix := modalEnvSuffix(time.Now())
+	now := time.Now()
+	suffix, ok := modalEnvSuffix(now)
+	if !ok {
+		log.Fatalf("run time %s is outside all Modal windows (%02d:00-%02d:00 IST), aborting",
+			now.In(istZone).Format("15:04 MST"),
+			modalWindows[0].startHour, modalWindows[len(modalWindows)-1].endHour)
+	}
 	log.Printf("using Modal env set %s", suffix)
 
 	enqueueURLVar := "MODAL_ENQUEUE_URL" + suffix
@@ -111,13 +132,16 @@ func main() {
 	log.Printf("done: submitted=%d failed=%d", len(items)-failed, failed)
 }
 
-// modalEnvSuffix returns "_1" for runs before modalSwitchHourIST and "_2" for runs at or after it.
-func modalEnvSuffix(now time.Time) string {
-	ist := time.FixedZone("IST", istOffsetSeconds)
-	if now.In(ist).Hour() < modalSwitchHourIST {
-		return "_1"
+// modalEnvSuffix returns the env var suffix for the IST window containing now
+// (start inclusive, end exclusive), or false if now falls outside every window.
+func modalEnvSuffix(now time.Time) (string, bool) {
+	hour := now.In(istZone).Hour()
+	for _, w := range modalWindows {
+		if hour >= w.startHour && hour < w.endHour {
+			return w.suffix, true
+		}
 	}
-	return "_2"
+	return "", false
 }
 
 func fetchNewsWithoutMedia(db *gorm.DB) ([]newsItem, error) {
