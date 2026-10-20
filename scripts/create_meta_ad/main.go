@@ -77,7 +77,7 @@ func main() {
 	langStates := map[string][]string{
 		"Hindi": {
 			"Himachal Pradesh", "Uttarakhand", "Haryana", "Delhi", "Uttar Pradesh",
-			"Bihar", "Jharkhand", "Rajasthan", "Madhya Pradesh", "Chhattisgarh", "Maharashtra", "Gujarat", "West Bengal",
+			"Bihar", "Jharkhand", "Rajasthan", "Madhya Pradesh", "Chhattisgarh",
 		},
 		"Tamil":    {"Tamil Nadu"},
 		"Marathi":  {"Maharashtra"},
