@@ -19,8 +19,11 @@ import (
 
 const (
 	targetAppName = "DailyStoryApp"
-	userAgeDays   = 20
 	batchSize     = 10
+
+	// Eligibility windows (in days)
+	newUserWindowDays          = 7 // users created within this window with no active subscription
+	lapsedSubscriberWindowDays = 7 // users whose recurring payment was cancelled/expired within this window
 
 	// Notification delivery window: now+1h – 9pm IST (3:30pm UTC)
 	windowEndHourUTC   = 15
@@ -142,7 +145,7 @@ func main() {
 
 	userRepo := repository.NewUserRepository(db)
 
-	users, err := userRepo.FindUsersEligibleForPushNotification(targetAppName, userAgeDays)
+	users, err := userRepo.FindUsersEligibleForPushNotification(targetAppName, newUserWindowDays, lapsedSubscriberWindowDays)
 	if err != nil {
 		log.Fatalf("[%s] ✗ Failed to find eligible users: %v\n", timestamp, err)
 	}

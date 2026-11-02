@@ -22,7 +22,7 @@ type UserRepository interface {
 	GetUserCountByDay(appName string, days, page, pageSize int) ([]models.UserDailyCountResponse, int64, error)
 	FindByApp(appName string) ([]models.User, error)
 	FindRecentUsers(appName string, days int) ([]models.User, error)
-	FindUsersEligibleForPushNotification(appName string, days int) ([]models.User, error)
+	FindUsersEligibleForPushNotification(appName string, newUserDays, lapsedSubscriberDays int) ([]models.User, error)
 }
 
 // userRepository implements UserRepository
@@ -151,11 +151,13 @@ func (r *userRepository) FindByApp(appName string) ([]models.User, error) {
 }
 
 // FindUsersEligibleForPushNotification retrieves users who match either:
-//   - created within the last N days, have a push token, and have no active subscription or recurring payment, OR
-//   - have a recurring payment with status 'cancelled' or 'expired' updated within the last N days
-func (r *userRepository) FindUsersEligibleForPushNotification(appName string, days int) ([]models.User, error) {
+//   - created within the last newUserDays days, have a push token, and have no active subscription or recurring payment, OR
+//   - have a recurring payment with status 'cancelled' or 'expired' updated within the last lapsedSubscriberDays days
+func (r *userRepository) FindUsersEligibleForPushNotification(appName string, newUserDays, lapsedSubscriberDays int) ([]models.User, error) {
 	var users []models.User
-	since := time.Now().AddDate(0, 0, -days)
+	now := time.Now()
+	newUserSince := now.AddDate(0, 0, -newUserDays)
+	lapsedSince := now.AddDate(0, 0, -lapsedSubscriberDays)
 
 	err := r.db.Where(
 		"app_name = ? AND metadata ? 'push_notification_token'",
@@ -168,7 +170,7 @@ func (r *userRepository) FindUsersEligibleForPushNotification(appName string, da
 		) OR (
 			EXISTS (SELECT 1 FROM recurring_payments WHERE recurring_payments.user_id = users.id AND recurring_payments.app_name = ? AND recurring_payments.status IN ('cancelled', 'expired') AND recurring_payments.updated_at >= ? AND recurring_payments.deleted_at IS NULL)
 		)`,
-		since, appName, appName, appName, since,
+		newUserSince, appName, appName, appName, lapsedSince,
 	).Find(&users).Error
 
 	if err != nil {
