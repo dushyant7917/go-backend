@@ -3,7 +3,7 @@ package handler
 import "github.com/gin-gonic/gin"
 
 // RegisterSanskaarRoutes registers all Sanskaar routes (devotional music, tones, wallpapers,
-// statuses, status pictures) onto the given router group.
+// statuses, status pictures, Hindu calendar events) onto the given router group.
 func RegisterSanskaarRoutes(
 	router *gin.RouterGroup,
 	devotionalMusicH *DevotionalMusicHandler,
@@ -12,6 +12,7 @@ func RegisterSanskaarRoutes(
 	statusH *StatusHandler,
 	statusPictureH *StatusPictureHandler,
 	userStatusH *UserStatusHandler,
+	hinduEventH *HinduEventHandler,
 ) {
 	sanskaar := router.Group("/sanskaar")
 	{
@@ -52,6 +53,14 @@ func RegisterSanskaarRoutes(
 			statuses.GET("", statusH.GetStatusList)
 			statuses.GET("/:id", statusH.GetStatus)
 			statuses.PUT("/:id", statusH.UpdateStatus)
+		}
+
+		// Read-only Hindu calendar (embedded JSON data); language_code is required on every route
+		hinduEvents := sanskaar.Group("/hindu-events")
+		{
+			hinduEvents.GET("/today-or-upcoming", hinduEventH.GetTodayOrUpcoming)
+			hinduEvents.GET("", hinduEventH.GetList)
+			hinduEvents.GET("/:id", hinduEventH.GetByID)
 		}
 
 		statusPicture := sanskaar.Group("/status-picture")

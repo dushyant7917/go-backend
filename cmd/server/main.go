@@ -44,6 +44,7 @@ import (
 	referralRepository "go-backend/internal/apps/referral/repository"
 	referralService "go-backend/internal/apps/referral/service"
 	sanskaarHandler "go-backend/internal/apps/sanskaar/handler"
+	"go-backend/internal/apps/sanskaar/hinducalendar"
 	sanskaarRepository "go-backend/internal/apps/sanskaar/repository"
 	sanskaarService "go-backend/internal/apps/sanskaar/service"
 	userHandler "go-backend/internal/apps/user/handler"
@@ -258,6 +259,10 @@ func main() {
 
 	statusPictureH := sanskaarHandler.NewStatusPictureHandler(r2ClientFactory, sanskaarPublicURLBase)
 
+	// Hindu calendar events: static data embedded in the binary (no DB), validated at startup.
+	hinduEventSvc := sanskaarService.NewHinduEventService(hinducalendar.MustLoad(), sanskaarPublicURLBase, time.Now)
+	hinduEventH := sanskaarHandler.NewHinduEventHandler(hinduEventSvc)
+
 	// Sanskaar is new, so its status considers only the unified autopay system, never the old Razorpay tables.
 	sanskaarStatusChecker := subscriptionstatus.NewChecker(
 		subscriptionstatus.Gateway{Name: "autopay", Repo: autopayRepo},
@@ -365,7 +370,7 @@ func main() {
 		metaEventHandler.RegisterMetaEventRoutes(v1, metaEventH)
 
 		// Register Sanskaar routes
-		sanskaarHandler.RegisterSanskaarRoutes(v1, devotionalMusicH, toneH, wallpaperH, statusH, statusPictureH, sanskaarUserStatusH)
+		sanskaarHandler.RegisterSanskaarRoutes(v1, devotionalMusicH, toneH, wallpaperH, statusH, statusPictureH, sanskaarUserStatusH, hinduEventH)
 
 		// Future apps can register their routes here
 		// Example: handler.RegisterUserRoutes(v1, userHandler)
