@@ -28,6 +28,7 @@ import (
 	repo "go-backend/internal/apps/razorpay/recurring_payment/repository"
 	userModels "go-backend/internal/apps/user/models"
 	userRepo "go-backend/internal/apps/user/repository"
+	"go-backend/internal/common/billingwindow"
 	"go-backend/internal/common/constants"
 
 	"go-backend/pkg/analytics"
@@ -563,12 +564,12 @@ func (s *recurringPaymentService) CreateAuthorizationOrder(req models.CreateAuth
 		return nil, errors.New("razorpay config is not active")
 	}
 
-	// Validate StartAt is at least 45 hours in the future
-	// ProcessNewBillingCycles cron looks for next_charge_at in 25-50 hour window
+	// Validate StartAt is far enough in the future (billingwindow.MinAuthLead).
+	// ProcessNewBillingCycles cron looks for next_charge_at inside the billingwindow notice window.
 	// If StartAt is too close, the cron will miss creating the first billing cycle
-	minStartAt := time.Now().UTC().Add(45 * time.Hour)
+	minStartAt := time.Now().UTC().Add(billingwindow.MinAuthLead)
 	if req.StartAt.Before(minStartAt) {
-		return nil, fmt.Errorf("start_at must be at least 45 hours in the future")
+		return nil, fmt.Errorf("start_at must be at least %.0f hours in the future", billingwindow.MinAuthLead.Hours())
 	}
 
 	// Validate authorization_amount <= max_amount (Razorpay requirement for UPI recurring)
@@ -639,10 +640,10 @@ func (s *recurringPaymentService) CreateRegistrationLink(req models.CreateRegist
 		return nil, errors.New("razorpay config is not active")
 	}
 
-	// Validate StartAt is at least 45 hours in the future
-	minStartAt := time.Now().UTC().Add(45 * time.Hour)
+	// Validate StartAt is far enough in the future (billingwindow.MinAuthLead)
+	minStartAt := time.Now().UTC().Add(billingwindow.MinAuthLead)
 	if req.StartAt.Before(minStartAt) {
-		return nil, fmt.Errorf("start_at must be at least 45 hours in the future")
+		return nil, fmt.Errorf("start_at must be at least %.0f hours in the future", billingwindow.MinAuthLead.Hours())
 	}
 
 	// Validate authorization_amount <= max_amount (Razorpay requirement for UPI recurring)
@@ -1675,9 +1676,7 @@ func extractTokenIDFromPaymentEntity(paymentEntity map[string]interface{}) (stri
 func (s *recurringPaymentService) RetryFailedBillingCycles() error {
 	fmt.Printf("[RetryFailedBillingCycles] Starting\n")
 
-	now := time.Now().UTC()
-	windowStart := now.Add(25 * time.Hour)
-	windowEnd := now.Add(50 * time.Hour)
+	windowStart, windowEnd := billingwindow.Bounds(time.Now().UTC())
 
 	recurringPayments, err := s.repo.FindRecurringPaymentsForRetry(windowStart, windowEnd)
 	if err != nil {
@@ -1694,9 +1693,7 @@ func (s *recurringPaymentService) RetryFailedBillingCycles() error {
 func (s *recurringPaymentService) ProcessNewBillingCycles() error {
 	fmt.Printf("[SendPreDebitNotifications] Starting\n")
 
-	now := time.Now().UTC()
-	windowStart := now.Add(25 * time.Hour)
-	windowEnd := now.Add(50 * time.Hour)
+	windowStart, windowEnd := billingwindow.Bounds(time.Now().UTC())
 
 	recurringPayments, err := s.repo.FindRecurringPaymentsForNewBillingCycle(windowStart, windowEnd)
 	if err != nil {
@@ -1739,6 +1736,14 @@ func (s *recurringPaymentService) processPendingBillingCycleRetry(rp models.Recu
 	}
 
 	razorpayClient := s.getRazorpayClient(config)
+
+	// A retry that is already due (a missed night) or due within the minimum notice cannot be debited before the
+	// customer's notice has aged billingwindow.Min. The new time is persisted with the attempt (createRetryDBRecords)
+	// so Cron C waits for it too.
+	if bc.NextAttemptAt != nil {
+		debitAt := billingwindow.EarliestDebit(time.Now().UTC(), *bc.NextAttemptAt)
+		bc.NextAttemptAt = &debitAt
+	}
 
 	newChargeAttempts := bc.ChargeAttempts + 1
 	user, err := s.userRepo.FindByID(rp.UserID)
@@ -1915,13 +1920,19 @@ func (s *recurringPaymentService) processNewBillingCycleForPayment(rp models.Rec
 	if err != nil {
 		return fmt.Errorf("failed to find user: %w", err)
 	}
-	orderID, err := s.createNewCycleOrder(razorpayClient, &rp, nextCycleNumber, amount, user)
+	// The order's payment_after and the cycle's next_attempt_at are never sooner than billingwindow.Min after the
+	// notice, even for a charge time that is already due (a missed night); the billing date (start_at) is unchanged.
+	if rp.NextChargeAt == nil {
+		return fmt.Errorf("recurring payment next_charge_at is nil")
+	}
+	debitAt := billingwindow.EarliestDebit(time.Now().UTC(), *rp.NextChargeAt)
+	orderID, err := s.createNewCycleOrder(razorpayClient, &rp, nextCycleNumber, amount, debitAt, user)
 	if err != nil {
 		errorInfo := extractRazorpayError(err)
 		return s.handleOrderCreationError(err, &rp, errorInfo.Code)
 	}
 
-	if err := s.createNewCycleDBRecords(&rp, orderID, nextCycleNumber, amount, endAt); err != nil {
+	if err := s.createNewCycleDBRecords(&rp, orderID, nextCycleNumber, amount, endAt, debitAt); err != nil {
 		return err
 	}
 
@@ -1937,6 +1948,7 @@ func (s *recurringPaymentService) createNewCycleOrder(
 	rp *models.RecurringPayment,
 	cycleNumber int,
 	amount int64,
+	debitAt time.Time,
 	user *userModels.User,
 ) (string, error) {
 	// Nil check to prevent panic
@@ -1950,7 +1962,7 @@ func (s *recurringPaymentService) createNewCycleOrder(
 		"payment_capture": true,
 		"notification": map[string]interface{}{
 			"token_id":      rp.TokenID,
-			"payment_after": rp.NextChargeAt.Unix(),
+			"payment_after": debitAt.Unix(),
 		},
 		"notes": map[string]interface{}{
 			"recurring_payment_id": rp.ID.String(),
@@ -1984,6 +1996,7 @@ func (s *recurringPaymentService) createNewCycleDBRecords(
 	cycleNumber int,
 	amount int64,
 	endAt time.Time,
+	debitAt time.Time,
 ) error {
 	tx := s.repo.BeginTransaction()
 
@@ -2001,7 +2014,7 @@ func (s *recurringPaymentService) createNewCycleDBRecords(
 		Amount:             amount,
 		Status:             models.BillingCycleStatusPending,
 		ChargeAttempts:     1,
-		NextAttemptAt:      rp.NextChargeAt,
+		NextAttemptAt:      &debitAt,
 		Metadata:           make(utils.Metadata),
 	}
 	if err := s.repo.CreateBillingCycle(tx, billingCycle); err != nil {
@@ -3046,8 +3059,8 @@ func (s *recurringPaymentService) CreateOneTimePaymentLink(req models.CreateOneT
 
 	contact := "+" + *user.CountryCode + *user.Phone
 	linkData := map[string]interface{}{
-		"amount":   req.Amount,
-		"currency": "INR",
+		"amount":      req.Amount,
+		"currency":    "INR",
 		"description": "One-time Payment",
 		"customer": map[string]interface{}{
 			"email":   *user.Email,

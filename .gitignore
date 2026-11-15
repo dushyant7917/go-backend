@@ -62,4 +62,5 @@ scripts/upload_sanskaar_wallpapers/
 scripts/generate_thumbnails/
 scripts/generate_deity_posters/
 scripts/generate_openai_image/
+scripts/reschedule_missed_billing_cycles/
 .claude/skills/

@@ -25,31 +25,48 @@ type referralBonusResult struct {
 }
 
 // GetPendingReferralBonus finds, for each distinct user referred by referralCode, one qualifying
-// paid billing cycle created in the current calendar month: either cycle_number = 1, or
+// paid billing cycle (old Razorpay stack or the unified autopay system) created in the current calendar month: either cycle_number = 1, or
 // cycle_number = 0 (authorization) with an amount of at least 9900. Each qualifying user
 // contributes a flat bonus of 100 if that cycle's amount is at least 69900, else 20.
 // Each user counts at most once even if duplicate qualifying billing cycles exist.
 func (r *referralRepository) GetPendingReferralBonus(appName, referralCode string) (int64, int, error) {
 	var result referralBonusResult
 
+	// Old-Razorpay and unified autopay billing cycles are considered together so a user referred through either
+	// system (any gateway) counts exactly once.
 	err := r.db.Raw(`
 		SELECT COUNT(*) AS referral_count,
 		       COALESCE(SUM(CASE WHEN amount >= 69900 THEN 100 ELSE 20 END), 0) AS total_amount
 		FROM (
-			SELECT DISTINCT ON (u.id) u.id AS user_id, bc.amount
-			FROM billing_cycles bc
-			JOIN recurring_payments rp ON rp.id = bc.recurring_payment_id AND rp.deleted_at IS NULL
-			JOIN users u ON u.id = rp.user_id AND u.deleted_at IS NULL
-			WHERE u.app_name = ?
-			  AND rp.app_name = ?
-			  AND u.metadata->>'referral_code' = ?
-			  AND bc.status = 'paid'
-			  AND (bc.cycle_number = 1 OR (bc.cycle_number = 0 AND bc.amount >= 9900))
-			  AND bc.created_at >= date_trunc('month', now())
-			  AND bc.created_at < date_trunc('month', now()) + interval '1 month'
-			ORDER BY u.id, bc.created_at ASC
+			SELECT DISTINCT ON (user_id) user_id, amount
+			FROM (
+				SELECT u.id AS user_id, bc.amount, bc.created_at
+				FROM billing_cycles bc
+				JOIN recurring_payments rp ON rp.id = bc.recurring_payment_id AND rp.deleted_at IS NULL
+				JOIN users u ON u.id = rp.user_id AND u.deleted_at IS NULL
+				WHERE u.app_name = ?
+				  AND rp.app_name = ?
+				  AND u.metadata->>'referral_code' = ?
+				  AND bc.status = 'paid'
+				  AND (bc.cycle_number = 1 OR (bc.cycle_number = 0 AND bc.amount >= 9900))
+				  AND bc.created_at >= date_trunc('month', now())
+				  AND bc.created_at < date_trunc('month', now()) + interval '1 month'
+				UNION ALL
+				SELECT u.id AS user_id, bc.amount, bc.created_at
+				FROM autopay_billing_cycles bc
+				JOIN autopay_mandates am ON am.id = bc.autopay_mandate_id AND am.deleted_at IS NULL
+				JOIN users u ON u.id = am.user_id AND u.deleted_at IS NULL
+				WHERE u.app_name = ?
+				  AND am.app_name = ?
+				  AND u.metadata->>'referral_code' = ?
+				  AND bc.status = 'paid'
+				  AND (bc.cycle_number = 1 OR (bc.cycle_number = 0 AND bc.amount >= 9900))
+				  AND bc.created_at >= date_trunc('month', now())
+				  AND bc.created_at < date_trunc('month', now()) + interval '1 month'
+			) all_cycles
+			ORDER BY user_id, created_at ASC
 		) sub
-	`, appName, appName, referralCode).Scan(&result).Error
+	`, appName, appName, referralCode, appName, appName, referralCode).Scan(&result).Error
 
 	if err != nil {
 		return 0, 0, err

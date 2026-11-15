@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/smtp"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -23,6 +24,7 @@ const reportRecipient = "devesh.product.launchpad@gmail.com"
 
 // cancelledRow is a single row of the "cancelled subscriptions" report.
 type cancelledRow struct {
+	Gateway        string
 	Phone          *string
 	CountryCode    *string
 	PaidFirstCycle bool
@@ -35,6 +37,54 @@ type orphanOTPRow struct {
 	Phone       string
 	CountryCode string
 }
+
+// cancelledQuery lists mandates cancelled in the last 20 hours across all payment gateways
+// (old Razorpay: recurring_payments/billing_cycles, and the unified autopay_* tables for every gateway, whose name comes from
+// payment_gateway_configs). Takes the app name twice.
+const cancelledQuery = `
+	SELECT gateway, phone, country_code, paid_first_cycle, created_at, updated_at
+	FROM (
+		SELECT
+			'Razorpay'     AS gateway,
+			u.phone        AS phone,
+			u.country_code AS country_code,
+			EXISTS (
+				SELECT 1 FROM billing_cycles bc
+				WHERE bc.recurring_payment_id = rp.id
+				  AND bc.cycle_number = 1
+				  AND bc.status = 'paid'
+			)              AS paid_first_cycle,
+			rp.created_at  AS created_at,
+			rp.updated_at  AS updated_at
+		FROM recurring_payments rp
+		JOIN users u ON u.id = rp.user_id
+		WHERE rp.app_name = ?
+		  AND rp.status   = 'cancelled'
+		  AND rp.updated_at >= NOW() - INTERVAL '20 hours'
+		  AND rp.deleted_at IS NULL
+		UNION ALL
+		SELECT
+			CASE cfg.gateway WHEN 'phonepe' THEN 'PhonePe' ELSE INITCAP(cfg.gateway) END AS gateway,
+			u.phone        AS phone,
+			u.country_code AS country_code,
+			EXISTS (
+				SELECT 1 FROM autopay_billing_cycles bc
+				WHERE bc.autopay_mandate_id = am.id
+				  AND bc.cycle_number = 1
+				  AND bc.status = 'paid'
+			)              AS paid_first_cycle,
+			am.created_at  AS created_at,
+			am.updated_at  AS updated_at
+		FROM autopay_mandates am
+		JOIN payment_gateway_configs cfg ON cfg.id = am.gateway_config_id
+		JOIN users u ON u.id = am.user_id
+		WHERE am.app_name = ?
+		  AND am.payment_type = 'recurring'
+		  AND am.status   = 'cancelled'
+		  AND am.updated_at >= NOW() - INTERVAL '20 hours'
+		  AND am.deleted_at IS NULL
+	) cancelled
+	ORDER BY updated_at DESC`
 
 func main() {
 	// 1. Load environment variables (.env.<GO_ENV> then .env fallback)
@@ -79,26 +129,7 @@ func main() {
 
 	// 3. Query 1 — subscriptions cancelled in the last 20 hours
 	var cancelled []cancelledRow
-	cancelledQuery := `
-		SELECT
-			u.phone        AS phone,
-			u.country_code AS country_code,
-			EXISTS (
-				SELECT 1 FROM billing_cycles bc
-				WHERE bc.recurring_payment_id = rp.id
-				  AND bc.cycle_number = 1
-				  AND bc.status = 'paid'
-			)              AS paid_first_cycle,
-			rp.created_at  AS created_at,
-			rp.updated_at  AS updated_at
-		FROM recurring_payments rp
-		JOIN users u ON u.id = rp.user_id
-		WHERE rp.app_name = ?
-		  AND rp.status   = 'cancelled'
-		  AND rp.updated_at >= NOW() - INTERVAL '20 hours'
-		  AND rp.deleted_at IS NULL
-		ORDER BY rp.updated_at DESC`
-	if err := db.Raw(cancelledQuery, constants.AppNameDailyStory).Scan(&cancelled).Error; err != nil {
+	if err := db.Raw(cancelledQuery, constants.AppNameDailyStory, constants.AppNameDailyStory).Scan(&cancelled).Error; err != nil {
 		log.Fatalf("[%s] ✗ Failed to query cancelled subscriptions: %v\n", ts(), err)
 	}
 	log.Printf("[%s] ✓ Cancelled subscriptions found: %d\n", ts(), len(cancelled))
@@ -159,13 +190,15 @@ func buildCancelledEmail(rows []cancelledRow, loc *time.Location) string {
 	}
 
 	headers := []string{
-		"User Phone", "Paid 1st Cycle",
+		"Gateway", "User Phone", "Paid 1st Cycle",
 		"Subscription Created", "Cancelled", "Days Active",
 	}
 
 	var paidCount, unpaidCount, within3Count, after3Count int
+	byGateway := map[string]int{}
 	cells := make([][]cell, 0, len(rows))
 	for _, r := range rows {
+		byGateway[r.Gateway]++
 		lifetime := r.UpdatedAt.Sub(r.CreatedAt)
 		days := int(lifetime.Hours() / 24)
 
@@ -183,6 +216,7 @@ func buildCancelledEmail(rows []cancelledRow, loc *time.Location) string {
 		}
 
 		cells = append(cells, []cell{
+			textCell(r.Gateway),
 			phoneCell(deref(r.CountryCode), deref(r.Phone)),
 			textCell(paid),
 			textCell(r.CreatedAt.In(loc).Format("2006-01-02 15:04")),
@@ -192,7 +226,7 @@ func buildCancelledEmail(rows []cancelledRow, loc *time.Location) string {
 	}
 
 	summary := []string{
-		fmt.Sprintf("Total cancellations: %d", len(rows)),
+		fmt.Sprintf("Total cancellations: %d (%s)", len(rows), gatewayBreakdown(byGateway)),
 		fmt.Sprintf("Paid 1st cycle: %d", paidCount),
 		fmt.Sprintf("Unpaid 1st cycle: %d", unpaidCount),
 		fmt.Sprintf("Cancelled within 3 days: %d", within3Count),
@@ -408,4 +442,24 @@ func mustEnv(key string) string {
 		log.Fatalf("required env var %s is not set", key)
 	}
 	return v
+}
+
+// gatewayBreakdown renders "Razorpay: 1, Cashfree: 2, PhonePe: 2": every gateway that has a cancellation, Razorpay
+// first and the rest alphabetically, so a new gateway shows up without a code change.
+func gatewayBreakdown(byGateway map[string]int) string {
+	names := make([]string, 0, len(byGateway))
+	for name := range byGateway {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if (names[i] == "Razorpay") != (names[j] == "Razorpay") {
+			return names[i] == "Razorpay"
+		}
+		return names[i] < names[j]
+	})
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, fmt.Sprintf("%s: %d", name, byGateway[name]))
+	}
+	return strings.Join(parts, ", ")
 }

@@ -4,13 +4,12 @@ import (
 	"errors"
 	"net/http"
 	"sync"
-	"time"
 
 	"go-backend/internal/apps/dailystory/models"
 	"go-backend/internal/apps/dailystory/service"
 	r2ConfigService "go-backend/internal/apps/r2/config/service"
-	recurringPaymentRepo "go-backend/internal/apps/razorpay/recurring_payment/repository"
 	commonResponse "go-backend/internal/common/response"
+	"go-backend/internal/common/subscriptionstatus"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -18,14 +17,14 @@ import (
 
 // NewsPosterHandler handles HTTP requests for news poster operations
 type NewsPosterHandler struct {
-	service              service.NewsPosterService
-	recurringPaymentRepo recurringPaymentRepo.RecurringPaymentRepository
-	r2ClientFactory      *r2ConfigService.R2ClientFactory
+	service         service.NewsPosterService
+	subscriptions   *subscriptionstatus.Checker
+	r2ClientFactory *r2ConfigService.R2ClientFactory
 }
 
 // NewNewsPosterHandler creates a new instance of NewsPosterHandler
-func NewNewsPosterHandler(service service.NewsPosterService, recurringPaymentRepo recurringPaymentRepo.RecurringPaymentRepository, r2ClientFactory *r2ConfigService.R2ClientFactory) *NewsPosterHandler {
-	return &NewsPosterHandler{service: service, recurringPaymentRepo: recurringPaymentRepo, r2ClientFactory: r2ClientFactory}
+func NewNewsPosterHandler(service service.NewsPosterService, subscriptions *subscriptionstatus.Checker, r2ClientFactory *r2ConfigService.R2ClientFactory) *NewsPosterHandler {
+	return &NewsPosterHandler{service: service, subscriptions: subscriptions, r2ClientFactory: r2ClientFactory}
 }
 
 // CreateNewsPoster handles POST /api/v1/dailystory/news-posters
@@ -85,7 +84,6 @@ func (h *NewsPosterHandler) GetNewsPosterPrefillData(c *gin.Context) {
 
 	var (
 		isActive bool
-		subErr   error
 		result   *models.NewsPosterPrefillResponse
 		dataErr  error
 	)
@@ -95,7 +93,8 @@ func (h *NewsPosterHandler) GetNewsPosterPrefillData(c *gin.Context) {
 
 	go func() {
 		defer wg.Done()
-		isActive, subErr = h.recurringPaymentRepo.IsSubscriptionActive(userID, "DailyStoryApp", time.Now().UTC())
+		// Subscribed through any gateway or system (old Razorpay, or the unified autopay system for any gateway) unlocks the feature.
+		isActive = h.subscriptions.Check(userID, "DailyStoryApp").ActiveSubscription
 	}()
 
 	go func() {
@@ -118,10 +117,6 @@ func (h *NewsPosterHandler) GetNewsPosterPrefillData(c *gin.Context) {
 		return
 	}
 
-	if subErr != nil {
-		commonResponse.Error(c, http.StatusInternalServerError, subErr, subErr.Error())
-		return
-	}
 	if !isActive {
 		c.JSON(http.StatusForbidden, gin.H{"error": "active subscription required"})
 		return

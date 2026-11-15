@@ -19,7 +19,7 @@ const (
 // WhatsAppMessageEventData is template-agnostic — the full WhatsApp template is
 // embedded in the event so any caller can schedule any template through this function.
 type WhatsAppMessageEventData struct {
-	Phone       string                        `json:"phone"`        // "91XXXXXXXXXX"
+	Phone       string                        `json:"phone"` // "91XXXXXXXXXX"
 	Template    notification.WhatsAppTemplate `json:"template"`
 	ScheduledAt time.Time                     `json:"scheduled_at"`
 }

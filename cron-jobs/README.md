@@ -29,6 +29,11 @@ Jobs load `.env.<GO_ENV>` (falling back to `.env`) and use `database.NewCronConn
 | `retry_failed_billing_cycles` | Retry billing cycles that previously failed |
 | `process_new_billing_cycles` | Process newly created billing cycles |
 | `reconcile_payments` | Reconcile payment records against Razorpay |
+| `autopay_sync_from_gateway` | Unified autopay (all gateways), runs first (12:45 AM IST): fetch real state from each gateway and fix local records — close stuck attempts, confirm notification outcomes, re-send missing notifications, sync pending authorizations / one-time payments, replay unprocessed webhook events |
+| `autopay_notify_retry_attempts` | Unified autopay (1:10 AM IST): create the next retry attempt (new `merchant_payment_id`, reduced amount) for unpaid cycles and send its pre-debit notification |
+| `autopay_notify_new_cycles` | Unified autopay (1:15 AM IST): create the next billing cycle for mandates charging inside the notification window (`internal/common/billingwindow`) and send its pre-debit notification |
+| `autopay_debit_notified_attempts` | Unified autopay (3:30 and 3:45 AM IST): debit attempts whose notification is delivered and ≥ 26h old and whose cycle is due |
+| `cleanup_old_autopay_webhook_events` | Weekly: hard-delete processed / ignored `autopay_webhook_events` older than 30 days (arg: days) in batches; alerts when unfinished events are older than a day |
 | `cleanup_old_news` | Delete old news records from DB |
 | `cleanup_old_posters` | Delete old poster records and R2 files |
 | `cleanup_orphan_news_media` | Remove news media files in R2 not referenced by any news record |

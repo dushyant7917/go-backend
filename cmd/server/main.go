@@ -11,6 +11,9 @@ import (
 	"github.com/getsentry/sentry-go"
 	sentrygin "github.com/getsentry/sentry-go/gin"
 
+	autopayBootstrap "go-backend/internal/apps/autopay/bootstrap"
+	autopayHandler "go-backend/internal/apps/autopay/handler"
+	autopayRepository "go-backend/internal/apps/autopay/repository"
 	dailystoryHandler "go-backend/internal/apps/dailystory/handler"
 	dailystoryInngest "go-backend/internal/apps/dailystory/inngest"
 	dailystoryRepository "go-backend/internal/apps/dailystory/repository"
@@ -48,6 +51,7 @@ import (
 	userService "go-backend/internal/apps/user/service"
 	"go-backend/internal/common/database"
 	"go-backend/internal/common/middleware"
+	"go-backend/internal/common/subscriptionstatus"
 	"go-backend/pkg/notification"
 
 	"github.com/gin-gonic/gin"
@@ -210,10 +214,23 @@ func main() {
 	// Initialize News Poster dependencies (within DailyStory)
 	newsPosterRepo := dailystoryRepository.NewNewsPosterRepository(db)
 	newsPosterSvc := dailystoryService.NewNewsPosterService(newsPosterRepo)
-	newsPosterH := dailystoryHandler.NewNewsPosterHandler(newsPosterSvc, recurringPaymentRepo, r2ClientFactory)
+
+	// Used by the DailyStory status endpoints (old apps still on the old Razorpay stack); add new recurring payment gateways here.
+	autopayRepo := autopayRepository.New(db)
+	subscriptionStatusChecker := subscriptionstatus.NewChecker(
+		subscriptionstatus.Gateway{Name: "razorpay", Repo: recurringPaymentRepo},
+		subscriptionstatus.Gateway{Name: "autopay", Repo: autopayRepo}, // the unified system (all gateways)
+	)
+
+	// Unified autopay system (N gateways behind one API). A user may hold several mandates; creating another is not blocked.
+	autopay := autopayBootstrap.NewWithRepo(db, autopayRepo, getEnv("GO_ENV", "local"))
+	autopayH := autopayHandler.New(autopay.Service)
+	autopayConfigH := autopayHandler.NewConfigHandler(autopay.Configs)
+
+	newsPosterH := dailystoryHandler.NewNewsPosterHandler(newsPosterSvc, subscriptionStatusChecker, r2ClientFactory)
 
 	// Initialize Combined Subscription Status handler (dailystory)
-	dailystoryH := dailystoryHandler.NewDailystoryHandler(subscriptionRepo, recurringPaymentRepo, metaEventSvc)
+	dailystoryH := dailystoryHandler.NewDailystoryHandler(subscriptionRepo, subscriptionStatusChecker, metaEventSvc)
 
 	// Initialize Sanskaar dependencies
 	// All Sanskaar resources share a single public R2 bucket (separated by key prefix, not by
@@ -240,6 +257,12 @@ func main() {
 	statusH := sanskaarHandler.NewStatusHandler(statusSvc, r2ClientFactory)
 
 	statusPictureH := sanskaarHandler.NewStatusPictureHandler(r2ClientFactory, sanskaarPublicURLBase)
+
+	// Sanskaar is new, so its status considers only the unified autopay system, never the old Razorpay tables.
+	sanskaarStatusChecker := subscriptionstatus.NewChecker(
+		subscriptionstatus.Gateway{Name: "autopay", Repo: autopayRepo},
+	)
+	sanskaarUserStatusH := sanskaarHandler.NewUserStatusHandler(sanskaarStatusChecker, metaEventSvc)
 
 	// Setup Gin router
 	ginMode := getEnv("GIN_MODE", "release")
@@ -269,6 +292,9 @@ func main() {
 
 	// Razorpay config creation endpoint (before CORS middleware for admin access)
 	router.POST("/api/v1/razorpay-configs", configH.CreateRazorpayConfig)
+
+	// Payment gateway config creation endpoint for the unified autopay system (before CORS middleware for admin access)
+	router.POST("/api/v1/payment-gateway-configs", autopayConfigH.Create)
 
 	// PostHog config creation endpoint (before CORS middleware for admin access)
 	router.POST("/api/v1/posthog-configs", posthogConfigH.CreatePostHogConfig)
@@ -311,6 +337,10 @@ func main() {
 		// Register Recurring Payment routes
 		recurringPaymentHandler.RegisterRecurringPaymentRoutes(v1, recurringPaymentH)
 
+		// Register unified Autopay routes (incl. /autopay/webhooks/:config_id) and config management
+		autopayHandler.RegisterRoutes(v1, autopayH)
+		autopayHandler.RegisterConfigRoutes(v1, autopayConfigH)
+
 		// Register Referral routes
 		referralHandler.RegisterReferralRoutes(v1, referralH)
 
@@ -335,7 +365,7 @@ func main() {
 		metaEventHandler.RegisterMetaEventRoutes(v1, metaEventH)
 
 		// Register Sanskaar routes
-		sanskaarHandler.RegisterSanskaarRoutes(v1, devotionalMusicH, toneH, wallpaperH, statusH, statusPictureH)
+		sanskaarHandler.RegisterSanskaarRoutes(v1, devotionalMusicH, toneH, wallpaperH, statusH, statusPictureH, sanskaarUserStatusH)
 
 		// Future apps can register their routes here
 		// Example: handler.RegisterUserRoutes(v1, userHandler)

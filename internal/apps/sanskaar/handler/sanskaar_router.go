@@ -11,9 +11,13 @@ func RegisterSanskaarRoutes(
 	wallpaperH *WallpaperHandler,
 	statusH *StatusHandler,
 	statusPictureH *StatusPictureHandler,
+	userStatusH *UserStatusHandler,
 ) {
 	sanskaar := router.Group("/sanskaar")
 	{
+		// Combined user status (subscription, free-trial usage and pending meta event)
+		sanskaar.GET("/user-status", userStatusH.GetUserStatus)
+
 		devotionalMusic := sanskaar.Group("/devotional-music")
 		{
 			devotionalMusic.POST("", devotionalMusicH.CreateDevotionalMusic)

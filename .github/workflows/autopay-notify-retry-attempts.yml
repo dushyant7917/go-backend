@@ -1,0 +1,54 @@
+name: Autopay Notify Retry Attempts
+
+on:
+  # Triggered externally on schedule via cron-job.org (see CRON_SCHEDULE.md).
+  # Cron-job.org schedule: "40 19 * * *" (1:10 AM IST)
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+
+jobs:
+  autopay-notify-retry-attempts:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-v2-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-v2-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run Autopay Notify Retry Attempts job
+        env:
+          GO_ENV: ${{ secrets.GO_ENV }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_SSL_MODE: ${{ secrets.DB_SSL_MODE }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: |
+          cd cron-jobs/autopay_notify_retry_attempts
+          go run main.go
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "Autopay Notify Retry Attempts job failed"
+          echo "Check the logs above for details"

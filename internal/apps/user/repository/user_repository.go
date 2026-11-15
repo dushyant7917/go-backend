@@ -151,8 +151,8 @@ func (r *userRepository) FindByApp(appName string) ([]models.User, error) {
 }
 
 // FindUsersEligibleForPushNotification retrieves users who match either:
-//   - created within the last newUserDays days, have a push token, and have no active subscription or recurring payment, OR
-//   - have a recurring payment with status 'cancelled' or 'expired' updated within the last lapsedSubscriberDays days
+//   - created within the last newUserDays days, have a push token, and have no active subscription or recurring payment (old Razorpay stack or the unified autopay system), OR
+//   - have a recurring payment (old Razorpay stack or the unified autopay system) with status 'cancelled' or 'expired' updated within the last lapsedSubscriberDays days
 func (r *userRepository) FindUsersEligibleForPushNotification(appName string, newUserDays, lapsedSubscriberDays int) ([]models.User, error) {
 	var users []models.User
 	now := time.Now()
@@ -167,10 +167,13 @@ func (r *userRepository) FindUsersEligibleForPushNotification(appName string, ne
 			created_at >= ?
 			AND NOT EXISTS (SELECT 1 FROM subscriptions WHERE subscriptions.phone = users.phone AND subscriptions.app_name = ? AND subscriptions.status IN ('active', 'authenticated') AND subscriptions.deleted_at IS NULL)
 			AND NOT EXISTS (SELECT 1 FROM recurring_payments WHERE recurring_payments.user_id = users.id AND recurring_payments.app_name = ? AND recurring_payments.status = 'active' AND recurring_payments.deleted_at IS NULL)
+			AND NOT EXISTS (SELECT 1 FROM autopay_mandates WHERE autopay_mandates.user_id = users.id AND autopay_mandates.app_name = ? AND autopay_mandates.status = 'active' AND autopay_mandates.deleted_at IS NULL)
 		) OR (
 			EXISTS (SELECT 1 FROM recurring_payments WHERE recurring_payments.user_id = users.id AND recurring_payments.app_name = ? AND recurring_payments.status IN ('cancelled', 'expired') AND recurring_payments.updated_at >= ? AND recurring_payments.deleted_at IS NULL)
+		) OR (
+			EXISTS (SELECT 1 FROM autopay_mandates WHERE autopay_mandates.user_id = users.id AND autopay_mandates.app_name = ? AND autopay_mandates.payment_type = 'recurring' AND autopay_mandates.status IN ('cancelled', 'expired') AND autopay_mandates.updated_at >= ? AND autopay_mandates.deleted_at IS NULL)
 		)`,
-		newUserSince, appName, appName, appName, lapsedSince,
+		newUserSince, appName, appName, appName, appName, lapsedSince, appName, lapsedSince,
 	).Find(&users).Error
 
 	if err != nil {

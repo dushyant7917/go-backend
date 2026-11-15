@@ -227,20 +227,20 @@ type RecurringPaymentStatusResponse struct {
 
 // CreateOneTimePaymentOrderRequest represents the request for creating an in-app one-time payment order
 type CreateOneTimePaymentOrderRequest struct {
-	UserID  uuid.UUID `json:"user_id" binding:"required"`
-	AppName string    `json:"app_name" binding:"required,min=1,max=100"`
-	Amount  int64     `json:"amount" binding:"required,min=1"` // Amount in paise
-	StartAt time.Time `json:"start_at" binding:"required"`     // Used for end_at calculation and record-keeping
-	Frequency string  `json:"frequency" binding:"required,oneof=daily weekly fortnightly bimonthly monthly quarterly half_yearly yearly as_presented"`
+	UserID    uuid.UUID `json:"user_id" binding:"required"`
+	AppName   string    `json:"app_name" binding:"required,min=1,max=100"`
+	Amount    int64     `json:"amount" binding:"required,min=1"` // Amount in paise
+	StartAt   time.Time `json:"start_at" binding:"required"`     // Used for end_at calculation and record-keeping
+	Frequency string    `json:"frequency" binding:"required,oneof=daily weekly fortnightly bimonthly monthly quarterly half_yearly yearly as_presented"`
 }
 
 // CreateOneTimePaymentLinkRequest represents the request for creating a hosted one-time payment link
 type CreateOneTimePaymentLinkRequest struct {
-	UserID  uuid.UUID `json:"user_id" binding:"required"`
-	AppName string    `json:"app_name" binding:"required,min=1,max=100"`
-	Amount  int64     `json:"amount" binding:"required,min=1"` // Amount in paise
-	StartAt time.Time `json:"start_at" binding:"required"`
-	Frequency string  `json:"frequency" binding:"required,oneof=daily weekly fortnightly bimonthly monthly quarterly half_yearly yearly as_presented"`
+	UserID    uuid.UUID `json:"user_id" binding:"required"`
+	AppName   string    `json:"app_name" binding:"required,min=1,max=100"`
+	Amount    int64     `json:"amount" binding:"required,min=1"` // Amount in paise
+	StartAt   time.Time `json:"start_at" binding:"required"`
+	Frequency string    `json:"frequency" binding:"required,oneof=daily weekly fortnightly bimonthly monthly quarterly half_yearly yearly as_presented"`
 }
 
 // VerifyOneTimePaymentRequest represents the request for verifying a one-time payment

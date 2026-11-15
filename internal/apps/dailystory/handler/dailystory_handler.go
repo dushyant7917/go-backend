@@ -3,14 +3,12 @@ package handler
 import (
 	"log"
 	"net/http"
-	"time"
 
 	metaEventModels "go-backend/internal/apps/meta_event/models"
 	metaEventSvc "go-backend/internal/apps/meta_event/service"
-	recurringPaymentModels "go-backend/internal/apps/razorpay/recurring_payment/models"
-	recurringPaymentRepo "go-backend/internal/apps/razorpay/recurring_payment/repository"
 	subscriptionModels "go-backend/internal/apps/razorpay/subscription/models"
 	subscriptionRepo "go-backend/internal/apps/razorpay/subscription/repository"
+	"go-backend/internal/common/subscriptionstatus"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -18,21 +16,21 @@ import (
 
 // DailystoryHandler handles dailystory-related requests
 type DailystoryHandler struct {
-	subscriptionRepo     subscriptionRepo.SubscriptionRepository
-	recurringPaymentRepo recurringPaymentRepo.RecurringPaymentRepository
-	metaEventService     metaEventSvc.MetaEventService
+	subscriptionRepo subscriptionRepo.SubscriptionRepository
+	statusChecker    *subscriptionstatus.Checker
+	metaEventService metaEventSvc.MetaEventService
 }
 
 // NewDailystoryHandler creates a new DailystoryHandler
 func NewDailystoryHandler(
 	subscriptionRepo subscriptionRepo.SubscriptionRepository,
-	recurringPaymentRepo recurringPaymentRepo.RecurringPaymentRepository,
+	statusChecker *subscriptionstatus.Checker,
 	metaEventService metaEventSvc.MetaEventService,
 ) *DailystoryHandler {
 	return &DailystoryHandler{
-		subscriptionRepo:     subscriptionRepo,
-		recurringPaymentRepo: recurringPaymentRepo,
-		metaEventService:     metaEventService,
+		subscriptionRepo: subscriptionRepo,
+		statusChecker:    statusChecker,
+		metaEventService: metaEventService,
 	}
 }
 
@@ -83,7 +81,7 @@ func (h *DailystoryHandler) GetCombinedStatus(c *gin.Context) {
 	response.UsedFreeTrial = subStatus.HasAuthenticated
 
 	// Check new recurring payment status and OR the results
-	rpStatus := h.checkRecurringPaymentStatus(userID, appName)
+	rpStatus := h.statusChecker.Check(userID, appName)
 	response.ActiveSubscription = response.ActiveSubscription || rpStatus.ActiveSubscription
 	response.UsedFreeTrial = response.UsedFreeTrial || rpStatus.UsedFreeTrial
 
@@ -113,23 +111,6 @@ func (h *DailystoryHandler) checkSubscriptionStatus(phone, appName string) *subs
 	hasAuth, err := h.subscriptionRepo.HasAuthenticatedSubscriptionByPhone(phone, appName)
 	if err == nil {
 		result.HasAuthenticated = hasAuth
-	}
-
-	return result
-}
-
-// checkRecurringPaymentStatus checks new recurring payment system status
-func (h *DailystoryHandler) checkRecurringPaymentStatus(userID uuid.UUID, appName string) *recurringPaymentModels.RecurringPaymentStatusResponse {
-	result := &recurringPaymentModels.RecurringPaymentStatusResponse{}
-
-	isActive, err := h.recurringPaymentRepo.IsSubscriptionActive(userID, appName, time.Now().UTC())
-	if err == nil {
-		result.ActiveSubscription = isActive
-	}
-
-	hasCompleted, err := h.recurringPaymentRepo.HasCompletedAuthorizationPayment(userID, appName)
-	if err == nil {
-		result.UsedFreeTrial = hasCompleted
 	}
 
 	return result
