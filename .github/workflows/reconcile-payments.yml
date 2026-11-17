@@ -3,7 +3,7 @@ name: Reconcile Payments
 on:
   # Triggered externally on schedule via cron-job.org — GitHub's native `schedule:`
   # trigger was delayed by 1-10h and has been removed. See CRON_SCHEDULE.md.
-  # Cron-job.org schedule: "15 19 * * *" (12:45 AM IST)
+  # Cron-job.org schedule: "25 19 * * *" (12:55 AM IST), "50 23 * * *" (5:20 AM IST), each 10 min after an Autopay Sync From Gateway run
   workflow_dispatch:
 
 concurrency:

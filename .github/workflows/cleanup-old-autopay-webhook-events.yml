@@ -2,7 +2,7 @@ name: Cleanup Old Autopay Webhook Events
 
 on:
   # Triggered externally on schedule via cron-job.org (see CRON_SCHEDULE.md).
-  # Cron-job.org schedule: "30 2 * * 4" (8:00 AM IST, Thursday)
+  # Cron-job.org schedule: "40 18 * * *" (12:10 AM IST, daily)
   workflow_dispatch:
 
 concurrency:

@@ -2,13 +2,15 @@
 // billing crons (the old Razorpay ones and the unified autopay ones) and by the repair tooling. Change the numbers here,
 // nowhere else.
 //
-// The daily schedule this window is built around (cron-job.org, UTC; IST is +5:30):
+// The daily schedule this window is built around (cron-job.org, UTC; IST is +5:30). These are the unified autopay
+// times; the old Razorpay crons run 10 minutes after each of them (reconcile 12:55 and 5:20, retry 1:20,
+// process 1:25, charge 3:40 and 5:30 AM IST), which keeps every notice-to-debit gap identical:
 //
-//	Reconcile (Cron D)          19:15  (12:45 AM IST)
+//	Reconcile/Sync (Cron D)     19:15  (12:45 AM IST)
 //	Retry failed cycles (Cron B)19:40  ( 1:10 AM IST)
 //	Process new cycles (Cron A) 19:45  ( 1:15 AM IST)
 //	Charge (Cron C), 1st run    22:00  ( 3:30 AM IST)   <- ChargeRunHour/ChargeRunMinute
-//	Sync (autopay only), 2nd    23:40  ( 5:10 AM IST)
+//	Reconcile/Sync, 2nd run     23:40  ( 5:10 AM IST)
 //	Charge (Cron C), 2nd run    23:50  ( 5:20 AM IST)   <- 1h50m after the 1st: PhonePe wants >= 1.5h between retries
 //
 // How the window works: debits only happen at the Charge runs, and never before the notice is Min old. A notice

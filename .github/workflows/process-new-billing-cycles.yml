@@ -3,7 +3,7 @@ name: Process New Billing Cycles
 on:
   # Triggered externally on schedule via cron-job.org — GitHub's native `schedule:`
   # trigger was delayed by 1-10h and has been removed. See CRON_SCHEDULE.md.
-  # Cron-job.org schedule: "45 19 * * *" (1:15 AM IST)
+  # Cron-job.org schedule: "55 19 * * *" (1:25 AM IST, 10 min after Autopay Notify New Cycles)
   workflow_dispatch:
 
 concurrency:
