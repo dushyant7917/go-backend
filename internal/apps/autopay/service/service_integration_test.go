@@ -356,7 +356,7 @@ func TestRecurringLifecycleEndToEnd(t *testing.T) {
 	if got := h.latestAttempt(id); got.Status != models.ChargeAttemptStatusDebitSubmitted || got.DebitSubmitAttempts != 1 {
 		t.Fatalf("after debit run: %+v", got)
 	}
-	h.debitRun() // the 3:45 run must NOT re-submit a debit that is with the bank
+	h.debitRun() // the 5:20 run must NOT re-submit a debit that is with the bank
 	if h.gw.count("submitDebit") != 1 {
 		t.Fatalf("a submitted debit was submitted %d times", h.gw.count("submitDebit"))
 	}
@@ -404,7 +404,7 @@ func TestGatewayUnavailableDoesNotUseUpAnAttemptOrReduceTheAmount(t *testing.T) 
 	if h.gw.count("submitDebit") != 3 {
 		t.Fatalf("a run makes 3 tries, got %d", h.gw.count("submitDebit"))
 	}
-	h.debitRun() // 3:45: second release limit reached -> fails as gateway_unavailable without counting
+	h.debitRun() // 5:20: second release limit reached -> fails as gateway_unavailable without counting
 	end := h.latestAttempt(id)
 	if end.Status != models.ChargeAttemptStatusDebitFailed || end.CountsTowardAttemptLimit || end.FailureCategory == nil || *end.FailureCategory != models.FailureCategoryGatewayUnavailable {
 		t.Fatalf("final attempt: %+v", end)
@@ -442,7 +442,7 @@ func TestUnknownOutcomeIsVerifiedBeforeDeciding(t *testing.T) {
 		t.Fatalf("a debit the gateway has must be applied: %+v", got)
 	}
 
-	// the debit never happened: it is released (not failed, not counted) so the 3:45 run retries it
+	// the debit never happened: it is released (not failed, not counted) so the 5:20 run retries it
 	h2 := newHarness(t)
 	id2 := h2.activeMandate()
 	a2 := h2.firstCycleNotified(id2)
@@ -711,15 +711,20 @@ func TestCreateValidationAndGuards(t *testing.T) {
 func TestOneTimePaymentVerifyAndCancelRules(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
+	// The test clock keeps running (real time + offset), so "now" cannot be compared for equality after the call: the
+	// stored start_at must fall between the clock read just before Create and the one just after it.
+	before := h.now()
 	res, err := h.svc.Create(ctx, CreateRequest{
 		UserID: h.user.ID, AppName: h.cfg.AppName, Gateway: "test", PaymentType: models.PaymentTypeOneTime,
 		Amount: 9900, StartAt: h.now().Add(30 * 24 * time.Hour), BillingFrequency: "monthly", // a client-sent start_at is ignored
 	})
+	after := h.now()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m := h.mandate(res.AutopayMandateID); m.StartAt == nil || !m.StartAt.Equal(h.now().UTC()) {
-		t.Fatalf("a one-time payment starts at the server's now, got start_at=%v want %v", m.StartAt, h.now().UTC())
+	// Postgres keeps microseconds and Go nanoseconds, so compare at microsecond precision
+	if m := h.mandate(res.AutopayMandateID); m.StartAt == nil || m.StartAt.Before(before.Truncate(time.Microsecond)) || m.StartAt.After(after) {
+		t.Fatalf("a one-time payment starts at the server's now (between %v and %v), got start_at=%v", before, after, m.StartAt)
 	}
 	if _, err := h.svc.Cancel(ctx, res.AutopayMandateID); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("a one-time payment cannot be cancelled: %v", err)

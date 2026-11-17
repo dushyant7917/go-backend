@@ -12,7 +12,7 @@ Workflows live in [.github/workflows/](.github/workflows/). All can also be run 
 > it anywhere in this repo.
 
 > Times shown in **IST** (UTC+5:30). GitHub Actions cron is in **UTC**.
-> Last updated: 2026-11-12 (unified autopay crons added beside the old Razorpay ones, same times; the per-gateway Cashfree/PhonePe jobs were never deployed and are removed; weekly autopay webhook-event cleanup; earlier, 2026-11-11: payment jobs moved: notices 1:10 AM (retry) and 1:15 AM (process new), charges 3:30/3:45 AM, with a notice window tied to the Charge runs; earlier, 2026-11-07: the four PhonePe recurring-payment jobs added on the same schedule as their Razorpay and Cashfree counterparts; earlier, 2026-11-06: payment jobs corrected to their real once-a-day schedule and the four Cashfree jobs added)
+> Last updated: 2026-11-17 (second Charge run moved from 3:45 AM to 5:20 AM IST, 1h50m after the first, because PhonePe wants at least 1.5h between retries of the same debit; a second Autopay Sync From Gateway run added at 5:10 AM so the 5:20 run sees fresh gateway state; earlier, 2026-11-12: unified autopay crons added beside the old Razorpay ones, same times; the per-gateway Cashfree/PhonePe jobs were never deployed and are removed; weekly autopay webhook-event cleanup; earlier, 2026-11-11: payment jobs moved: notices 1:10 AM (retry) and 1:15 AM (process new), charges 3:30/3:45 AM, with a notice window tied to the Charge runs; earlier, 2026-11-07: the four PhonePe recurring-payment jobs added on the same schedule as their Razorpay and Cashfree counterparts; earlier, 2026-11-06: payment jobs corrected to their real once-a-day schedule and the four Cashfree jobs added)
 
 ## Daily Timeline (IST)
 
@@ -22,7 +22,8 @@ Workflows live in [.github/workflows/](.github/workflows/). All can also be run 
 | 1:10 AM | Retry Failed Billing Cycles, Autopay Notify Retry Attempts | Daily | [retry-failed-billing-cycles.yml](.github/workflows/retry-failed-billing-cycles.yml), [autopay-notify-retry-attempts.yml](.github/workflows/autopay-notify-retry-attempts.yml) |
 | 1:15 AM | Process New Billing Cycles, Autopay Notify New Cycles | Daily | [process-new-billing-cycles.yml](.github/workflows/process-new-billing-cycles.yml), [autopay-notify-new-cycles.yml](.github/workflows/autopay-notify-new-cycles.yml) |
 | 3:30 AM | Charge Pending Payments, Autopay Debit Notified Attempts | 2x Daily | [charge-pending-payments.yml](.github/workflows/charge-pending-payments.yml), [autopay-debit-notified-attempts.yml](.github/workflows/autopay-debit-notified-attempts.yml) |
-| 3:45 AM | Charge Pending Payments, Autopay Debit Notified Attempts | 2x Daily | [charge-pending-payments.yml](.github/workflows/charge-pending-payments.yml), [autopay-debit-notified-attempts.yml](.github/workflows/autopay-debit-notified-attempts.yml) |
+| 5:10 AM | Autopay Sync From Gateway (2nd run) | 2x Daily | [autopay-sync-from-gateway.yml](.github/workflows/autopay-sync-from-gateway.yml) |
+| 5:20 AM | Charge Pending Payments, Autopay Debit Notified Attempts | 2x Daily | [charge-pending-payments.yml](.github/workflows/charge-pending-payments.yml), [autopay-debit-notified-attempts.yml](.github/workflows/autopay-debit-notified-attempts.yml) |
 | 6:00 AM | Parse News → Generate News Media | Daily | [parse-news.yml](.github/workflows/parse-news.yml) |
 | 7:00 AM | Send DailyStory Push Notification | Daily | [send-dailystory-push-notification.yml](.github/workflows/send-dailystory-push-notification.yml) |
 | 8:00 AM | Cleanup Orphan News Media | Weekly (Sun) | [cleanup-orphan-news-media.yml](.github/workflows/cleanup-orphan-news-media.yml) |
@@ -50,9 +51,10 @@ Each old-Razorpay job and its unified `autopay-*` counterpart (listed below) are
 | Process New Billing Cycles / Autopay Notify New Cycles | `45 19 * * *` | 1:15 AM |
 | Retry Failed Billing Cycles / Autopay Notify Retry Attempts | `40 19 * * *` | 1:10 AM |
 | Charge Pending Payments / Autopay Debit Notified Attempts | `0 22 * * *` | 3:30 AM |
-| Charge Pending Payments / Autopay Debit Notified Attempts (2nd run) | `15 22 * * *` | 3:45 AM |
+| Autopay Sync From Gateway (2nd run, autopay only) | `40 23 * * *` | 5:10 AM |
+| Charge Pending Payments / Autopay Debit Notified Attempts (2nd run) | `50 23 * * *` | 5:20 AM |
 
-**Notice window (shared by all gateways):** debits only happen at the Charge Pending Payments runs (3:30 and 3:45 AM IST), and never until a pre-debit notice is at least 26 hours old. Retry Failed Billing Cycles (1:10 AM) and Process New Billing Cycles (1:15 AM) therefore select a mandate by **which Charge run its charge time falls before**: a charge time between tonight's first Charge run (3:30 AM) and tomorrow night's is noticed now and debited at tomorrow's 3:30 AM run, **26h15m–26h20m after the notice**. That is above the 24h notice every gateway requires and well inside the 48 hours a gateway may keep a notice valid (PhonePe lets a notice lapse after roughly 48–72h and then rejects the debit with `SUBSCRIPTION_DEBIT_EXECUTE_INTERVAL_EXPIRED`). The numbers and the schedule they assume live in one place, `internal/common/billingwindow`, which the old Razorpay jobs, the autopay jobs and the repair script all use. Autopay's debit job additionally waits until the notification is *delivered* and at least 26h old and the cycle is due (PhonePe also waits for the `validAfter` it reports). For a charge time that is already due (a missed night) the order's `payment_after` (Razorpay) and expiry (PhonePe) are set to 26h after the notification, never to a time in the past.
+**Notice window (shared by all gateways):** debits only happen at the Charge Pending Payments runs (3:30 and 5:20 AM IST), and never until a pre-debit notice is at least 26 hours old. Retry Failed Billing Cycles (1:10 AM) and Process New Billing Cycles (1:15 AM) therefore select a mandate by **which Charge run its charge time falls before**: a charge time between tonight's first Charge run (3:30 AM) and tomorrow night's is noticed now and debited at tomorrow's 3:30 AM run, **26h15m–26h20m after the notice**. That is above the 24h notice every gateway requires and well inside the 48 hours a gateway may keep a notice valid (PhonePe lets a notice lapse after roughly 48–72h and then rejects the debit with `SUBSCRIPTION_DEBIT_EXECUTE_INTERVAL_EXPIRED`). The numbers and the schedule they assume live in one place, `internal/common/billingwindow`, which the old Razorpay jobs, the autopay jobs and the repair script all use. Autopay's debit job additionally waits until the notification is *delivered* and at least 26h old and the cycle is due (PhonePe also waits for the `validAfter` it reports). For a charge time that is already due (a missed night) the order's `payment_after` (Razorpay) and expiry (PhonePe) are set to 26h after the notification, never to a time in the past.
 
 > Each mandate is selected on exactly one night, plus **2 nights of catch-up** (`billingwindow.CatchUp`): if a run of Process New Billing Cycles / Retry Failed Billing Cycles is missed, the next nights still notice the mandate and it is debited one night later than planned. A mandate missed for more than the catch-up days is left to `scripts/reschedule_missed_billing_cycles`, so still watch for failed runs of these jobs (old Razorpay and autopay).
 >
@@ -67,9 +69,10 @@ The unified autopay system (`/api/v1/autopay/*`, `autopay_*` tables) runs the sa
 | Autopay Sync From Gateway | `15 19 * * *` | 12:45 AM |
 | Autopay Notify Retry Attempts | `40 19 * * *` | 1:10 AM |
 | Autopay Notify New Cycles | `45 19 * * *` | 1:15 AM |
-| Autopay Debit Notified Attempts | `0 22 * * *` and `15 22 * * *` | 3:30 and 3:45 AM |
+| Autopay Sync From Gateway (2nd run) | `40 23 * * *` | 5:10 AM |
+| Autopay Debit Notified Attempts | `0 22 * * *` and `50 23 * * *` | 3:30 and 5:20 AM |
 
-Create their cron-job.org jobs when the first autopay config goes live (the four daily workflows, the debit one called at both 3:30 and 3:45 AM, plus the weekly `cleanup-old-autopay-webhook-events` below); until then they are harmless no-ops (no active configs). The notification window, the 26h gap and the catch-up are the same `internal/common/billingwindow` constants.
+Create their cron-job.org jobs when the first autopay config goes live (the four daily workflows, the sync one called at both 12:45 and 5:10 AM, the debit one called at both 3:30 and 5:20 AM, plus the weekly `cleanup-old-autopay-webhook-events` below); until then they are harmless no-ops (no active configs). The notification window, the 26h gap and the catch-up are the same `internal/common/billingwindow` constants.
 
 ### Parse News — Daily
 Runs `parse-news-topics` job, then chains into `parse-news-areas`, then `generate-news-media` on success.

@@ -64,7 +64,7 @@ type Repository interface {
 	HasOpenChargeAttemptForBillingCycle(billingCycleID uuid.UUID) (bool, error)
 
 	// Work queues of the crons
-	FindChargeAttemptsReadyForDebit(configID uuid.UUID, now time.Time, minNotificationAge time.Duration) ([]models.AutopayChargeAttempt, error)
+	FindChargeAttemptsReadyForDebit(configID uuid.UUID, now time.Time, minNotificationAge, minRetryGap time.Duration) ([]models.AutopayChargeAttempt, error)
 	FindChargeAttemptsAwaitingPreDebitNotificationSend(configID uuid.UUID, createdBefore time.Time, maxSendAttempts int) ([]models.AutopayChargeAttempt, error)
 	FindChargeAttemptsAwaitingNotificationOutcome(configID uuid.UUID, sentBefore time.Time) ([]models.AutopayChargeAttempt, error)
 	FindChargeAttemptsAwaitingDebitResult(configID uuid.UUID, updatedBefore time.Time) ([]models.AutopayChargeAttempt, error)
@@ -383,16 +383,21 @@ func (r *repository) attemptQueue(configID uuid.UUID, withMandate bool) *gorm.DB
 }
 
 // FindChargeAttemptsReadyForDebit is the debit gate: the notification is delivered and at least minNotificationAge
-// old, the cycle is due, and the mandate is active. Nothing else is ever debited.
-func (r *repository) FindChargeAttemptsReadyForDebit(configID uuid.UUID, now time.Time, minNotificationAge time.Duration) ([]models.AutopayChargeAttempt, error) {
+// old, the cycle is due, the mandate is active and, when minRetryGap is set, an attempt that was already tried (and
+// released) has rested at least minRetryGap since it was released. Nothing else is ever debited.
+func (r *repository) FindChargeAttemptsReadyForDebit(configID uuid.UUID, now time.Time, minNotificationAge, minRetryGap time.Duration) ([]models.AutopayChargeAttempt, error) {
 	var as []models.AutopayChargeAttempt
-	err := r.attemptQueue(configID, true).
+	q := r.attemptQueue(configID, true).
 		Where("a.status = ?", models.ChargeAttemptStatusNotificationDelivered).
 		Where("a.pre_debit_notification_delivered_at IS NOT NULL AND a.pre_debit_notification_delivered_at <= ?", now.Add(-minNotificationAge)).
 		Where("c.status = ?", models.BillingCycleStatusAwaitingPayment).
 		Where("c.next_charge_attempt_at IS NOT NULL AND c.next_charge_attempt_at <= ?", now).
-		Where("m.status = ? AND m.payment_type = ? AND m.deleted_at IS NULL", models.MandateStatusActive, models.PaymentTypeRecurring).
-		Find(&as).Error
+		Where("m.status = ? AND m.payment_type = ? AND m.deleted_at IS NULL", models.MandateStatusActive, models.PaymentTypeRecurring)
+	if minRetryGap > 0 {
+		// a never-tried attempt has no earlier try to wait for; a released one carries its release time in updated_at
+		q = q.Where("(a.debit_submit_attempts = 0 OR a.updated_at <= ?)", now.Add(-minRetryGap))
+	}
+	err := q.Find(&as).Error
 	return as, err
 }
 
@@ -467,7 +472,7 @@ func (r *repository) ClaimChargeAttemptForNotificationSend(id uuid.UUID, expecte
 }
 
 // ClaimChargeAttemptForDebit moves notification_delivered -> debit_submitted before the gateway is called, so only
-// one runner (the 3:30 and 3:45 runs, a retry) can debit an attempt.
+// one runner (the 3:30 and 5:20 runs, a retry) can debit an attempt.
 func (r *repository) ClaimChargeAttemptForDebit(id uuid.UUID, expectedSubmitAttempts int, debitExecutionID string) (bool, error) {
 	res := r.db.Model(&models.AutopayChargeAttempt{}).
 		Where("id = ? AND status = ? AND debit_submit_attempts = ?", id, models.ChargeAttemptStatusNotificationDelivered, expectedSubmitAttempts).

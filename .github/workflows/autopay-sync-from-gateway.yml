@@ -2,7 +2,7 @@ name: Autopay Sync From Gateway
 
 on:
   # Triggered externally on schedule via cron-job.org (see CRON_SCHEDULE.md).
-  # Cron-job.org schedule: "15 19 * * *" (12:45 AM IST)
+  # Cron-job.org schedule: "15 19 * * *" (12:45 AM IST), "40 23 * * *" (5:10 AM IST, before the 5:20 AM debit run)
   workflow_dispatch:
 
 concurrency:

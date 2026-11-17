@@ -60,6 +60,10 @@ const MaxMandateAmountPaise int64 = 1_500_000
 // MinAmountPaise is the smallest amount PhonePe accepts for a setup transaction or a redemption (₹1).
 const MinAmountPaise int64 = 100
 
+// MinRedemptionRetryGap is the least time PhonePe documents between two tries of the same redemption (1.5h, CUSTOM
+// retry strategy). The nightly charge runs must be at least this far apart.
+const MinRedemptionRetryGap = 90 * time.Minute
+
 // Credentials identify a PhonePe merchant account and environment.
 type Credentials struct {
 	ClientID      string

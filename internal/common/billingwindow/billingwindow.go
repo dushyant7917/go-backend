@@ -8,7 +8,8 @@
 //	Retry failed cycles (Cron B)19:40  ( 1:10 AM IST)
 //	Process new cycles (Cron A) 19:45  ( 1:15 AM IST)
 //	Charge (Cron C), 1st run    22:00  ( 3:30 AM IST)   <- ChargeRunHour/ChargeRunMinute
-//	Charge (Cron C), 2nd run    22:15  ( 3:45 AM IST)
+//	Sync (autopay only), 2nd    23:40  ( 5:10 AM IST)
+//	Charge (Cron C), 2nd run    23:50  ( 5:20 AM IST)   <- 1h50m after the 1st: PhonePe wants >= 1.5h between retries
 //
 // How the window works: debits only happen at the Charge runs, and never before the notice is Min old. A notice
 // sent by Cron A/B at 19:45/19:40 therefore always becomes a debit at the very next night's first Charge run,
@@ -38,6 +39,16 @@ const (
 	// ChargeRunHour and ChargeRunMinute (UTC) are when the first Charge run of the day starts: 3:30 AM IST.
 	ChargeRunHour   = 22
 	ChargeRunMinute = 0
+
+	// SecondChargeRunHour and SecondChargeRunMinute (UTC) are when the second Charge run starts: 5:20 AM IST. It picks up
+	// the attempts the first run released after a rejection or a gateway problem. It is 1h50m after the first run
+	// because PhonePe wants at least 1.5h between retries of the same debit (see ChargeRunGap and
+	// gateway.Capabilities.MinDebitRetryGap); it is still inside PhonePe's non-peak window (until 9:59 AM IST).
+	SecondChargeRunHour   = 23
+	SecondChargeRunMinute = 50
+
+	// ChargeRunGap is the time between the first and the second Charge run.
+	ChargeRunGap = time.Duration(SecondChargeRunHour-ChargeRunHour)*time.Hour + time.Duration(SecondChargeRunMinute-ChargeRunMinute)*time.Minute
 
 	// CatchUp is how many days of missed nights Cron A/B still pick up: a mandate whose charge time is already
 	// before tonight's first Charge run (a notice cron run failed or was skipped) is notified now and debited at

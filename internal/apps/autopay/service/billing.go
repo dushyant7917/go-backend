@@ -17,8 +17,9 @@ import (
 )
 
 // The four nightly crons, in run order (IST): SyncFromGateway 12:45, NotifyRetryAttempts 1:10, NotifyNewCycles 1:15,
-// DebitNotifiedAttempts 3:30 and 3:45. Each loops over the active configs (merchant accounts) and isolates failures
-// per config. Every gateway call goes through Call (rate-limit token per try, retries) with the Background class.
+// DebitNotifiedAttempts 3:30 and 5:20 (a second sync run at 5:10 sits between the two debit runs). Each loops over the
+// active configs (merchant accounts) and isolates failures per config. Every gateway call goes through Call
+// (rate-limit token per try, retries) with the Background class.
 
 const cronClass = ratelimit.Background
 
@@ -265,11 +266,12 @@ func (s *Service) recordNotificationSent(attemptID uuid.UUID, res *gateway.PreDe
 // ==================== Debit ====================
 
 // DebitNotifiedAttempts submits the debit for attempts whose notification is delivered and at least 26h old and
-// whose cycle is due. It runs twice a night (3:30 and 3:45 AM): an attempt released after a transient problem is
+// whose cycle is due. It runs twice a night (3:30 and 5:20 AM): an attempt released after a transient problem is
 // retried by the second run; an attempt left debit_submitted is never re-submitted.
 func (s *Service) DebitNotifiedAttempts(ctx context.Context) error {
 	return s.forEachConfig(ctx, "autopay_debit_notified_attempts", func(ctx context.Context, rg *ResolvedGateway) error {
-		as, err := s.repo.FindChargeAttemptsReadyForDebit(rg.Config.ID, s.now(), max(minNotificationAgeBeforeDebit, rg.Gateway.Capabilities().MinNotificationToDebitGap))
+		caps := rg.Gateway.Capabilities()
+		as, err := s.repo.FindChargeAttemptsReadyForDebit(rg.Config.ID, s.now(), max(minNotificationAgeBeforeDebit, caps.MinNotificationToDebitGap), caps.MinDebitRetryGap)
 		if err != nil {
 			return fmt.Errorf("find attempts ready for debit: %w", err)
 		}

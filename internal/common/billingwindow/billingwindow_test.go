@@ -3,6 +3,8 @@ package billingwindow
 import (
 	"testing"
 	"time"
+
+	pkgphonepe "go-backend/pkg/phonepe"
 )
 
 func utc(day, hour, min int) time.Time {
@@ -54,7 +56,10 @@ func TestEarliestDebit(t *testing.T) {
 // numbers or the cron times cannot quietly break them.
 var (
 	noticeRuns = []time.Duration{19*time.Hour + 45*time.Minute, 19*time.Hour + 40*time.Minute} // Cron A (= NoticeRunHour/Minute), Cron B
-	chargeRuns = []time.Duration{22 * time.Hour, 22*time.Hour + 15*time.Minute}                // Cron C
+	chargeRuns = []time.Duration{
+		time.Duration(ChargeRunHour)*time.Hour + time.Duration(ChargeRunMinute)*time.Minute,             // Cron C, 1st run
+		time.Duration(SecondChargeRunHour)*time.Hour + time.Duration(SecondChargeRunMinute)*time.Minute, // Cron C, 2nd run
+	}
 )
 
 // Whatever the charge time, a notice sent at Cron A/B is debited at the next night's first Charge run, between Min
@@ -120,6 +125,14 @@ func TestSchedule(t *testing.T) {
 	}
 	if chargeRuns[0] != firstCharge {
 		t.Errorf("first charge run %v does not match ChargeRunHour/Minute %v", chargeRuns[0], firstCharge)
+	}
+	// PhonePe documents at least 1.5h between retries of the same debit; the second run must respect it, and stay in
+	// the same night (before the next night's first run).
+	if ChargeRunGap < pkgphonepe.MinRedemptionRetryGap || ChargeRunGap >= Period {
+		t.Errorf("the second Charge run is %v after the first: want at least 1.5h (PhonePe's retry gap) and less than a day", ChargeRunGap)
+	}
+	if chargeRuns[1]-chargeRuns[0] != ChargeRunGap {
+		t.Errorf("chargeRuns gap %v does not match ChargeRunGap %v", chargeRuns[1]-chargeRuns[0], ChargeRunGap)
 	}
 	if MinAuthLead != Min+Period {
 		t.Errorf("MinAuthLead %v must equal Min + Period", MinAuthLead)

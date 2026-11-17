@@ -138,6 +138,11 @@ type Capabilities struct {
 	MaxMandateAmountMinorUnits  int64 // 0 = no limit
 	// MinNotificationToDebitGap is the least age of a delivered pre-debit notification before a debit.
 	MinNotificationToDebitGap time.Duration
+	// MinDebitRetryGap is the least time between two tries of the same debit attempt (a try that was rejected or hit a
+	// gateway problem is released and retried by a later debit run). 0 = none documented. PhonePe documents 1.5h.
+	// The time since the last try is read from the attempt's updated_at, which is when it was released, so a later
+	// write to a released attempt can only make the retry wait a little longer, never shorter.
+	MinDebitRetryGap time.Duration
 	// RequestsPerMinuteLimit is the gateway's documented limit per merchant account (Config may override).
 	RequestsPerMinuteLimit int
 }

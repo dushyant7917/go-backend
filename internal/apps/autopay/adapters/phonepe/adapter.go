@@ -69,6 +69,7 @@ func (a *Adapter) Capabilities() gateway.Capabilities {
 		MinAmountMinorUnits:         pkgphonepe.MinAmountPaise,
 		MaxMandateAmountMinorUnits:  pkgphonepe.MaxMandateAmountPaise,
 		MinNotificationToDebitGap:   billingwindow.Min,
+		MinDebitRetryGap:            pkgphonepe.MinRedemptionRetryGap,
 		RequestsPerMinuteLimit:      60, // NOT published: no rate limit found in PhonePe's PG docs (checked 2026-11-12); 60 is our chosen default, override per account with gateway_ratelimit_rpm
 	}
 }

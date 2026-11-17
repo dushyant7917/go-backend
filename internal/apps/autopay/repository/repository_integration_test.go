@@ -124,7 +124,7 @@ func TestDebitGateRequiresDeliveredAgedNotificationDueCycleActiveMandate(t *test
 	notDelivered := f.newAttempt(t, 4, models.ChargeAttemptStatusAwaitingNotification, &old)
 	alreadySubmitted := f.newAttempt(t, 5, models.ChargeAttemptStatusDebitSubmitted, &old)
 
-	got, err := f.repo.FindChargeAttemptsReadyForDebit(f.cfg.ID, f.now, gap)
+	got, err := f.repo.FindChargeAttemptsReadyForDebit(f.cfg.ID, f.now, gap, 0)
 	must(t, err)
 	g := ids(got)
 	if !g[ready.ID] || len(g) != 1 {
@@ -135,21 +135,53 @@ func TestDebitGateRequiresDeliveredAgedNotificationDueCycleActiveMandate(t *test
 	// the cycle is not due yet -> nothing is ready
 	future := f.now.Add(time.Hour)
 	must(t, f.db.Model(&models.AutopayBillingCycle{}).Where("id = ?", f.cycle.ID).Update("next_charge_attempt_at", future).Error)
-	if got, _ = f.repo.FindChargeAttemptsReadyForDebit(f.cfg.ID, f.now, gap); len(got) != 0 {
+	if got, _ = f.repo.FindChargeAttemptsReadyForDebit(f.cfg.ID, f.now, gap, 0); len(got) != 0 {
 		t.Fatalf("a cycle that is not due must not be debited, got %d", len(got))
 	}
 	must(t, f.db.Model(&models.AutopayBillingCycle{}).Where("id = ?", f.cycle.ID).Update("next_charge_attempt_at", f.now.Add(-time.Hour)).Error)
 
 	// a paused mandate is never debited
 	must(t, f.db.Model(&models.AutopayMandate{}).Where("id = ?", f.mandate.ID).Update("status", models.MandateStatusPaused).Error)
-	if got, _ = f.repo.FindChargeAttemptsReadyForDebit(f.cfg.ID, f.now, gap); len(got) != 0 {
+	if got, _ = f.repo.FindChargeAttemptsReadyForDebit(f.cfg.ID, f.now, gap, 0); len(got) != 0 {
 		t.Fatalf("a paused mandate must not be debited, got %d", len(got))
 	}
 
 	// another merchant account's config never sees this attempt
 	must(t, f.db.Model(&models.AutopayMandate{}).Where("id = ?", f.mandate.ID).Update("status", models.MandateStatusActive).Error)
-	if got, _ = f.repo.FindChargeAttemptsReadyForDebit(uuid.New(), f.now, gap); len(got) != 0 {
+	if got, _ = f.repo.FindChargeAttemptsReadyForDebit(uuid.New(), f.now, gap, 0); len(got) != 0 {
 		t.Fatalf("the gate is scoped to the config, got %d", len(got))
+	}
+}
+
+func TestDebitGateHonoursTheGatewayRetryGap(t *testing.T) {
+	f := newFixture(t)
+	const gap = 26 * time.Hour
+	const retryGap = 90 * time.Minute
+	old := f.now.Add(-27 * time.Hour)
+
+	neverTried := f.newAttempt(t, 1, models.ChargeAttemptStatusNotificationDelivered, &old)
+	releasedRecently := f.newAttempt(t, 2, models.ChargeAttemptStatusNotificationDelivered, &old)
+	releasedLongAgo := f.newAttempt(t, 3, models.ChargeAttemptStatusNotificationDelivered, &old)
+	// updated_at is when the attempt was released after its try
+	set := func(id uuid.UUID, tries int, updatedAt time.Time) {
+		must(t, f.db.Exec("UPDATE autopay_charge_attempts SET debit_submit_attempts = ?, updated_at = ? WHERE id = ?", tries, updatedAt, id).Error)
+	}
+	set(neverTried.ID, 0, f.now.Add(-time.Minute)) // untouched a minute ago, but it was never tried: no gap applies
+	set(releasedRecently.ID, 1, f.now.Add(-20*time.Minute))
+	set(releasedLongAgo.ID, 1, f.now.Add(-110*time.Minute))
+
+	got, err := f.repo.FindChargeAttemptsReadyForDebit(f.cfg.ID, f.now, gap, retryGap)
+	must(t, err)
+	g := ids(got)
+	if !g[neverTried.ID] || !g[releasedLongAgo.ID] || g[releasedRecently.ID] || len(g) != 2 {
+		t.Fatalf("with a 90m retry gap want never-tried and released-110m-ago, got %v (released-20m-ago included: %v)", g, g[releasedRecently.ID])
+	}
+
+	// without a gap (Razorpay, Cashfree) the recently released attempt is eligible again
+	got, err = f.repo.FindChargeAttemptsReadyForDebit(f.cfg.ID, f.now, gap, 0)
+	must(t, err)
+	if g = ids(got); !g[releasedRecently.ID] || len(g) != 3 {
+		t.Fatalf("without a retry gap all three are eligible, got %v", g)
 	}
 }
 

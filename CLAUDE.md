@@ -71,7 +71,7 @@ Apps:
 
 ### Key Patterns
 
-**Billing notice window**: the timing shared by the old Razorpay billing crons and the unified autopay crons (notice crons at 1:10 AM (retry) and 1:15 AM (process new) IST, charge crons at 3:30/3:45 AM IST; a notice always matures into a debit at the next night's first charge run, 26h+ later, plus 2 nights of catch-up; minimum `start_at` lead) is defined once in `internal/common/billingwindow` and used by every cron. Change it there, nowhere else.
+**Billing notice window**: the timing shared by the old Razorpay billing crons and the unified autopay crons (notice crons at 1:10 AM (retry) and 1:15 AM (process new) IST, charge crons at 3:30/5:20 AM IST (the second one 1h50m later because PhonePe wants at least 1.5h between retries of the same debit), plus a second autopay sync at 5:10 AM IST so that run sees fresh gateway state; a notice always matures into a debit at the next night's first charge run, 26h+ later, plus 2 nights of catch-up; minimum `start_at` lead) is defined once in `internal/common/billingwindow` and used by every cron. Change it there, nowhere else.
 
 **Multi-tenant configs**: Old-Razorpay keys, unified-autopay gateway credentials (`payment_gateway_configs`, all gateways), R2 credentials, and PostHog keys are stored per-app in the database (not env vars). The `R2ClientFactory` (`internal/apps/r2/config/service/r2_client_factory.go`) is injected into handlers that need storage access. Admin-only config creation endpoints are registered *before* the CORS middleware in `main.go`.
 
@@ -94,10 +94,10 @@ Each cron job is a standalone Go binary in `cron-jobs/<job_name>/main.go`. They 
 - `retry_failed_billing_cycles` — retry billing cycles that previously failed
 - `process_new_billing_cycles` — process newly created billing cycles
 - `reconcile_payments` — reconcile payment records with Razorpay
-- `autopay_sync_from_gateway` — unified autopay (runs first, 12:45 AM IST): fetch real state from every active gateway config and fix local records (close stuck attempts, confirm notification outcomes, re-send missing notifications, sync authorizations / one-time payments, replay unprocessed webhook events)
+- `autopay_sync_from_gateway` — unified autopay (runs first, 12:45 AM IST, and again at 5:10 AM IST before the second debit run): fetch real state from every active gateway config and fix local records (close stuck attempts, confirm notification outcomes, re-send missing notifications, sync authorizations / one-time payments, replay unprocessed webhook events)
 - `autopay_notify_retry_attempts` — unified autopay (1:10 AM IST): next retry attempt (reduced amount, new `merchant_payment_id`) + its pre-debit notification
 - `autopay_notify_new_cycles` — unified autopay (1:15 AM IST): next billing cycle inside the notification window + its pre-debit notification
-- `autopay_debit_notified_attempts` — unified autopay (3:30 and 3:45 AM IST): debit attempts whose notification is delivered and ≥26h old and whose cycle is due
+- `autopay_debit_notified_attempts` — unified autopay (3:30 and 5:20 AM IST): debit attempts whose notification is delivered and ≥26h old and whose cycle is due
 - `cleanup_old_autopay_webhook_events` — weekly: delete processed/ignored `autopay_webhook_events` older than 30 days; alerts on unfinished ones older than a day
 - `cleanup_old_news` — delete old news records from DB
 - `cleanup_old_posters` — delete old poster records and files
