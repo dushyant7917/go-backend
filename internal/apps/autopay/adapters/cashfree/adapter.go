@@ -100,7 +100,7 @@ func (a *Adapter) CreateMandateAuthorization(ctx context.Context, req gateway.Ma
 	sub, err := a.client.CreateSubscription(ctx, pkgcashfree.CreateSubscriptionParams{
 		SubscriptionID: req.MerchantAutopayID, PlanName: utils.Truncate(a.cfg.AppName+" mandate", 40),
 		MaxAmountPaise: req.MaxDebitAmount, AuthorizationAmountPaise: req.AuthorizationAmount,
-		CustomerName: req.User.Name, CustomerEmail: req.User.Email, CustomerPhone: req.User.Phone,
+		CustomerName: customerName(req.User.UserID), CustomerEmail: req.User.Email, CustomerPhone: req.User.Phone,
 		ExpiryTime: req.EndAt, ReturnURL: req.ReturnURL, IdempotencyKey: req.MerchantAutopayID,
 	})
 	if err != nil {
@@ -296,7 +296,7 @@ func (a *Adapter) CreateOneTimePayment(ctx context.Context, req gateway.OneTimeP
 	switch req.Kind {
 	case gateway.OneTimePaymentKindPaymentLink:
 		link, err := a.client.CreatePaymentLink(ctx, pkgcashfree.CreatePaymentLinkParams{
-			LinkID: req.MerchantPaymentID, AmountPaise: req.Amount, Purpose: "One-time Payment", CustomerName: req.User.Name,
+			LinkID: req.MerchantPaymentID, AmountPaise: req.Amount, Purpose: "One-time Payment", CustomerName: customerName(req.User.UserID),
 			CustomerEmail: req.User.Email, CustomerPhone: req.User.Phone, ExpiryTime: expiry, ReturnURL: req.ReturnURL, IdempotencyKey: req.MerchantPaymentID,
 		})
 		if err != nil {
@@ -308,7 +308,7 @@ func (a *Adapter) CreateOneTimePayment(ctx context.Context, req gateway.OneTimeP
 		return &gateway.OneTimePaymentSession{Kind: req.Kind, GatewayPaymentLinkID: req.MerchantPaymentID, LinkURL: link.URL}, nil
 	default:
 		order, err := a.client.CreateOrder(ctx, pkgcashfree.CreateOrderParams{
-			OrderID: req.MerchantPaymentID, AmountPaise: req.Amount, CustomerID: req.User.UserID, CustomerName: req.User.Name,
+			OrderID: req.MerchantPaymentID, AmountPaise: req.Amount, CustomerID: req.User.UserID, CustomerName: customerName(req.User.UserID),
 			CustomerEmail: req.User.Email, CustomerPhone: req.User.Phone, ExpiryTime: expiry, Note: "one_time_payment", ReturnURL: req.ReturnURL, IdempotencyKey: req.MerchantPaymentID,
 		})
 		if err != nil {
