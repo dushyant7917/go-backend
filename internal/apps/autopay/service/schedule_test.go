@@ -10,27 +10,28 @@ import (
 
 func TestAttemptAmountLadder(t *testing.T) {
 	p := DefaultRetryPolicy()
+	// every billing frequency follows the same ladder: max(Rs 99, previous - Rs 100); amounts in paise
 	cases := []struct {
-		name      string
-		max       int64
-		attempt   int
-		frequency string
-		want      int64
+		name    string
+		max     int64
+		attempt int
+		want    int64
 	}{
-		{"monthly first attempt is the full amount", 29900, 1, "monthly", 29900},
-		{"monthly attempt 2 is Rs 25 less", 29900, 2, "monthly", 27400},
-		{"monthly attempt 3", 29900, 3, "monthly", 24900},
-		{"monthly floors at Rs 99", 29900, 9, "monthly", 9900},
-		{"yearly attempt 2 is Rs 100 less", 99900, 2, "yearly", 89900},
-		{"yearly floors at Rs 99", 99900, 9, "yearly", 19900}, // 99900 - 8*10000
-		{"yearly hard floor", 29900, 9, "yearly", 9900},
-		{"weekly keeps the full amount for 3 attempts", 5000, 3, "weekly", 5000},
-		{"weekly attempt 4 is Rs 5 less", 5000, 4, "weekly", 4500},
-		{"weekly floors at Rs 1", 1000, 9, "weekly", 100},
+		{"first attempt is the full amount", 94300, 1, 94300},
+		{"943 -> 843", 94300, 2, 84300},
+		{"943 -> 743", 94300, 3, 74300},
+		{"199 -> 99", 19900, 2, 9900},
+		{"199 stays at 99", 19900, 3, 9900},
+		{"199 stays at 99 on the last attempt", 19900, 9, 9900},
+		{"249 -> 149", 24900, 2, 14900},
+		{"249 -> 99", 24900, 3, 9900},
+		{"249 stays at 99", 24900, 4, 9900},
+		{"a Rs 99 mandate is always Rs 99", 9900, 5, 9900},
+		{"a legacy mandate below the minimum is never charged above its own max", 5000, 2, 5000},
 	}
 	for _, c := range cases {
-		if got := p.AttemptAmount(c.max, c.attempt, c.frequency); got != c.want {
-			t.Errorf("%s: AttemptAmount(%d, %d, %s) = %d, want %d", c.name, c.max, c.attempt, c.frequency, got, c.want)
+		if got := p.AttemptAmount(c.max, c.attempt); got != c.want {
+			t.Errorf("%s: AttemptAmount(%d, %d) = %d, want %d", c.name, c.max, c.attempt, got, c.want)
 		}
 	}
 }

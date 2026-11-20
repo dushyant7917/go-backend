@@ -83,7 +83,7 @@ func (s *Service) createNextCycle(mandateID uuid.UUID, due time.Time) (uuid.UUID
 		if err != nil {
 			return err
 		}
-		amount := s.engine.Policy.AttemptAmount(m.MaxDebitAmount, 1, m.BillingFrequency)
+		amount := s.engine.Policy.AttemptAmount(m.MaxDebitAmount, 1)
 		cycle := &models.AutopayBillingCycle{
 			ID: uuid.New(), AutopayMandateID: m.ID, CycleNumber: latest.CycleNumber + 1, StartAt: due, EndAt: &next, Amount: amount,
 			NextChargeAttemptAt: &due, CountedChargeAttempts: 1, Status: models.BillingCycleStatusAwaitingPayment, Metadata: utils.Metadata{},
@@ -158,7 +158,7 @@ func (s *Service) createRetryAttempt(mandateID uuid.UUID) (uuid.UUID, error) {
 		if err != nil {
 			return err
 		}
-		amount := s.engine.Policy.AttemptAmount(m.MaxDebitAmount, number, m.BillingFrequency)
+		amount := s.engine.Policy.AttemptAmount(m.MaxDebitAmount, number)
 		attempt := &models.AutopayChargeAttempt{
 			ID: uuid.New(), BillingCycleID: cycle.ID, GatewayConfigID: m.GatewayConfigID, AttemptNumber: number, CountsTowardAttemptLimit: true,
 			MerchantPaymentID: MerchantPaymentIDFor(cycle.ID, number, replacement), Status: models.ChargeAttemptStatusAwaitingNotification,

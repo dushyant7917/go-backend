@@ -142,6 +142,8 @@ func (s *Service) createRecurring(ctx context.Context, rg *ResolvedGateway, user
 	switch {
 	case req.AuthorizationAmount < caps.MinAmountMinorUnits:
 		return nil, fmt.Errorf("%w: authorization_amount must be at least %d", ErrInvalidRequest, caps.MinAmountMinorUnits)
+	case req.MaxDebitAmount < s.engine.Policy.MinAttemptAmount:
+		return nil, fmt.Errorf("%w: max_debit_amount must be at least %d", ErrInvalidRequest, s.engine.Policy.MinAttemptAmount)
 	case req.MaxDebitAmount < req.AuthorizationAmount:
 		return nil, fmt.Errorf("%w: max_debit_amount (%d) cannot be less than authorization_amount (%d)", ErrInvalidRequest, req.MaxDebitAmount, req.AuthorizationAmount)
 	case caps.MaxMandateAmountMinorUnits > 0 && req.MaxDebitAmount > caps.MaxMandateAmountMinorUnits:
@@ -158,7 +160,7 @@ func (s *Service) createRecurring(ctx context.Context, rg *ResolvedGateway, user
 		return rg.Gateway.CreateMandateAuthorization(ctx, gateway.MandateAuthorizationRequest{
 			MerchantAutopayID: merchantID, MerchantPaymentID: AuthorizationMerchantPaymentID(mandateID), User: userInfo(user),
 			AuthorizationAmount: req.AuthorizationAmount, MaxDebitAmount: req.MaxDebitAmount, Currency: req.Currency,
-			EndAt: endAt, BillingFrequency: req.BillingFrequency, ReturnURL: req.ReturnURL,
+			EndAt: endAt, ReturnURL: req.ReturnURL,
 		})
 	})
 	if err != nil {

@@ -34,7 +34,6 @@ type MandateAuthorizationRequest struct {
 	MaxDebitAmount      int64 // cap per later debit (minor units)
 	Currency            string
 	EndAt               time.Time // when the mandate ends (UTC)
-	BillingFrequency    string
 	ReturnURL           string
 }
 

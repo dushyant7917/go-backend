@@ -55,26 +55,21 @@ type RetryPolicy struct {
 	MaxCountedChargeAttemptsPerBillingCycle int
 	// RetryIntervalDays: gap between retry attempts (T+3, T+6, T+9, ... from the cycle start).
 	RetryIntervalDays int
-	// Amount ladder, in minor units (paise).
-	MonthlyDeductionPerRetry int64 // Rs 25 less per attempt from attempt 2
-	YearlyDeductionPerRetry  int64 // Rs 100 less per attempt from attempt 2
-	MinMonthlyOrYearlyAmount int64 // Rs 99 floor
-	OtherFullAmountAttempts  int   // other frequencies: full amount for attempts 1..N
-	OtherDeductionPerRetry   int64 // then Rs 5 less per attempt
-	OtherMinAmount           int64 // Rs 1 floor
+	// Amount ladder, in minor units (paise): every attempt after the first is DeductionPerRetry less than the
+	// previous one, never below MinAttemptAmount. The same for every billing frequency.
+	DeductionPerRetry int64 // Rs 100 less per attempt from attempt 2
+	// MinAttemptAmount is the floor of the ladder and also the smallest max_debit_amount a recurring mandate may
+	// be created with (a smaller maximum could not be retried without exceeding the mandate's limit).
+	MinAttemptAmount int64 // Rs 99
 }
 
-// DefaultRetryPolicy is the policy every gateway used before the unified system.
+// DefaultRetryPolicy is the unified autopay retry policy for INR (the old Razorpay stack keeps its own ladder).
 func DefaultRetryPolicy() RetryPolicy {
 	return RetryPolicy{
 		MaxCountedChargeAttemptsPerBillingCycle: 9,
 		RetryIntervalDays:                       3,
-		MonthlyDeductionPerRetry:                2500,
-		YearlyDeductionPerRetry:                 10000,
-		MinMonthlyOrYearlyAmount:                9900,
-		OtherFullAmountAttempts:                 3,
-		OtherDeductionPerRetry:                  500,
-		OtherMinAmount:                          100,
+		DeductionPerRetry:                       10000,
+		MinAttemptAmount:                        9900,
 	}
 }
 
@@ -84,34 +79,18 @@ func (p RetryPolicy) NextRetryAt(cycleStart time.Time, countedAttempts int) time
 	return cycleStart.AddDate(0, 0, countedAttempts*p.RetryIntervalDays).UTC()
 }
 
-// AttemptAmount returns the amount to charge for the given counted attempt number (minor units).
-// Monthly: Rs 25 less per attempt from attempt 2, floor Rs 99. Yearly: Rs 100 less per attempt, floor Rs 99.
-// Others: full amount for the first attempts, then Rs 5 less per attempt, Rs 1 floor.
-func (p RetryPolicy) AttemptAmount(maxAmount int64, attemptNumber int, frequency string) int64 {
-	switch frequency {
-	case "monthly", "yearly":
-		if attemptNumber <= 1 {
-			return maxAmount
-		}
-		deduction := p.MonthlyDeductionPerRetry
-		if frequency == "yearly" {
-			deduction = p.YearlyDeductionPerRetry
-		}
-		amount := maxAmount - int64(attemptNumber-1)*deduction
-		if amount < p.MinMonthlyOrYearlyAmount {
-			return p.MinMonthlyOrYearlyAmount
-		}
-		return amount
-	default:
-		if attemptNumber <= p.OtherFullAmountAttempts {
-			return maxAmount
-		}
-		discount := int64(attemptNumber-p.OtherFullAmountAttempts) * p.OtherDeductionPerRetry
-		if discount >= maxAmount {
-			return p.OtherMinAmount
-		}
-		return maxAmount - discount
+// AttemptAmount returns the amount to charge for the given counted attempt number (minor units), for every billing
+// frequency: attempt 1 is maxAmount, then Rs 100 less per attempt, never below Rs 99 (max(99, previous - 100)).
+// Mandates are created with maxAmount >= MinAttemptAmount, so the result never exceeds maxAmount.
+func (p RetryPolicy) AttemptAmount(maxAmount int64, attemptNumber int) int64 {
+	if attemptNumber <= 1 {
+		return maxAmount
 	}
+	amount := maxAmount - int64(attemptNumber-1)*p.DeductionPerRetry
+	if amount < p.MinAttemptAmount {
+		return min(maxAmount, p.MinAttemptAmount) // min() only guards rows created before the minimum existed
+	}
+	return amount
 }
 
 // ActualTenureMonths is the tenure of a yearly plan by the counted attempt that succeeded:

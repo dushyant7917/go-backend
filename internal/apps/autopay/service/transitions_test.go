@@ -276,7 +276,7 @@ func TestGatewayUnavailableFailureDoesNotUseUpAnAttemptOrReduceTheAmount(t *test
 		t.Fatalf("the replacement must be due immediately (next notify run), got %v", s.Cycle.NextChargeAttemptAt)
 	}
 	// the replacement attempt (counted attempt number 3 again) is charged the same amount as the failed one
-	if got, want := e.Policy.AttemptAmount(29900, s.Cycle.CountedChargeAttempts+1, "monthly"), e.Policy.AttemptAmount(29900, 3, "monthly"); got != want {
+	if got, want := e.Policy.AttemptAmount(29900, s.Cycle.CountedChargeAttempts+1), e.Policy.AttemptAmount(29900, 3); got != want {
 		t.Fatalf("amount ladder moved: %d vs %d", got, want)
 	}
 }
