@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -24,24 +25,16 @@ const (
 	maxRetries       = 3
 	retryBaseDelay   = 2 * time.Second
 
-	istOffsetSeconds = 5*3600 + 30*60
+	// Modal credential sets are read from MODAL_*_1 .. MODAL_*_<modalAccountCount>.
+	modalAccountCount = 4
 )
 
-var istZone = time.FixedZone("IST", istOffsetSeconds)
-
-// modalWindow maps an IST hour range [startHour, endHour) to a Modal env var suffix.
-type modalWindow struct {
-	startHour int
-	endHour   int
-	suffix    string
-}
-
-// Runs outside all of these windows fail rather than fall back to a credential set.
-var modalWindows = []modalWindow{
-	{6, 9, "_1"},
-	{9, 12, "_2"},
-	{12, 14, "_3"},
-	{14, 17, "_4"},
+// modalAccount is one Modal workspace's enqueue endpoint and proxy auth credentials.
+type modalAccount struct {
+	name   string
+	url    string
+	key    string
+	secret string
 }
 
 type newsItem struct {
@@ -58,28 +51,15 @@ func main() {
 		}
 	}
 
-	now := time.Now()
-	suffix, ok := modalEnvSuffix(now)
-	if !ok {
-		log.Fatalf("run time %s is outside all Modal windows (%02d:00-%02d:00 IST), aborting",
-			now.In(istZone).Format("15:04 MST"),
-			modalWindows[0].startHour, modalWindows[len(modalWindows)-1].endHour)
+	accounts, err := loadModalAccounts()
+	if err != nil {
+		log.Fatalf("%v", err)
 	}
-	log.Printf("using Modal env set %s", suffix)
-
-	enqueueURLVar := "MODAL_ENQUEUE_URL" + suffix
-	modalKeyVar := "MODAL_PROXY_AUTH_TOKEN_ID" + suffix
-	modalSecretVar := "MODAL_PROXY_AUTH_TOKEN_SECRET" + suffix
-
-	enqueueURL := utils.GetEnv(enqueueURLVar, "")
-	if enqueueURL == "" {
-		log.Fatalf("%s is required", enqueueURLVar)
+	names := make([]string, len(accounts))
+	for i, a := range accounts {
+		names[i] = a.name
 	}
-	modalKey := utils.GetEnv(modalKeyVar, "")
-	modalSecret := utils.GetEnv(modalSecretVar, "")
-	if modalKey == "" || modalSecret == "" {
-		log.Fatalf("%s and %s are required", modalKeyVar, modalSecretVar)
-	}
+	log.Printf("loaded %d Modal account(s): %v", len(accounts), names)
 
 	dbConfig := database.Config{
 		Host:     utils.GetEnv("DB_HOST", "localhost"),
@@ -114,34 +94,64 @@ func main() {
 		wg     sync.WaitGroup
 	)
 
+	// Chunks are assigned to Modal accounts round-robin: chunk 0 -> account 1,
+	// chunk 1 -> account 2, ... wrapping back to account 1. The rotation restarts
+	// at the first account on every run.
 	for i := 0; i < len(items); i += enqueueChunkSize {
 		chunk := items[i:min(i+enqueueChunkSize, len(items))]
+		acct := accountForChunk(accounts, i/enqueueChunkSize)
+		log.Printf("rows %d–%d -> Modal account %s", i, i+len(chunk)-1, acct.name)
 		wg.Add(1)
-		go func(c []newsItem, start int) {
+		go func(c []newsItem, start int, a modalAccount) {
 			defer wg.Done()
-			if err := enqueue(enqueueURL, modalKey, modalSecret, c); err != nil {
-				log.Printf("chunk %d–%d failed: %v", start, start+len(c)-1, err)
+			if err := enqueue(a.url, a.key, a.secret, c); err != nil {
+				log.Printf("chunk %d–%d (account %s) failed: %v", start, start+len(c)-1, a.name, err)
 				mu.Lock()
 				failed += len(c)
 				mu.Unlock()
 			}
-		}(chunk, i)
+		}(chunk, i, acct)
 	}
 
 	wg.Wait()
 	log.Printf("done: submitted=%d failed=%d", len(items)-failed, failed)
 }
 
-// modalEnvSuffix returns the env var suffix for the IST window containing now
-// (start inclusive, end exclusive), or false if now falls outside every window.
-func modalEnvSuffix(now time.Time) (string, bool) {
-	hour := now.In(istZone).Hour()
-	for _, w := range modalWindows {
-		if hour >= w.startHour && hour < w.endHour {
-			return w.suffix, true
+// loadModalAccounts reads every configured Modal credential set (suffixes _1 ..
+// _<modalAccountCount>). A fully unset set is skipped; a partially set one is a
+// misconfiguration and returns an error; having no usable set at all is also an error.
+func loadModalAccounts() ([]modalAccount, error) {
+	var accounts []modalAccount
+	for n := 1; n <= modalAccountCount; n++ {
+		suffix := fmt.Sprintf("_%d", n)
+		urlVar := "MODAL_ENQUEUE_URL" + suffix
+		keyVar := "MODAL_PROXY_AUTH_TOKEN_ID" + suffix
+		secretVar := "MODAL_PROXY_AUTH_TOKEN_SECRET" + suffix
+
+		url := utils.GetEnv(urlVar, "")
+		key := utils.GetEnv(keyVar, "")
+		secret := utils.GetEnv(secretVar, "")
+
+		if url == "" && key == "" && secret == "" {
+			log.Printf("Modal account %d not configured, skipping", n)
+			continue
 		}
+		if url == "" || key == "" || secret == "" {
+			return nil, fmt.Errorf("Modal account %d is partially configured: %s, %s and %s must all be set",
+				n, urlVar, keyVar, secretVar)
+		}
+		accounts = append(accounts, modalAccount{name: strconv.Itoa(n), url: url, key: key, secret: secret})
 	}
-	return "", false
+	if len(accounts) == 0 {
+		return nil, fmt.Errorf("no Modal account configured: set MODAL_ENQUEUE_URL_1, MODAL_PROXY_AUTH_TOKEN_ID_1 and MODAL_PROXY_AUTH_TOKEN_SECRET_1 (up to _%d)", modalAccountCount)
+	}
+	return accounts, nil
+}
+
+// accountForChunk returns the account for the given zero-based chunk index,
+// cycling through accounts in order.
+func accountForChunk(accounts []modalAccount, chunkIdx int) modalAccount {
+	return accounts[chunkIdx%len(accounts)]
 }
 
 func fetchNewsWithoutMedia(db *gorm.DB) ([]newsItem, error) {
