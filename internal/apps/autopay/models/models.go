@@ -32,6 +32,12 @@ const (
 	MandateStatusExpired               MandateStatus = "expired"
 )
 
+// MetadataKeyGatewayCancelPending is the autopay_mandates.metadata key set (to true) when the core retired a recurring
+// mandate itself (all attempts failed, or it was authorized after we had closed it) while the gateway's mandate is
+// still live. The nightly sync cancels it at the gateway and removes the key; a live mandate keeps costing a
+// maintenance fee and is never charged again.
+const MetadataKeyGatewayCancelPending = "gateway_cancel_pending"
+
 // BillingCycleStatus is autopay_billing_cycles.status.
 type BillingCycleStatus string
 

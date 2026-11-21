@@ -497,8 +497,8 @@ func TestPermanentRejectionCountsAndSchedulesTheReducedRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	retry := h.latestAttempt(id)
-	if retry.AttemptNumber != 2 || retry.Amount != 27400 || retry.ID == failed.ID {
-		t.Fatalf("retry: number=%d amount=%d (want 2 / 27400 = Rs 25 less)", retry.AttemptNumber, retry.Amount)
+	if retry.AttemptNumber != 2 || retry.Amount != 19900 || retry.ID == failed.ID {
+		t.Fatalf("retry: number=%d amount=%d (want 2 / 19900 = Rs 100 less)", retry.AttemptNumber, retry.Amount)
 	}
 	if retry.PreDebitNotificationSentAt == nil {
 		t.Fatal("the retry attempt must have its own pre-debit notification")
@@ -920,5 +920,118 @@ func TestCancellingAnAlreadyCancelledMandateStillCancelsLocally(t *testing.T) {
 	}
 	if m := h.mandate(id2); m.Status != models.MandateStatusActive {
 		t.Fatalf("a failed cancel must not change the mandate: %s", m.Status)
+	}
+}
+
+// retireByFailingEveryAttempt makes the mandate's current cycle fail its last counted attempt, so the core expires the
+// mandate itself while the gateway's mandate is still live.
+func (h *harness) retireByFailingEveryAttempt(id uuid.UUID) {
+	h.t.Helper()
+	a := h.firstCycleNotified(id)
+	h.readyToDebit(a)
+	if err := h.db.Model(&models.AutopayBillingCycle{}).Where("id = ?", a.BillingCycleID).Update("counted_charge_attempts", 9).Error; err != nil {
+		h.t.Fatal(err)
+	}
+	h.gw.submitDebit = func(gateway.DebitRequest) (*gateway.DebitSubmission, error) {
+		return nil, gateway.NewError(gateway.ErrorKindRejectedPermanently, "INSUFFICIENT_FUNDS", "insufficient funds", nil)
+	}
+	h.debitRun()
+	if m := h.mandate(id); m.Status != models.MandateStatusExpired || !gatewayCancelPending(m) {
+		h.t.Fatalf("after the last failed attempt the mandate must be expired and flagged: status=%s metadata=%v", m.Status, m.Metadata)
+	}
+}
+
+func TestMandateExpiredByAllFailedAttemptsIsCancelledAtTheGatewayBySync(t *testing.T) {
+	h := newHarness(t)
+	id := h.activeMandate()
+	h.retireByFailingEveryAttempt(id)
+	if h.gw.count("cancel") != 0 {
+		t.Fatal("nothing may be cancelled at the gateway inside the failing run (webhooks have a 4s budget)")
+	}
+
+	if err := h.svc.SyncFromGateway(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.gw.count("cancel") != 1 {
+		t.Fatalf("the sync run must cancel the retired mandate at the gateway once, got %d calls", h.gw.count("cancel"))
+	}
+	if m := h.mandate(id); gatewayCancelPending(m) || m.Status != models.MandateStatusExpired {
+		t.Fatalf("flag must be cleared and the status stay expired: status=%s metadata=%v", m.Status, m.Metadata)
+	}
+	// done: the next run makes no call
+	if err := h.svc.SyncFromGateway(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.gw.count("cancel") != 1 {
+		t.Fatalf("a cancelled mandate must not be cancelled again, got %d calls", h.gw.count("cancel"))
+	}
+}
+
+func TestGatewayCancelOutcomeOfARetiredMandateDecidesWhetherTheNextSyncRetries(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err         error
+		wantPending bool
+	}{
+		"cancelled":       {err: nil},
+		"already gone":    {err: gateway.NewError(gateway.ErrorKindAlreadyProcessed, "nothing_to_cancel", "already cancelled", nil)},
+		"not usable":      {err: gateway.NewError(gateway.ErrorKindMandateInvalid, "subscription_not_active", "not active", nil)},
+		"rejected":        {err: gateway.NewError(gateway.ErrorKindRejectedPermanently, "x", "cannot cancel", nil), wantPending: true},
+		"gateway outage":  {err: transient(), wantPending: true},
+		"unknown outcome": {err: gateway.NewError(gateway.ErrorKindOutcomeUnknown, "transport", "timeout", nil), wantPending: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			id := h.activeMandate()
+			h.retireByFailingEveryAttempt(id)
+
+			h.gw.cancelErr = tc.err
+			if err := h.svc.SyncFromGateway(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := gatewayCancelPending(h.mandate(id)); got != tc.wantPending {
+				t.Fatalf("flag kept = %v, want %v", got, tc.wantPending)
+			}
+			if !tc.wantPending {
+				return
+			}
+			// the problem goes away (or someone cancels it in the dashboard): the next run finishes it
+			h.gw.cancelErr = nil
+			if err := h.svc.SyncFromGateway(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if gatewayCancelPending(h.mandate(id)) {
+				t.Fatal("the retry succeeded: the flag must be cleared")
+			}
+		})
+	}
+}
+
+func TestAuthorizationCompletedAfterWeClosedTheMandateIsCancelledAtTheGateway(t *testing.T) {
+	h := newHarness(t)
+	res := h.create()
+	// the customer took too long: the mandate is closed locally (expired), then the authorization arrives
+	if err := h.svc.mutateMandate(res.AutopayMandateID, func(m *models.AutopayMandate, latest *models.AutopayBillingCycle) Effects {
+		return h.svc.engine.OnMandateStatusChanged(m, latest, gateway.MandateExpired)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a, err := h.repo.FindAuthorizationChargeAttempt(res.AutopayMandateID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.svc.mutateAttempt(a.ID, func(st State) Effects {
+		return h.svc.engine.OnMandateAuthorizationSucceeded(st, "gw_mandate_1", "pay_late")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m := h.mandate(res.AutopayMandateID)
+	if m.Status != models.MandateStatusExpired || !gatewayCancelPending(m) || m.GatewayMandateID == nil {
+		t.Fatalf("late authorization must flag the closed mandate: status=%s metadata=%v", m.Status, m.Metadata)
+	}
+	if err := h.svc.SyncFromGateway(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h.gw.count("cancel") != 1 {
+		t.Fatalf("the sync run must cancel it at the gateway, got %d calls", h.gw.count("cancel"))
 	}
 }

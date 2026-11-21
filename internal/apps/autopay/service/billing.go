@@ -139,10 +139,7 @@ func (s *Service) createRetryAttempt(mandateID uuid.UUID) (uuid.UUID, error) {
 			return nil
 		}
 		if cycle.CountedChargeAttempts >= s.engine.Policy.MaxCountedChargeAttemptsPerBillingCycle {
-			cycle.Status = models.BillingCycleStatusFailedAllAttempts
-			cycle.NextChargeAttemptAt = nil
-			m.Status = models.MandateStatusExpired
-			m.NextChargeDueAt = nil
+			s.engine.failAllAttempts(m, cycle)
 			if err := s.repo.UpdateBillingCycle(tx, cycle); err != nil {
 				return err
 			}
@@ -564,7 +561,48 @@ func (s *Service) SyncFromGateway(ctx context.Context) error {
 		processInParallel(results, func(a models.AutopayChargeAttempt) error { return s.syncDebitResult(ctx, rg, a) }, name)
 
 		// 6. webhook events that were stored but never finished
-		return s.reprocessWebhookEvents(ctx, rg)
+		replayErr := s.reprocessWebhookEvents(ctx, rg)
+
+		// 7. mandates we retired ourselves are still live at the gateway (and bill a maintenance fee): cancel them there.
+		// After the replay (it may flag late authorizations) and whatever its outcome.
+		pending, err := s.repo.FindMandatesPendingGatewayCancel(cfgID)
+		if err == nil {
+			processInParallel(pending, func(m models.AutopayMandate) error { return s.cancelRetiredMandateAtGateway(ctx, rg, m) }, name)
+		}
+		return errors.Join(replayErr, err)
+	})
+}
+
+// cancelRetiredMandateAtGateway cancels, at the gateway, a recurring mandate the core retired itself (all attempts
+// failed, or authorized after it was closed) and then clears its gateway_cancel_pending flag:
+//   - cancelled, or already cancelled/expired at the gateway: done;
+//   - the gateway says the mandate is not usable (nothing live to cancel): done, but alert when we never knew its
+//     gateway id, because then we could not even identify it;
+//   - a definite rejection: keep the flag (the next run retries, and once someone cancels it in the gateway's
+//     dashboard the retry reports it already gone) and alert;
+//   - anything else (outage, unknown outcome): keep the flag, the next run retries.
+func (s *Service) cancelRetiredMandateAtGateway(ctx context.Context, rg *ResolvedGateway, m models.AutopayMandate) error {
+	who := fmt.Sprintf("autopay mandate %s (%s, %s) is %s locally", m.ID, rg.Config.Gateway, m.MerchantAutopayID, m.Status)
+	if !rg.Gateway.Capabilities().SupportsMandateCancellation {
+		alert(who + " and the gateway cannot cancel mandates through its API: cancel it in the gateway dashboard")
+	} else if err := s.cancelMandateAtGateway(ctx, rg, &m, cronClass); err != nil {
+		kind, _ := gateway.KindOf(err)
+		if kind != gateway.ErrorKindMandateInvalid { // "not usable" means nothing live to cancel: done
+			if kind == gateway.ErrorKindRejectedPermanently {
+				alert(fmt.Sprintf("%s but the gateway refused to cancel it, so it keeps billing a maintenance fee: cancel it in the gateway dashboard: %v", who, err))
+			}
+			return fmt.Errorf("cancel retired mandate %s at %s: %w", m.ID, rg.Config.Gateway, err)
+		}
+		if m.GatewayMandateID == nil {
+			alert(fmt.Sprintf("%s but has no gateway mandate id, so it could not be cancelled at the gateway: check it in the gateway dashboard: %v", who, err))
+		}
+	}
+	return s.mutateMandate(m.ID, func(mm *models.AutopayMandate, _ *models.AutopayBillingCycle) Effects {
+		if _, ok := mm.Metadata[models.MetadataKeyGatewayCancelPending]; !ok {
+			return Effects{Ignored: "duplicate"}
+		}
+		delete(mm.Metadata, models.MetadataKeyGatewayCancelPending)
+		return Effects{Changed: true}
 	})
 }
 

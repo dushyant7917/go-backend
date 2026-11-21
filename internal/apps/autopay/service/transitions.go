@@ -224,10 +224,7 @@ func (e *Engine) OnChargeFailed(s State, f Failure) Effects {
 		}
 		c.NextChargeAttemptAt = &now
 	case c.CountedChargeAttempts >= e.Policy.MaxCountedChargeAttemptsPerBillingCycle:
-		c.Status = models.BillingCycleStatusFailedAllAttempts
-		c.NextChargeAttemptAt = nil
-		m.Status = models.MandateStatusExpired
-		m.NextChargeDueAt = nil
+		e.failAllAttempts(m, c)
 	default:
 		next := e.Policy.NextRetryAt(c.StartAt, c.CountedChargeAttempts)
 		c.NextChargeAttemptAt = &next
@@ -237,6 +234,27 @@ func (e *Engine) OnChargeFailed(s State, f Failure) Effects {
 }
 
 // ==================== Mandate lifecycle ====================
+
+// failAllAttempts ends a billing cycle that used all its counted attempts: the cycle fails and the mandate expires.
+// The gateway's mandate is still live, so it is flagged for cancellation at the gateway (see markGatewayCancelPending).
+func (e *Engine) failAllAttempts(m *models.AutopayMandate, c *models.AutopayBillingCycle) {
+	c.Status = models.BillingCycleStatusFailedAllAttempts
+	c.NextChargeAttemptAt = nil
+	m.Status = models.MandateStatusExpired
+	m.NextChargeDueAt = nil
+	markGatewayCancelPending(m)
+}
+
+// markGatewayCancelPending flags a mandate that we retired ourselves while the gateway's mandate may still be live:
+// the nightly sync cancels it there so it stops incurring the gateway's maintenance fee. Only recurring mandates reach
+// it (cycles >= 1 and authorizations exist only for them). The gateway mandate id is not required (Cashfree and PhonePe
+// cancel by our merchant_autopay_id).
+func markGatewayCancelPending(m *models.AutopayMandate) {
+	if m.Metadata == nil {
+		m.Metadata = utils.Metadata{}
+	}
+	m.Metadata[models.MetadataKeyGatewayCancelPending] = true
+}
 
 // cancelMandate marks the mandate cancelled and stops its pending cycle. Returns true when a live (active or
 // paused) mandate was cancelled, i.e. when the cancelled analytics event should fire.
@@ -305,7 +323,12 @@ func (e *Engine) OnMandateAuthorizationSucceeded(s State, gatewayMandateID, gate
 	if mandateEnded(m) {
 		// the authorization payment moved money on a mandate we had already closed (cancelled, or expired because the
 		// customer took too long): a human decides whether to refund it
-		return Effects{Ignored: "terminal", Alert: fmt.Sprintf("autopay mandate %s was authorized after it was %s: check whether the customer was charged", m.ID, m.Status)}
+		// the gateway's mandate is live now and we will never charge it: cancel it there
+		if gatewayMandateID != "" && m.GatewayMandateID == nil {
+			m.GatewayMandateID = &gatewayMandateID
+		}
+		markGatewayCancelPending(m)
+		return Effects{Changed: true, Ignored: "terminal", Alert: fmt.Sprintf("autopay mandate %s was authorized after it was %s: check whether the customer was charged", m.ID, m.Status)}
 	}
 	now := e.Now()
 	a.Status = models.ChargeAttemptStatusDebitSucceeded

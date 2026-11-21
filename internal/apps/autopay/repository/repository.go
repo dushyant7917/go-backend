@@ -38,6 +38,7 @@ type Repository interface {
 	FindRecurringMandatesForNewBillingCycle(configID uuid.UUID, windowStart, windowEnd time.Time) ([]models.AutopayMandate, error)
 	FindRecurringMandatesForRetry(configID uuid.UUID, windowStart, windowEnd time.Time) ([]models.AutopayMandate, error)
 	FindRecurringMandatesAwaitingAuthorization(configID uuid.UUID, createdAfter, createdBefore time.Time) ([]models.AutopayMandate, error)
+	FindMandatesPendingGatewayCancel(configID uuid.UUID) ([]models.AutopayMandate, error)
 
 	// What the apps ask about a user
 	IsSubscriptionActive(userID uuid.UUID, appName string, now time.Time) (bool, error)
@@ -217,6 +218,15 @@ func (r *repository) FindRecurringMandatesAwaitingAuthorization(configID uuid.UU
 	var ms []models.AutopayMandate
 	err := r.db.Where("gateway_config_id = ? AND payment_type = ? AND status = ? AND created_at >= ? AND created_at <= ? AND deleted_at IS NULL",
 		configID, models.PaymentTypeRecurring, models.MandateStatusAwaitingAuthorization, createdAfter, createdBefore).Find(&ms).Error
+	return ms, err
+}
+
+// FindMandatesPendingGatewayCancel returns the recurring mandates we retired ourselves (expired, or cancelled) whose
+// gateway mandate has not been cancelled yet (metadata.gateway_cancel_pending, see models.MetadataKeyGatewayCancelPending).
+func (r *repository) FindMandatesPendingGatewayCancel(configID uuid.UUID) ([]models.AutopayMandate, error) {
+	var ms []models.AutopayMandate
+	err := r.db.Where("gateway_config_id = ? AND payment_type = ? AND status IN ? AND metadata->>'"+models.MetadataKeyGatewayCancelPending+"' = 'true' AND deleted_at IS NULL",
+		configID, models.PaymentTypeRecurring, []models.MandateStatus{models.MandateStatusExpired, models.MandateStatusCancelled}).Find(&ms).Error
 	return ms, err
 }
 

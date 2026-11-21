@@ -39,6 +39,11 @@ func newState(status models.ChargeAttemptStatus) State {
 	return State{Mandate: m, Cycle: c, Attempt: a}
 }
 
+func gatewayCancelPending(m *models.AutopayMandate) bool {
+	v, _ := m.Metadata[models.MetadataKeyGatewayCancelPending].(bool)
+	return v
+}
+
 // ---------- pre-debit notification ----------
 
 func TestNotificationDeliveredUsesGatewayTimeThenSentTimeNeverNow(t *testing.T) {
@@ -259,6 +264,47 @@ func TestNinthCountedFailureFailsTheCycleAndExpiresTheMandate(t *testing.T) {
 	if s.Mandate.Status != models.MandateStatusExpired || s.Mandate.NextChargeDueAt != nil {
 		t.Fatalf("mandate = %+v", s.Mandate)
 	}
+	// the gateway's mandate is still live and bills a maintenance fee: it must be flagged for cancellation there
+	if !gatewayCancelPending(s.Mandate) {
+		t.Fatalf("an expired-by-us mandate must be flagged for gateway cancellation, metadata = %v", s.Mandate.Metadata)
+	}
+}
+
+func TestOnlyTheFinalFailureFlagsTheMandateForGatewayCancellation(t *testing.T) {
+	e := newEngine()
+	// a counted failure that still has retries left, a gateway-side failure and a dead mandate (the gateway already
+	// considers it dead) never flag it
+	for name, f := range map[string]Failure{
+		"retry left":   {Category: models.FailureCategoryRejectedPermanently, Counts: true},
+		"gateway":      {Category: models.FailureCategoryGatewayUnavailable, Counts: false},
+		"mandate dead": {Category: models.FailureCategoryRejectedPermanently, Counts: true, MandateDead: true},
+	} {
+		s := newState(models.ChargeAttemptStatusDebitSubmitted)
+		s.Cycle.CountedChargeAttempts = 3
+		e.OnChargeFailed(s, f)
+		if gatewayCancelPending(s.Mandate) {
+			t.Errorf("%s: mandate must not be flagged", name)
+		}
+	}
+	// the flag does not depend on the gateway mandate id (Cashfree and PhonePe cancel by merchant_autopay_id)
+	s := newState(models.ChargeAttemptStatusDebitSubmitted)
+	s.Mandate.GatewayMandateID = nil
+	s.Cycle.CountedChargeAttempts = 9
+	e.OnChargeFailed(s, Failure{Category: models.FailureCategoryRejectedPermanently, Counts: true})
+	if !gatewayCancelPending(s.Mandate) {
+		t.Error("the flag must be set even without a gateway mandate id")
+	}
+}
+
+func TestGatewayReportedEndOrUserCancelDoesNotFlagTheMandate(t *testing.T) {
+	e := newEngine()
+	for _, state := range []gateway.MandateState{gateway.MandateCancelled, gateway.MandateExpired} {
+		s := newState(models.ChargeAttemptStatusDebitSubmitted)
+		e.OnMandateStatusChanged(s.Mandate, s.Cycle, state)
+		if gatewayCancelPending(s.Mandate) {
+			t.Errorf("gateway reported %s: nothing live to cancel, must not be flagged", state)
+		}
+	}
 }
 
 func TestGatewayUnavailableFailureDoesNotUseUpAnAttemptOrReduceTheAmount(t *testing.T) {
@@ -397,8 +443,12 @@ func TestAuthorizationAfterCancellationIsIgnoredAndAlerts(t *testing.T) {
 	s.Cycle.CycleNumber = 0
 	s.Mandate.Status = models.MandateStatusCancelled
 	fx := e.OnMandateAuthorizationSucceeded(s, "token", "pay")
-	if fx.Changed || fx.Ignored != "terminal" || fx.Alert == "" || s.Mandate.Status != models.MandateStatusCancelled {
+	if !fx.Changed || fx.Ignored != "terminal" || fx.Alert == "" || s.Mandate.Status != models.MandateStatusCancelled {
 		t.Fatalf("fx = %+v status=%s", fx, s.Mandate.Status)
+	}
+	// the customer's authorization made the gateway mandate live: remember its id and flag it for cancellation
+	if !gatewayCancelPending(s.Mandate) || s.Mandate.GatewayMandateID == nil || *s.Mandate.GatewayMandateID != "token" {
+		t.Fatalf("mandate = %+v", s.Mandate)
 	}
 }
 
@@ -429,6 +479,19 @@ func TestOneTimePaymentSucceededAndLateCorrection(t *testing.T) {
 	}
 }
 
+func TestLateAuthorizationKeepsAKnownGatewayMandateId(t *testing.T) {
+	e := newEngine()
+	s := newState(models.ChargeAttemptStatusDebitSubmitted)
+	s.Cycle.CycleNumber = 0
+	s.Mandate.Status = models.MandateStatusExpired
+	known := "token_known"
+	s.Mandate.GatewayMandateID = &known
+	e.OnMandateAuthorizationSucceeded(s, "token_other", "pay")
+	if *s.Mandate.GatewayMandateID != known {
+		t.Fatalf("a mandate's gateway id must never be overwritten, got %s", *s.Mandate.GatewayMandateID)
+	}
+}
+
 func TestAuthorizationAfterExpiryAlertsToo(t *testing.T) {
 	// the authorization payment moved money on a mandate the sync cron had already closed as expired: must alert
 	e := newEngine()
@@ -436,7 +499,7 @@ func TestAuthorizationAfterExpiryAlertsToo(t *testing.T) {
 	s.Cycle.CycleNumber = 0
 	s.Mandate.Status = models.MandateStatusExpired
 	fx := e.OnMandateAuthorizationSucceeded(s, "token", "pay")
-	if fx.Changed || fx.Ignored != "terminal" || fx.Alert == "" || s.Mandate.Status != models.MandateStatusExpired {
+	if !fx.Changed || fx.Ignored != "terminal" || fx.Alert == "" || s.Mandate.Status != models.MandateStatusExpired || !gatewayCancelPending(s.Mandate) {
 		t.Fatalf("fx = %+v status=%s", fx, s.Mandate.Status)
 	}
 }

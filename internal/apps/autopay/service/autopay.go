@@ -379,10 +379,7 @@ func (s *Service) Cancel(ctx context.Context, id uuid.UUID) (*MandateView, error
 		return nil, fmt.Errorf("%w: %v", ErrGatewayNotAvailable, err)
 	}
 	if rg.Gateway.Capabilities().SupportsMandateCancellation && m.GatewayMandateID != nil {
-		_, err := Call(ctx, s.policyFor(rg, ratelimit.Interactive), func(ctx context.Context) (struct{}, error) {
-			return struct{}{}, rg.Gateway.CancelMandate(ctx, mandateRef(m))
-		})
-		if err != nil && !gateway.IsKind(err, gateway.ErrorKindAlreadyProcessed) {
+		if err := s.cancelMandateAtGateway(ctx, rg, m, ratelimit.Interactive); err != nil {
 			return nil, mapGatewayError("cancel mandate", err)
 		}
 	}
@@ -392,6 +389,18 @@ func (s *Service) Cancel(ctx context.Context, id uuid.UUID) (*MandateView, error
 		return nil, err
 	}
 	return s.Get(id)
+}
+
+// cancelMandateAtGateway asks the gateway to cancel the mandate. A mandate the gateway says is already gone
+// (already-processed) counts as cancelled. Any other failure is returned as the raw gateway error.
+func (s *Service) cancelMandateAtGateway(ctx context.Context, rg *ResolvedGateway, m *models.AutopayMandate, class ratelimit.Class) error {
+	_, err := Call(ctx, s.policyFor(rg, class), func(ctx context.Context) (struct{}, error) {
+		return struct{}{}, rg.Gateway.CancelMandate(ctx, mandateRef(m))
+	})
+	if err != nil && !gateway.IsKind(err, gateway.ErrorKindAlreadyProcessed) {
+		return err
+	}
+	return nil
 }
 
 // Get returns the public view of one autopay.
